@@ -11,7 +11,6 @@
 | 底盘运动学 | `Core/Inc/advance_chassis.h`、`Core/Src/advance_chassis.c` | 车体速度到四轮 RPM 的麦轮解算 |
 | 世界坐标 | `Core/Inc/advance_world.h`、`Core/Src/advance_world.c` | OPS / WIT 数据到 world 位姿的转换 |
 | 高级运动 | `Core/Inc/advance_motion.h`、`Core/Src/advance_motion.c` | 世界速度和 GotoPose 状态机 |
-| 通信协议 | `Core/Inc/comm_protocol.h`、`Core/Src/comm_protocol.c` | 上位机命令解析、ACK 和状态返回 |
 
 ## 2. 坐标系约定
 
@@ -203,7 +202,7 @@ AdvanceMotion_GetStatus(&status);
 AdvanceMotion_Cancel();
 ```
 
-`main.c` 已在 `HostComm_Poll()` 后周期调用 `AdvanceMotion_Poll()`。上位机命令在本轮被处理后可立即进入控制状态机；急停与取消命令会先撤销活动目标，阻止下一控制周期重新下发速度。
+`main.c` 通过 TIM6 周期调用 `AdvanceMotion_Poll()`。控制状态机由 STM32 本地业务逻辑触发；取消操作会先撤销活动目标，阻止下一控制周期重新下发速度。
 
 ## 8. GotoPose 目标结构
 

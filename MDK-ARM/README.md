@@ -26,7 +26,6 @@
 | `sensor_` | 传感器接入、解析和数据缓存 | `sensor_wit.*`、`sensor_ops.*` |
 | `drive_` | 底层执行器、驱动协议和设备控制 | `drive_emm.*`、`drive_bus_servo.*` |
 | `advance_` | 高级运动、组合动作、坐标系和业务能力封装 | `advance_chassis.*`、`advance_world.*` |
-| `comm_` | PC / Jetson 通信、协议解析、收发桥接 | `comm_pc.*`、`comm_jetson.*`、`comm_protocol.*` |
 | `car_` | 车辆自身状态、属性和全局数据视图 | `car_pose.*` |
 
 约束：
@@ -40,12 +39,12 @@
 
 | 外设 | 模式 | TX | RX | 当前用途 | 对应模块 |
 | --- | --- | --- | --- | --- | --- |
-| USART1 | Asynchronous | PA9 | PA10 | 调试串口 / PC 原始接收 | `comm_pc.*` |
+| USART1 | Asynchronous | PA9 | PA10 | 调试串口输出 | `main.c` |
 | USART2 | Asynchronous | PA2 | PA3 | WIT / HWT905 IMU | `sensor_wit.*` |
 | USART3 | Asynchronous | PB10 | PB11 | 张大头 Emm_V5 步进闭环电机 | `drive_emm.*` |
 | UART4 | Asynchronous | PA0 | PA1 | 总线舵机 | `drive_bus_servo.*` |
 | UART5 | Asynchronous | PC12 | PD2 | OPS 定位系统 | `sensor_ops.*` |
-| USART6 | Asynchronous | PC6 | PC7 | Jetson 原始接收 / 通信协议 | `comm_pc.*`、`comm_jetson.*`、`comm_protocol.*` |
+| USART6 | Asynchronous | PC6 | PC7 | 预留 Jetson 视觉通信，当前未启用 | 暂无 |
 
 对于电机和舵机，我们通过id编号进行配置
 - 步进电机
@@ -121,29 +120,7 @@
 - 初始化：OPS / WIT 掉电后会保留自身历史状态，软件不假设其上电为零；OPS 静止初始化后调用 `AdvanceWorld_ResetOrigin()`，将当前 OPS 位置、OPS 航向和 WIT yaw 记录为本次 world 坐标系零点。
 - 典型接口：`AdvanceWorld_Init()`、`AdvanceWorld_Poll()`、`AdvanceWorld_GetPose()`、`AdvanceWorld_WorldToBodyVelocity()`。
 
-### 4.7 PC / Jetson 通信
-
-- 文件：`Core/Inc/comm_common.h`、`Core/Inc/comm_host.h`、`Core/Src/comm_host.c`
-- 用途：PC 和 Jetson 双路原始接收、日志输出和协议桥接。
-- PC：`USART1`，`115200 8N1`，`DMA Circular + UART 空闲中断`。
-- Jetson：`USART6`，`115200 8N1`，`DMA Circular + UART 空闲中断`。
-- `comm_host.c` 会把原始字节输入 `comm_protocol.c`，用于后续上位机二进制协议解析。
-- 典型接口：`HostComm_InitChannel()`、`HostComm_Poll()`、`HostComm_OnUartRxEvent()`。
-
-### 4.8 Jetson 调试兼容层
-
-- 文件：`Core/Inc/comm_jetson.h`、`Core/Src/comm_jetson.c`
-- 用途：保留 Jetson 原始接收调试兼容入口。
-- 当前建议：新通信逻辑优先进入 `comm_pc.*` 和 `comm_protocol.*`，避免再扩展独立调试分支。
-
-### 4.8 上位机协议层
-
-- 文件：`Core/Inc/comm_protocol.h`、`Core/Src/comm_protocol.c`
-- 用途：PC / Jetson 共用的二进制协议找帧、CRC 校验、命令队列、ACK 回发和主循环分发。
-- 当前边界：UART 回调只搬运原始字节，完整命令在 `HostProtocol_Poll()` 中执行。
-- 典型接口：`HostProtocol_RegisterSource()`、`HostProtocol_OnBytes()`、`HostProtocol_Poll()`。
-
-### 4.9 车辆状态视图
+### 4.7 车辆状态视图
 
 - 文件：`Core/Inc/car_pose.h`、`Core/Src/car_pose.c`
 - 用途：汇总车辆自身位姿相关数据指针，作为上层读取 IMU 和 OPS 数据的统一入口。
@@ -156,15 +133,11 @@
 - `HAL_UARTEx_RxEventCallback()` 中只分发 DMA / IDLE 接收事件，不直接执行业务动作。
 - `HAL_UART_RxCpltCallback()` 中分发单字节中断接收，例如 OPS 和总线舵机。
 - `HAL_UART_ErrorCallback()` 中按串口来源调用对应模块错误处理函数并重启接收。
-- 上位机命令的实际执行应进入 `HostProtocol_Poll()`，再调用 `advance_`、`drive_`、`sensor_` 或 `car_` 相关接口。
 
 ## 6. 调试边界
 
-- PC 端调试日志通过 `USART1 printf` 输出，因此 PC 端可能同时看到 STM32 日志和 PC 输入回显日志。
-- PC 发送 `hello\r\n` 时，正常输出应包含 `PC RX len=7 hex=68 65 6C 6C 6F 0D 0A ascii=hello\r\n`。
-- Jetson 发送 `hello\r\n` 时，正常输出应包含 `JETSON RX len=7 hex=68 65 6C 6C 6F 0D 0A ascii=hello\r\n`。
-- 若输出 `PC ERR code=0x...`、`JETSON ERR code=0x...` 或 WIT Frame Error，优先检查波特率、TX/RX 交叉、共地、电平、串口设备名和串口占用。
-- 当前 README 只描述下位机工程结构和模块边界，不替代 `docs/` 中的具体协议文档。
+- PC 端调试日志通过 `USART1 printf` 输出。
+- USART6 的硬件初始化保留给后续 Jetson 视觉通信，当前不启动接收、不调用软件协议。
 
 ## 7. 世界速度与方向配置
 
