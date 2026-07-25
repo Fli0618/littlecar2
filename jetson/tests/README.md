@@ -2,7 +2,7 @@
 
 本目录包含 Jetson 视觉函数和协议包测试：
 
-- `test_vision.py`：测试同心圆数字识别、传统彩色物料检测、二维码空输入和 YOLO 参数边界。
+- `test_vision.py`：测试颜色物料、同心圆的统一 YOLO 返回结构、模型缓存、物料盘中心降级和二维码识别。
 - `test_protocol_frame.py`：测试协议帧编码、CRC、ACK 和字节流解析。
 - `test_protocol_client.py`：使用内存串口测试协议客户端及其高层接口。
 - `test_protocol_hardware.py`：真实串口联调测试，默认跳过。
