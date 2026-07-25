@@ -34,6 +34,10 @@ circles = detect_circle(frame_bgr)
 center = detect_disk_center(frame_bgr, colors)
 ```
 
+连续视频场景可使用 `advance_detect_color(frame_bgr)`、`advance_detect_circle(frame_bgr)` 和
+`advance_detect_disk_center(frame_bgr)`。高级接口会按目标类型进行距离关联、卡尔曼平滑和多帧确认。
+相机编号常量为 `CAMERA_INDEX_COLOR_CIRCLE = 1` 与 `CAMERA_INDEX_QR = 0`。
+
 物料颜色、同心圆和物料盘中心定位均使用 YOLO。两个模型会在首次调用时加载一次，
 之后逐帧复用。`EmptySlot` 类别会保留在检测结果中，并可参与中心定位。
 

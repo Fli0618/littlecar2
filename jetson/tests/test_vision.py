@@ -13,6 +13,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from vision import detect_circle, detect_color, detect_disk_center, detect_qr
 from vision import yolo
+import vision.advance_yolo as advance_yolo
+from vision.materials import advance_detect_disk_center
 
 
 class FakeBox:
@@ -40,9 +42,11 @@ def detection(kind, x, y, confidence=0.9):
 class VisionTest(unittest.TestCase):
     def setUp(self):
         yolo._get_model.cache_clear()
+        advance_yolo._reset_advance_tracking()
 
     def tearDown(self):
         yolo._get_model.cache_clear()
+        advance_yolo._reset_advance_tracking()
 
     def test_color_and_circle_return_unified_multi_target_structure(self):
         color_model = FakeModel(
@@ -124,6 +128,57 @@ class VisionTest(unittest.TestCase):
     def test_disk_center_validates_result_shape(self):
         with self.assertRaises(ValueError):
             detect_disk_center(np.zeros((10, 10, 3), dtype=np.uint8), {})
+
+    def test_advance_circle_requires_multiple_frames_and_predicts_short_misses(self):
+        frame = np.zeros((360, 640, 3), dtype=np.uint8)
+        detection_frames = [
+            {"detections": [detection("1", 100, 100)]},
+            {"detections": [detection("1", 104, 100)]},
+            {"detections": []},
+            {"detections": []},
+            {"detections": []},
+            {"detections": []},
+        ]
+
+        with patch.object(advance_yolo, "detect_circle", side_effect=detection_frames):
+            self.assertEqual(advance_yolo.advance_detect_circle(frame), {"detections": []})
+            confirmed = advance_yolo.advance_detect_circle(frame)
+            predicted = advance_yolo.advance_detect_circle(frame)
+            advance_yolo.advance_detect_circle(frame)
+            advance_yolo.advance_detect_circle(frame)
+            expired = advance_yolo.advance_detect_circle(frame)
+
+        self.assertEqual(confirmed["detections"][0]["tracking_id"], 0)
+        self.assertEqual(confirmed["detections"][0]["type"], "1")
+        self.assertTrue(confirmed["detections"][0]["measured"])
+        self.assertFalse(predicted["detections"][0]["measured"])
+        self.assertEqual(expired, {"detections": []})
+
+    def test_advance_circle_tracks_same_type_targets_separately(self):
+        frame = np.zeros((360, 640, 3), dtype=np.uint8)
+        raw_result = {
+            "detections": [
+                detection("1", 100, 100, 0.9),
+                detection("1", 400, 100, 0.8),
+            ]
+        }
+
+        with patch.object(advance_yolo, "detect_circle", side_effect=[raw_result, raw_result]):
+            advance_yolo.advance_detect_circle(frame)
+            result = advance_yolo.advance_detect_circle(frame)
+
+        self.assertEqual([item["tracking_id"] for item in result["detections"]], [0, 1])
+
+    def test_advance_disk_center_uses_advanced_color_detection(self):
+        frame = np.zeros((400, 640, 3), dtype=np.uint8)
+        raw_result = {"detections": [detection("Red", 123, 234)]}
+
+        with patch.object(advance_yolo, "detect_color", side_effect=[raw_result, raw_result]):
+            self.assertEqual(advance_detect_disk_center(frame)["status"], 0)
+            result = advance_detect_disk_center(frame)
+
+        self.assertEqual(result["status"], 1)
+        self.assertEqual(result["center"], [123, 234])
 
     def test_qr_without_code_returns_none(self):
         frame = np.full((360, 640, 3), 127, dtype=np.uint8)

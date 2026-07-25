@@ -41,6 +41,13 @@ def detect_disk_center(frame_bgr: np.ndarray, color_result: dict[str, Any]) -> d
     }
 
 
+def advance_detect_disk_center(frame_bgr: np.ndarray) -> dict[str, Any]:
+    """使用带时间窗口和卡尔曼滤波的物料检测结果推断物料盘中心。"""
+    from .advance_yolo import advance_detect_color
+
+    return detect_disk_center(frame_bgr, advance_detect_color(frame_bgr))
+
+
 def _is_detection(detection: Any) -> bool:
     if not isinstance(detection, dict) or not isinstance(detection.get("center"), (list, tuple)):
         return False
