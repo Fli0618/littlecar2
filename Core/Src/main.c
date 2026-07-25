@@ -30,8 +30,6 @@
 #include "advance_motion.h"
 #include "advance_world.h"
 #include "advance_arm.h"
-#include "comm_host.h"
-#include "comm_protocol.h"
 #include "car_pose.h"
 
 /* USER CODE END Includes */
@@ -48,7 +46,6 @@
 
 /* TIM6 提供 1 ms 调度节拍，所有业务周期统一在这里配置。 */
 #define APP_SCHEDULER_TICK_MS ((uint32_t)1U)
-#define APP_PROTOCOL_PERIOD_MS ((uint32_t)2U)
 #define APP_WORLD_PERIOD_MS ((uint32_t)10U)
 #define APP_MOTION_PERIOD_MS ADVANCE_MOTION_CONTROL_PERIOD_MS
 #define APP_MOTOR_PERIOD_MS ((uint32_t)20U)
@@ -56,7 +53,6 @@
 #define APP_LED_PERIOD_MS ((uint32_t)500U)
 
 /* TIM6 仅置位这些任务，不在中断上下文执行业务逻辑。 */
-#define APP_TASK_PROTOCOL ((uint32_t)0x00000001U)
 #define APP_TASK_WORLD ((uint32_t)0x00000002U)
 #define APP_TASK_MOTION ((uint32_t)0x00000008U)
 #define APP_TASK_MOTOR ((uint32_t)0x00000010U)
@@ -148,11 +144,6 @@ static void App_TryResetWorldOrigin(void)
 
 static void App_RunScheduledTasks(uint32_t pending)
 {
-  if ((pending & APP_TASK_PROTOCOL) != 0U)
-  {
-    HostComm_Poll();
-  }
-
   if ((pending & APP_TASK_WORLD) != 0U)
   {
     OPS_Poll();
@@ -271,17 +262,6 @@ int main(void)
 
   // 外设初始化
   BusServo_Init(&huart4);
-
-  // 通信初始化
-  if (HostComm_InitChannel(HOST_SOURCE_PC, &huart1) != HOST_COMM_STATUS_OK)
-  {
-    printf("HostComm PC init failed\r\n");
-  }
-
-  if (HostComm_InitChannel(HOST_SOURCE_JETSON, &huart6) != HOST_COMM_STATUS_OK)
-  {
-    printf("HostComm Jetson init failed\r\n");
-  }
 
   /* 原点建立由 1 s 调度任务重试，不阻塞等待 OPS 数据。 */
   if (HAL_TIM_Base_Start_IT(&htim6) != HAL_OK)
@@ -707,15 +687,6 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     drive_emm_OnUartRxEvent(huart, Size);
   }
 
-  if (huart->Instance == USART1)
-  {
-    HostComm_OnUartRxEvent(huart, Size);
-  }
-
-  if (huart->Instance == USART6)
-  {
-    HostComm_OnUartRxEvent(huart, Size);
-  }
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
@@ -725,10 +696,6 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     drive_emm_OnTxComplete(huart);
   }
 
-  if ((huart->Instance == USART1) || (huart->Instance == USART6))
-  {
-    HostProtocol_OnUartTxComplete(huart);
-  }
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -736,11 +703,6 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   if (huart->Instance == USART3)
   {
     drive_emm_OnUartError(huart);
-  }
-
-  if ((huart->Instance == USART1) || (huart->Instance == USART6))
-  {
-    HostProtocol_OnUartError(huart);
   }
 
   if (huart->Instance == UART4)
@@ -758,20 +720,10 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     WIT_OnUartError(huart);
   }
 
-  if (huart->Instance == USART6)
-  {
-    HostComm_OnUartError(huart);
-  }
-
-  if (huart->Instance == USART1)
-  {
-    HostComm_OnUartError(huart);
-  }
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-  static uint16_t protocol_tick = 0U;
   static uint16_t world_tick = 0U;
   static uint16_t motion_tick = 0U;
   static uint16_t motor_tick = 0U;
@@ -783,11 +735,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     return;
   }
 
-  if (++protocol_tick >= (APP_PROTOCOL_PERIOD_MS / APP_SCHEDULER_TICK_MS))
-  {
-    protocol_tick = 0U;
-    g_app_pending_tasks |= APP_TASK_PROTOCOL;
-  }
   if (++world_tick >= (APP_WORLD_PERIOD_MS / APP_SCHEDULER_TICK_MS))
   {
     world_tick = 0U;

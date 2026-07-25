@@ -10,17 +10,41 @@ from pathlib import Path
 
 
 try:
-    from vision import detect_colored_materials, detect_numbered_marker, detect_qr, detect_yolo, load_yolo_model
+    from vision import (
+        CAMERA_INDEX_COLOR_CIRCLE,
+        CAMERA_INDEX_QR,
+        advance_detect_circle,
+        advance_detect_color,
+        advance_detect_disk_center,
+        detect_circle,
+        detect_color,
+        detect_disk_center,
+        detect_qr,
+    )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-    from vision import detect_colored_materials, detect_numbered_marker, detect_qr, detect_yolo, load_yolo_model
+    from vision import (
+        CAMERA_INDEX_COLOR_CIRCLE,
+        CAMERA_INDEX_QR,
+        advance_detect_circle,
+        advance_detect_color,
+        advance_detect_disk_center,
+        detect_circle,
+        detect_color,
+        detect_disk_center,
+        detect_qr,
+    )
 
 __all__ = [
-    "detect_colored_materials",
-    "detect_numbered_marker",
+    "detect_circle",
+    "detect_color",
+    "detect_disk_center",
+    "advance_detect_circle",
+    "advance_detect_color",
+    "advance_detect_disk_center",
+    "CAMERA_INDEX_COLOR_CIRCLE",
+    "CAMERA_INDEX_QR",
     "detect_qr",
-    "detect_yolo",
-    "load_yolo_model",
     "main",
 ]
 

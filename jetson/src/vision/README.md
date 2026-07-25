@@ -5,14 +5,20 @@
 
 ## 接口
 
-- `marker.py`：`detect_numbered_marker(frame_bgr)`，识别带数字的同心圆标记。
-- `materials.py`：`detect_colored_materials(frame_bgr, model)`，使用已加载的 YOLO 模型检测物料和空槽。
-- `materials.py`：`estimate_disk_center(detections, frame_shape)`，使用检测点估算物料盘中心。
+- `yolo.py`：`detect_color(frame_bgr)`，识别彩色物料和 `EmptySlot`。
+- `yolo.py`：`detect_circle(frame_bgr)`，识别带数字的同心圆。
+- `materials.py`：`detect_disk_center(frame_bgr, color_result)`，使用最多三个检测点估算物料盘中心。
+- `advance_yolo.py`：`advance_detect_color(frame_bgr)`、`advance_detect_circle(frame_bgr)` 和 `advance_detect_disk_center(frame_bgr)`，提供多目标卡尔曼滤波与多帧确认。
 - `qr.py`：`detect_qr(frame_bgr)`，识别二维码并直接返回任务码字符串。
-- `yolo.py`：`load_yolo_model(model_path)` 和 `detect_yolo(...)`，负责模型加载和通用推理。
+- `yolo.py` 会按固定权重延迟加载并缓存两个模型，调用方无需传入模型对象。
 
-物料视觉统一使用 `assets/models/6color-circle-v3.pt`。模型应由调用方加载一次，
-随后在逐帧处理中复用，禁止在检测函数内部重复加载模型。
+物料视觉使用 `assets/models/6color-circle-v3.pt`，同心圆视觉使用
+`assets/models/circle-with-number-v3.pt`。模型在首次调用后按权重路径缓存，
+当前进程内不会重复加载。
 
-模型类别为：`0 Red`、`1 Yellow`、`2 Blue`、`3 Green`、`4 Black`、
-`5 LightBlue`、`6 EmptySlot`。
+检测函数返回 `{"detections": [{"type": "Red", "center": [x, y], "confidence": score}]}`。
+盘中心函数返回 `{"center": [x, y], "status": 0-3, "support_points": [[x, y], ...]}`；
+`status` 为参与推断的检测点数量。
+
+高级检测使用最近 5 帧至少命中 2 帧的确认窗口；同类型多目标按预测位置与检测中心的距离关联。
+相机常量 `CAMERA_INDEX_COLOR_CIRCLE=1` 和 `CAMERA_INDEX_QR=0` 由 `advance_yolo.py` 集中定义。
