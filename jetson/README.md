@@ -1,52 +1,15 @@
-# littlecar2 Jetson
+# littlecar2 Jetson 视觉服务
 
-## 目录
+`main.py` 是单线程常驻视觉服务。它打开串口与摄像头，非阻塞解析 STM32 指令；START 后连续执行对应高级检测并按指定周期上报最新结果，STOP 后立即停发但不退出服务或卸载模型。
 
-```text
-jetson/
-  main.py       正式流程入口
-  src/vision    正式视觉接口
-  src/protocol  下位机通信协议
-  tests/        自动化测试
-  scripts/      算法研究和验证脚本
-  assets/       模型和测试图片
-```
+## 配置与运行
 
-## 运行
+在 `main.py` 顶部修改 `SERIAL_PORT`、`SERIAL_BAUDRATE`、`CAMERA_ID`、`DEFAULT_PERIOD_MS`。默认周期为 40 ms，串口默认 `/dev/ttyTHS1`、115200。
 
 ```powershell
 conda run -n low_numpy pip install -e .
 conda run -n low_numpy python main.py
-```
-
-## 视觉 API
-
-```python
-from vision import (
-    detect_circle,
-    detect_color,
-    detect_disk_center,
-    detect_qr,
-)
-
-colors = detect_color(frame_bgr)
-circles = detect_circle(frame_bgr)
-center = detect_disk_center(frame_bgr, colors)
-```
-
-连续视频场景可使用 `advance_detect_color(frame_bgr)`、`advance_detect_circle(frame_bgr)` 和
-`advance_detect_disk_center(frame_bgr)`。高级接口会按目标类型进行距离关联、卡尔曼平滑和多帧确认。
-相机编号常量为 `CAMERA_INDEX_COLOR_CIRCLE = 1` 与 `CAMERA_INDEX_QR = 0`。
-
-物料颜色、同心圆和物料盘中心定位均使用 YOLO。两个模型会在首次调用时加载一次，
-之后逐帧复用。`EmptySlot` 类别会保留在检测结果中，并可参与中心定位。
-
-二维码接口直接返回任务码字符串；未识别到二维码时返回 `None`。
-
-## 测试
-
-```powershell
 conda run -n low_numpy python -m pytest tests -q
 ```
 
-`main.py` 不会自动打开摄像头、读取图片、加载模型或发送串口命令。
+模型由现有缓存按权重路径复用，START/STOP 只重置高级跟踪状态。协议字段与会话规则见 [STM32 协议文档](../MDK-ARM/docs/上下位机通信协议.md)。

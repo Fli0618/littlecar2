@@ -104,11 +104,11 @@ def _advance_detect(
         if sum(tracker["history"]) >= MIN_DETECTIONS:
             detections.append(
                 {
-                    "tracking_id": tracker_id,
                     "type": tracker["type"],
                     "center": tracker["center"],
                     "confidence": tracker["confidence"],
                     "measured": bool(tracker["history"][-1]),
+                    "support_count": sum(tracker["history"]),
                 }
             )
     return {"detections": detections}
@@ -124,8 +124,13 @@ def advance_detect_circle(frame_bgr: np.ndarray) -> dict[str, list[dict[str, Any
     return _advance_detect("circle", frame_bgr, detect_circle)
 
 
-def _reset_advance_tracking() -> None:
+def reset_advance_tracking() -> None:
     """清空高级检测状态，仅用于测试或显式重置视频会话。"""
     for group in _TRACKERS:
         _TRACKERS[group].clear()
         _NEXT_TRACKER_ID[group] = 0
+
+
+def _reset_advance_tracking() -> None:
+    """兼容旧调用方；新代码应使用 ``reset_advance_tracking``。"""
+    reset_advance_tracking()

@@ -1,5 +1,11 @@
 # 物流小车 STM32F407ZGT6 下位机工程
 
+## Jetson 连续视觉服务
+
+STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `comm_jetson` 发送 START/STOP，Jetson 以 START 的周期持续上报最新检测结果；默认周期为 `DETECT_DEFAULT_PERIOD_MS=40 ms`。USART6 保持既有 DMA + IDLE 配置，不修改 CubeMX。
+
+`main.c` 只维护 START、RUNNING、STOP、DONE、ERROR 阶段并转发串口回调。进入视觉阶段会取消已有 `AdvanceMotion` 目标；当前会话数据超过 200 ms 未刷新会停车并结束阶段。协议、字段、状态码和 SESSION 过滤见 [通信协议](docs/上下位机通信协议.md)。
+
 ## 1. 项目说明
 
 仓库地址：https://github.com/Tuzfucius/littlecar2
@@ -44,7 +50,7 @@
 | USART3 | Asynchronous | PB10 | PB11 | 张大头 Emm_V5 步进闭环电机 | `drive_emm.*` |
 | UART4 | Asynchronous | PA0 | PA1 | 总线舵机 | `drive_bus_servo.*` |
 | UART5 | Asynchronous | PC12 | PD2 | OPS 定位系统 | `sensor_ops.*` |
-| USART6 | Asynchronous | PC6 | PC7 | 预留 Jetson 视觉通信，当前未启用 | 暂无 |
+| USART6 | Asynchronous | PC6 | PC7 | Jetson 连续视觉服务 | `comm_jetson.*` |
 
 对于电机和舵机，我们通过id编号进行配置
 - 步进电机
@@ -127,6 +133,17 @@
 - 当前数据：`carpose_imu` 指向 WIT 数据，`carpose_ops` 指向 OPS 位姿数据。
 - 典型接口：`CarPose_Init()`。
 
+### 4.8 Jetson 连续视觉通信
+
+- 文件：`Core/Inc/comm_jetson.h`、`Core/Src/comm_jetson.c`
+- 用途：STM32 通过 USART6 启动或停止 Jetson 视觉任务，并缓存当前会话的最新颜色、数字圆环或物料盘中心结果。
+- 链路：`USART6`，DMA Circular + UART IDLE 接收，DMA 发送；帧格式为 `5A A5 CMD SESSION LEN PAYLOAD CRC16_L CRC16_H`，CRC16-Modbus 覆盖 CMD、SESSION、LEN 和 Payload。
+- 检测模式：`detect_color_start()`、`detect_circle_start()`、`detect_disk_center_start()`；`detect_stop()` 只停止当前检测，Jetson 保持运行并等待下一条 START。
+- 默认周期：`DETECT_DEFAULT_PERIOD_MS`，默认 40 ms。每次 START 递增 SESSION，模块丢弃旧会话、错误 CRC 和模式不匹配的数据。
+- 数据边界：仅缓存最新结果，`detect_get_targets()` 与 `detect_get_disk_center()` 成功读取未消费的新数据时返回 1；最多缓存 8 个目标。目标包含模型 `class_id`、像素中心、置信度、`measured` 与 `support_count`；盘中心包含状态、坐标、支持点数和 `measured_count`。
+- 安全规则：主循环视觉阶段开始时取消原有 `AdvanceMotion` 目标；当前会话 200 ms 没有有效数据时停车并结束阶段。盘中心零支持点固定为无目标和 `(0, 0)`，业务层不得仅凭预测结果判定到达。
+- 回调接口：`CommJetson_Init()`、`CommJetson_OnUartRxEvent()`、`CommJetson_OnUartError()` 仅供 `main.c` 的 USART6 初始化和 HAL 回调分发使用。
+
 ## 5. 主循环与回调边界
 
 - `main.c` 负责系统初始化、外设初始化、模块初始化、主循环轮询和 HAL 回调分发。
@@ -137,7 +154,7 @@
 ## 6. 调试边界
 
 - PC 端调试日志通过 `USART1 printf` 输出。
-- USART6 的硬件初始化保留给后续 Jetson 视觉通信，当前不启动接收、不调用软件协议。
+- USART6 由 `comm_jetson` 在初始化时启动 DMA + IDLE 接收；Jetson 视觉协议不使用 USART1 调试串口，也不控制底盘参数。
 
 ## 7. 世界速度与方向配置
 
