@@ -2,7 +2,7 @@
 
 ## Jetson 连续视觉服务
 
-STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `comm_jetson` 发送 START/STOP，Jetson 以 START 的周期持续上报最新检测结果；默认周期为 `COMM_JETSON_DEFAULT_PERIOD_MS=40 ms`。USART6 保持既有 DMA + IDLE 配置，不修改 CubeMX。
+STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `comm_jetson` 发送 START/STOP，Jetson 以 START 的周期持续上报最新检测结果；默认周期为 `DETECT_DEFAULT_PERIOD_MS=40 ms`。USART6 保持既有 DMA + IDLE 配置，不修改 CubeMX。
 
 `main.c` 只维护 START、RUNNING、STOP、DONE、ERROR 阶段并转发串口回调。进入视觉阶段会取消已有 `AdvanceMotion` 目标；当前会话数据超过 200 ms 未刷新会停车并结束阶段。协议、字段、状态码和 SESSION 过滤见 [通信协议](docs/上下位机通信协议.md)。
 

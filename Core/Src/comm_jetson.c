@@ -17,6 +17,7 @@
 
 static UART_HandleTypeDef *g_uart;
 static uint8_t g_rx_dma[COMM_JETSON_RX_DMA_SIZE];
+static uint8_t g_tx_frame[16U];
 static uint16_t g_rx_last_pos;
 static uint8_t g_frame_buffer[COMM_JETSON_FRAME_BUFFER_SIZE];
 static uint16_t g_frame_size;
@@ -61,7 +62,6 @@ static void CommJetson_StartRx(void)
 
 static Detect_Status_t CommJetson_Send(uint8_t command, const uint8_t *payload, uint8_t length)
 {
-  uint8_t frame[16];
   uint16_t crc;
   uint16_t frame_size;
 
@@ -70,21 +70,21 @@ static Detect_Status_t CommJetson_Send(uint8_t command, const uint8_t *payload, 
     return DETECT_STATUS_UART_ERROR;
   }
 
-  frame[0] = COMM_JETSON_SYNC0;
-  frame[1] = COMM_JETSON_SYNC1;
-  frame[2] = command;
-  frame[3] = g_session;
-  frame[4] = length;
+  g_tx_frame[0] = COMM_JETSON_SYNC0;
+  g_tx_frame[1] = COMM_JETSON_SYNC1;
+  g_tx_frame[2] = command;
+  g_tx_frame[3] = g_session;
+  g_tx_frame[4] = length;
   if (length > 0U)
   {
-    memcpy(&frame[5], payload, length);
+    memcpy(&g_tx_frame[5], payload, length);
   }
-  crc = CommJetson_Crc16(&frame[2], (uint16_t)(3U + length));
-  frame[5U + length] = (uint8_t)(crc & 0xFFU);
-  frame[6U + length] = (uint8_t)(crc >> 8U);
+  crc = CommJetson_Crc16(&g_tx_frame[2], (uint16_t)(3U + length));
+  g_tx_frame[5U + length] = (uint8_t)(crc & 0xFFU);
+  g_tx_frame[6U + length] = (uint8_t)(crc >> 8U);
   frame_size = (uint16_t)(7U + length);
 
-  return (HAL_UART_Transmit(g_uart, frame, frame_size, 20U) == HAL_OK) ?
+  return (HAL_UART_Transmit_DMA(g_uart, g_tx_frame, frame_size) == HAL_OK) ?
              DETECT_STATUS_OK : DETECT_STATUS_UART_ERROR;
 }
 
