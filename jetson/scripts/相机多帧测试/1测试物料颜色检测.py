@@ -12,10 +12,10 @@ import cv2
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from vision import detect_color
+from vision import detect_color, detect_circle
 
 
-CAMERA_INDEX = 0
+CAMERA_INDEX = 1
 WINDOW_NAME = "Material Color Detection | Press Q or ESC to exit"
 
 
@@ -36,7 +36,10 @@ def main() -> None:
 
             raw_frame = frame_bgr.copy()
             started = time.perf_counter()
-            result = detect_color(frame_bgr)
+
+            # 调用什么模型在这里选
+            # result = detect_color(frame_bgr)
+            result = detect_circle(frame_bgr)
             inference_ms = (time.perf_counter() - started) * 1000.0
 
             result_frame = frame_bgr.copy()
