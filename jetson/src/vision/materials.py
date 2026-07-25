@@ -22,21 +22,24 @@ def detect_disk_center(frame_bgr: np.ndarray, color_result: dict[str, Any]) -> d
         reverse=True,
     )[:3]
     points = [list(map(int, detection["center"])) for detection in selected]
-    status = len(points)
+    support_count = len(points)
+    measured_count = sum(1 for detection in selected if detection.get("measured", True))
     image_height, image_width = frame_bgr.shape[:2]
 
-    if status == 3:
+    if support_count == 3:
         center = np.mean(points, axis=0)
-    elif status == 2:
+    elif support_count == 2:
         center = _estimate_from_two_points(points, image_width, image_height)
-    elif status == 1:
+    elif support_count == 1:
         center = np.asarray(points[0], dtype=float)
     else:
-        center = np.asarray([image_width / 2.0, image_height / 2.0])
+        center = np.asarray([0.0, 0.0])
 
     return {
         "center": [int(round(center[0])), int(round(center[1]))],
-        "status": status,
+        "status": 1 if support_count else 0,
+        "support_count": support_count,
+        "measured_count": measured_count,
         "support_points": points,
     }
 

@@ -24,6 +24,7 @@
 - `advance_world`：维护 world 坐标系、全局位姿和 world/base 速度变换。
 - `advance_motion`：世界速度与 `GotoPose` 异步状态机；由 `main.c` 每 20 ms 调度。
 - `advance_arm`：固定 ID 和编译期动作参数的完全开环阻塞式机械臂执行器；每个原子动作直接发送命令后等待 1000 ms。
+- `comm_jetson`：USART6 上的 Jetson 连续视觉通信、帧解析与最新结果缓存；不参与底盘控制。
 
 ## 闭环安全边界
 
@@ -32,4 +33,5 @@
 - `sensor_limit` 统一管理升降上/下、滑台前/后四个限位的电平极性；默认高电平有效，可在 `sensor_limit.h` 中改为低电平有效。
 - `advance_arm` 不读取机械臂限位或电机反馈；Pick/Place 以固定顺序完成五个 1000 ms 原子动作，不能证明机械机构实际到位。
 - `main.c` 使用 TIM6 置位任务标志，主循环以 `__WFI()` 等待事件后延后执行任务；不在定时器中断中直接运行底盘业务。
+- 视觉通信使用 USART6 DMA + IDLE。业务层通过 `detect_color_start()`、`detect_circle_start()`、`detect_disk_center_start()` 和 `detect_stop()` 控制服务，默认周期由 `COMM_JETSON_DEFAULT_PERIOD_MS` 配置为 40 ms。
 - 详细配置、参数含义与上板验收流程见 `MDK-ARM/docs/下位机闭环与安全修复说明.md`。

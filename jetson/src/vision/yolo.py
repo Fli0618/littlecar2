@@ -71,7 +71,7 @@ def _detect(frame_bgr: np.ndarray, model_path: Path) -> dict[str, list[dict[str,
         x1, y1, x2, y2 = _to_numpy(box.xyxy).reshape(-1)[:4].astype(int)
         detections.append(
             {
-                "type": _class_name(names, class_id),
+                "type": class_id,
                 "center": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
                 "confidence": float(_to_numpy(box.conf).reshape(-1)[0]),
             }

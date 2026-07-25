@@ -401,6 +401,11 @@
               <FilePath>../Core/Src/drive_emm.c</FilePath>
             </File>
             <File>
+              <FileName>comm_jetson.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/comm_jetson.c</FilePath>
+            </File>
+            <File>
               <FileName>advance_chassis.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/advance_chassis.c</FilePath>

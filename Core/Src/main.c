@@ -31,6 +31,7 @@
 #include "advance_world.h"
 #include "advance_arm.h"
 #include "car_pose.h"
+#include "comm_jetson.h"
 
 /* USER CODE END Includes */
 
@@ -51,6 +52,7 @@
 #define APP_MOTOR_PERIOD_MS ((uint32_t)20U)
 #define APP_ORIGIN_PERIOD_MS ((uint32_t)1000U)
 #define APP_LED_PERIOD_MS ((uint32_t)500U)
+#define APP_VISUAL_RESULT_TIMEOUT_MS ((uint32_t)200U)
 
 /* TIM6 仅置位这些任务，不在中断上下文执行业务逻辑。 */
 #define APP_TASK_WORLD ((uint32_t)0x00000002U)
@@ -84,6 +86,8 @@ DMA_HandleTypeDef hdma_usart6_tx;
 
 /* USER CODE BEGIN PV */
 static volatile uint32_t g_app_pending_tasks = 0U;
+static uint8_t g_visual_stage = 3U;
+static uint32_t g_visual_started_tick = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -142,6 +146,55 @@ static void App_TryResetWorldOrigin(void)
   }
 }
 
+static void App_ProcessVisualDetect(void)
+{
+  enum
+  {
+    APP_VISUAL_START = 0U,
+    APP_VISUAL_RUNNING,
+    APP_VISUAL_STOP,
+    APP_VISUAL_DONE,
+    APP_VISUAL_ERROR
+  };
+
+  if ((g_visual_stage == APP_VISUAL_DONE) && (detect_is_active() != 0U))
+  {
+    g_visual_stage = APP_VISUAL_START;
+  }
+
+  if (g_visual_stage == APP_VISUAL_START)
+  {
+    /* 视觉任务接管前取消既有到点运动，后续控制律由业务层消费最新视觉结果。 */
+    AdvanceMotion_CancelIfActive();
+    g_visual_started_tick = HAL_GetTick();
+    g_visual_stage = APP_VISUAL_RUNNING;
+  }
+  else if (g_visual_stage == APP_VISUAL_RUNNING)
+  {
+    if (detect_is_active() == 0U)
+    {
+      g_visual_stage = APP_VISUAL_DONE;
+    }
+    else if (((HAL_GetTick() - g_visual_started_tick) >= APP_VISUAL_RESULT_TIMEOUT_MS) &&
+             (detect_is_fresh(APP_VISUAL_RESULT_TIMEOUT_MS) == 0U))
+    {
+      g_visual_stage = APP_VISUAL_STOP;
+    }
+  }
+  else if (g_visual_stage == APP_VISUAL_STOP)
+  {
+    AdvanceMotion_Cancel();
+    if (detect_stop() == DETECT_STATUS_OK)
+    {
+      g_visual_stage = APP_VISUAL_DONE;
+    }
+    else
+    {
+      g_visual_stage = APP_VISUAL_ERROR;
+    }
+  }
+}
+
 static void App_RunScheduledTasks(uint32_t pending)
 {
   if ((pending & APP_TASK_WORLD) != 0U)
@@ -171,6 +224,8 @@ static void App_RunScheduledTasks(uint32_t pending)
   {
     App_ToggleLed();
   }
+
+  App_ProcessVisualDetect();
 }
 
 /* USER CODE END 0 */
@@ -240,6 +295,8 @@ int main(void)
   MX_USART6_UART_Init();
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
+
+  CommJetson_Init(&huart6);
 
   // 传感器初始化
   OPS_Init(&huart5);
@@ -687,6 +744,11 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     drive_emm_OnUartRxEvent(huart, Size);
   }
 
+  if (huart->Instance == USART6)
+  {
+    CommJetson_OnUartRxEvent(huart, Size);
+  }
+
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
@@ -718,6 +780,11 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   if (huart->Instance == USART2)
   {
     WIT_OnUartError(huart);
+  }
+
+  if (huart->Instance == USART6)
+  {
+    CommJetson_OnUartError(huart);
   }
 
 }
