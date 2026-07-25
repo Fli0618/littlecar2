@@ -1,77 +1,62 @@
-"""YOLO material detection and disk center estimation."""
+"""物料盘中心推断。"""
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
-from .yolo import detect_yolo
+from .yolo import _validate_frame
 
 
-def detect_colored_materials(
-    frame_bgr: np.ndarray,
-    model: Any,
-    conf_thres: float = 0.5,
-    iou_thres: float = 0.45,
-    device: str | None = None,
-) -> list[dict[str, Any]]:
-    """Detect materials and empty slots with an already loaded YOLO model."""
-    return detect_yolo(
-        frame_bgr,
-        model,
-        conf_thres=conf_thres,
-        iou_thres=iou_thres,
-        device=device,
-    )
+def detect_disk_center(frame_bgr: np.ndarray, color_result: dict[str, Any]) -> dict[str, Any]:
+    """根据颜色检测结果推断物料盘中心，并以支持点数反馈推断状态。"""
+    _validate_frame(frame_bgr)
+    detections = color_result.get("detections")
+    if not isinstance(detections, list):
+        raise ValueError("color_result must contain a detections list")
 
-
-def estimate_disk_center(
-    detections: Sequence[dict[str, Any]],
-    frame_shape: Sequence[int],
-) -> dict[str, Any]:
-    """Estimate the material disk center and report the fallback strategy."""
-    if len(frame_shape) < 2 or frame_shape[0] <= 0 or frame_shape[1] <= 0:
-        raise ValueError("frame_shape must contain positive height and width")
-
-    img_h, img_w = int(frame_shape[0]), int(frame_shape[1])
-    colored = sorted(
-        (det for det in detections if det.get("class_id") != 6),
-        key=lambda det: det.get("confidence", 0.0),
+    selected = sorted(
+        (detection for detection in detections if _is_detection(detection)),
+        key=lambda detection: float(detection["confidence"]),
         reverse=True,
-    )
-    empty = sorted(
-        (det for det in detections if det.get("class_id") == 6),
-        key=lambda det: det.get("confidence", 0.0),
-        reverse=True,
-    )
-    selected = (colored[:3] + empty)[:3]
-    points = [(int(det["center_x"]), int(det["center_y"])) for det in selected]
+    )[:3]
+    points = [list(map(int, detection["center"])) for detection in selected]
+    status = len(points)
+    image_height, image_width = frame_bgr.shape[:2]
 
-    if len(points) == 3:
+    if status == 3:
         center = np.mean(points, axis=0)
-        method = "three_point_mean"
-    elif len(points) == 2:
-        p1, p2 = np.asarray(points, dtype=float)
-        distance = float(np.linalg.norm(p2 - p1))
-        midpoint = (p1 + p2) / 2.0
-        height = distance / (2.0 * np.sqrt(3.0))
-        normal = np.array([-(p2 - p1)[1], (p2 - p1)[0]]) / (distance or 1.0)
-        image_center = np.array([img_w / 2.0, img_h / 2.0])
-        candidate_a = midpoint + height * normal
-        candidate_b = midpoint - height * normal
-        center = min((candidate_a, candidate_b), key=lambda item: np.linalg.norm(item - image_center))
-        method = "two_point_geometry"
-    elif len(points) == 1:
+    elif status == 2:
+        center = _estimate_from_two_points(points, image_width, image_height)
+    elif status == 1:
         center = np.asarray(points[0], dtype=float)
-        method = "single_point_fallback"
     else:
-        center = np.array([img_w / 2.0, img_h / 2.0])
-        method = "image_center_fallback"
+        center = np.asarray([image_width / 2.0, image_height / 2.0])
 
     return {
-        "center_x": int(round(center[0])),
-        "center_y": int(round(center[1])),
-        "method": method,
+        "center": [int(round(center[0])), int(round(center[1]))],
+        "status": status,
         "support_points": points,
     }
+
+
+def _is_detection(detection: Any) -> bool:
+    if not isinstance(detection, dict) or not isinstance(detection.get("center"), (list, tuple)):
+        return False
+    center = detection["center"]
+    return len(center) == 2 and isinstance(detection.get("confidence"), (int, float))
+
+
+def _estimate_from_two_points(points: list[list[int]], image_width: int, image_height: int) -> np.ndarray:
+    p1, p2 = np.asarray(points, dtype=float)
+    distance = float(np.linalg.norm(p2 - p1))
+    if distance == 0.0:
+        return p1
+
+    midpoint = (p1 + p2) / 2.0
+    height = distance / (2.0 * np.sqrt(3.0))
+    normal = np.array([-(p2 - p1)[1], (p2 - p1)[0]]) / distance
+    candidates = (midpoint + height * normal, midpoint - height * normal)
+    image_center = np.array([image_width / 2.0, image_height / 2.0])
+    return min(candidates, key=lambda candidate: np.linalg.norm(candidate - image_center))

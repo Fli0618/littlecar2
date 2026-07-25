@@ -23,20 +23,19 @@ conda run -n low_numpy python main.py
 
 ```python
 from vision import (
-    detect_colored_materials,
-    detect_numbered_marker,
+    detect_circle,
+    detect_color,
+    detect_disk_center,
     detect_qr,
-    estimate_disk_center,
-    load_yolo_model,
 )
 
-model = load_yolo_model("assets/models/6color-circle-v3.pt")
-detections = detect_colored_materials(frame_bgr, model)
-center = estimate_disk_center(detections, frame_bgr.shape)
+colors = detect_color(frame_bgr)
+circles = detect_circle(frame_bgr)
+center = detect_disk_center(frame_bgr, colors)
 ```
 
-物料颜色和物料盘中心定位均使用 YOLO。模型只在启动阶段加载一次，之后逐帧复用。
-`EmptySlot` 类别会保留在检测结果中，并可参与中心定位。
+物料颜色、同心圆和物料盘中心定位均使用 YOLO。两个模型会在首次调用时加载一次，
+之后逐帧复用。`EmptySlot` 类别会保留在检测结果中，并可参与中心定位。
 
 二维码接口直接返回任务码字符串；未识别到二维码时返回 `None`。
 

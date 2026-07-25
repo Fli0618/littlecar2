@@ -10,17 +10,16 @@ from pathlib import Path
 
 
 try:
-    from vision import detect_colored_materials, detect_numbered_marker, detect_qr, detect_yolo, load_yolo_model
+    from vision import detect_circle, detect_color, detect_disk_center, detect_qr
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-    from vision import detect_colored_materials, detect_numbered_marker, detect_qr, detect_yolo, load_yolo_model
+    from vision import detect_circle, detect_color, detect_disk_center, detect_qr
 
 __all__ = [
-    "detect_colored_materials",
-    "detect_numbered_marker",
+    "detect_circle",
+    "detect_color",
+    "detect_disk_center",
     "detect_qr",
-    "detect_yolo",
-    "load_yolo_model",
     "main",
 ]
 

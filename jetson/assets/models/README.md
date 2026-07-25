@@ -2,5 +2,6 @@
 
 本目录存放视觉模型文件。
 
-- `RGB_circle.pt`：Ultralytics YOLO PyTorch 模型。
-- `RGB_circle.onnx`：ONNX 导出模型，后续可用于 TensorRT 或 ONNX Runtime 测试。
+- `6color-circle-v3.pt`：彩色物料与 `EmptySlot` 检测模型。
+- `circle-with-number-v3.pt`：带数字同心圆检测模型。
+- `RGB_circle.pt` 和 `RGB_circle.onnx`：历史实验模型，不作为正式视觉接口使用。
