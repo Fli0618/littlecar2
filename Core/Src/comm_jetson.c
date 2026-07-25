@@ -17,6 +17,7 @@
 
 static UART_HandleTypeDef *g_uart;
 static uint8_t g_rx_dma[COMM_JETSON_RX_DMA_SIZE];
+static uint16_t g_rx_last_pos;
 static uint8_t g_frame_buffer[COMM_JETSON_FRAME_BUFFER_SIZE];
 static uint16_t g_frame_size;
 static uint8_t g_session;
@@ -54,6 +55,7 @@ static void CommJetson_StartRx(void)
     {
       __HAL_DMA_DISABLE_IT(g_uart->hdmarx, DMA_IT_HT);
     }
+    g_rx_last_pos = 0U;
   }
 }
 
@@ -227,6 +229,7 @@ void CommJetson_Init(UART_HandleTypeDef *huart)
 {
   g_uart = huart;
   g_frame_size = 0U;
+  g_rx_last_pos = 0U;
   g_session = 0U;
   g_active = 0U;
   g_mode = 0U;
@@ -236,26 +239,49 @@ void CommJetson_Init(UART_HandleTypeDef *huart)
 
 void CommJetson_OnUartRxEvent(UART_HandleTypeDef *huart, uint16_t size)
 {
+  uint16_t current_pos;
   uint16_t copy_size;
 
-  if ((huart != g_uart) || (size == 0U))
+  if (huart != g_uart)
   {
-    CommJetson_StartRx();
     return;
   }
-  copy_size = size;
-  if (copy_size > (uint16_t)(COMM_JETSON_FRAME_BUFFER_SIZE - g_frame_size))
+  current_pos = (size > COMM_JETSON_RX_DMA_SIZE) ? COMM_JETSON_RX_DMA_SIZE : size;
+  if (current_pos == g_rx_last_pos)
   {
-    g_frame_size = 0U;
-    if (copy_size > COMM_JETSON_FRAME_BUFFER_SIZE)
+    return;
+  }
+  if (current_pos > g_rx_last_pos)
+  {
+    copy_size = (uint16_t)(current_pos - g_rx_last_pos);
+    if (copy_size > (uint16_t)(COMM_JETSON_FRAME_BUFFER_SIZE - g_frame_size))
     {
-      copy_size = COMM_JETSON_FRAME_BUFFER_SIZE;
+      g_frame_size = 0U;
+    }
+    memcpy(&g_frame_buffer[g_frame_size], &g_rx_dma[g_rx_last_pos], copy_size);
+    g_frame_size = (uint16_t)(g_frame_size + copy_size);
+  }
+  else
+  {
+    copy_size = (uint16_t)(COMM_JETSON_RX_DMA_SIZE - g_rx_last_pos);
+    if (copy_size > (uint16_t)(COMM_JETSON_FRAME_BUFFER_SIZE - g_frame_size))
+    {
+      g_frame_size = 0U;
+    }
+    memcpy(&g_frame_buffer[g_frame_size], &g_rx_dma[g_rx_last_pos], copy_size);
+    g_frame_size = (uint16_t)(g_frame_size + copy_size);
+    if (current_pos > 0U)
+    {
+      if (current_pos > (uint16_t)(COMM_JETSON_FRAME_BUFFER_SIZE - g_frame_size))
+      {
+        g_frame_size = 0U;
+      }
+      memcpy(&g_frame_buffer[g_frame_size], g_rx_dma, current_pos);
+      g_frame_size = (uint16_t)(g_frame_size + current_pos);
     }
   }
-  memcpy(&g_frame_buffer[g_frame_size], g_rx_dma, copy_size);
-  g_frame_size = (uint16_t)(g_frame_size + copy_size);
+  g_rx_last_pos = (current_pos == COMM_JETSON_RX_DMA_SIZE) ? 0U : current_pos;
   CommJetson_Parse();
-  CommJetson_StartRx();
 }
 
 void CommJetson_OnUartError(UART_HandleTypeDef *huart)
