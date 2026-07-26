@@ -110,7 +110,7 @@ static Detect_Status_t CommJetson_Send(uint8_t command, const uint8_t *payload, 
 static void CommJetson_ClearResults(void)
 {
   g_targets = (Detect_TargetList_t){0};
-  g_disk_center = (Detect_DiskCenter_t){0};
+  memset(&g_disk_center, 0, sizeof(g_disk_center));
   g_disk_center.status = DETECT_STATUS_NO_TARGET;
   memset(g_qr_code, 0, sizeof(g_qr_code));
   g_targets_new = 0U;

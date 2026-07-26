@@ -28,7 +28,7 @@ typedef struct
   uint8_t acc;
 } AdvanceMotion_Control_t;
 
-static AdvanceMotion_RuntimeStatus_t g_motion = {0};
+static AdvanceMotion_RuntimeStatus_t g_motion = {ADVANCE_MOTION_STATE_IDLE};
 static AdvanceMotion_Control_t g_motion_control = {0};
 static volatile AdvanceMotion_RunState_t g_motion_state = ADVANCE_MOTION_STATE_IDLE;
 
@@ -320,7 +320,7 @@ static AdvanceMotion_Status_t AdvanceMotion_ApplyWorldVelocityEx(float vx_world_
 /* 初始化世界坐标运动控制器。 */
 void AdvanceMotion_Init(void)
 {
-  g_motion = (AdvanceMotion_RuntimeStatus_t){0};
+  g_motion = (AdvanceMotion_RuntimeStatus_t){ADVANCE_MOTION_STATE_IDLE};
   g_motion_control = (AdvanceMotion_Control_t){0};
   g_motion_state = ADVANCE_MOTION_STATE_IDLE;
 }

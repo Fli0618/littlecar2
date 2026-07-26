@@ -29,7 +29,9 @@ volatile WorldPose2D_t g_world_pose = {0};
 static AdvanceWorld_Origin_t g_world_origin = {0};
 static AdvanceWorld_PoseOffset_t g_world_pose_offset = {0};
 static volatile AdvanceWorld_Status_t g_world_status = ADVANCE_WORLD_STATUS_NOT_READY;
+#if (ADVANCE_WORLD_DEBUG_ENABLE != 0U)
 static uint32_t g_last_debug_print_tick = 0U;
+#endif
 
 /* 将角度从度转换为弧度。 */
 static float AdvanceWorld_DegToRad(float deg)
@@ -217,7 +219,9 @@ void AdvanceWorld_Init(void)
   g_world_pose_offset = (AdvanceWorld_PoseOffset_t){0};
   g_world_pose = (WorldPose2D_t){0};
   g_world_status = ADVANCE_WORLD_STATUS_NOT_READY;
+#if (ADVANCE_WORLD_DEBUG_ENABLE != 0U)
   g_last_debug_print_tick = 0U;
+#endif
 }
 
 /* 以当前传感器位置和航向建立世界坐标原点。 */
