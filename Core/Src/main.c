@@ -758,6 +758,11 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     drive_emm_OnTxComplete(huart);
   }
 
+  if (huart->Instance == USART6)
+  {
+    CommJetson_OnUartTxComplete(huart);
+  }
+
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)

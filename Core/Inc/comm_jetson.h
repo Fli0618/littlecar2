@@ -12,6 +12,10 @@ extern "C" {
 #define DETECT_DEFAULT_PERIOD_MS ((uint16_t)40U)
 /** 单次检测结果允许保存的最大目标数量。 */
 #define DETECT_TARGET_MAX ((uint8_t)8U)
+/** 二维码任务码的固定 ASCII 字节长度。 */
+#define DETECT_QR_CODE_LENGTH ((uint8_t)15U)
+/** 二维码阻塞读取的最长等待时间，单位为 ms。 */
+#define DETECT_QR_TIMEOUT_MS ((uint32_t)2000U)
 
 /** 检测通信及检测任务的返回状态。 */
 typedef enum
@@ -21,7 +25,10 @@ typedef enum
   DETECT_STATUS_BAD_COMMAND,  /**< 收到不支持的命令。 */
   DETECT_STATUS_BAD_LENGTH,   /**< 收到的数据长度不正确。 */
   DETECT_STATUS_BAD_PERIOD,   /**< 检测周期参数不合法。 */
-  DETECT_STATUS_UART_ERROR    /**< UART 通信发生错误。 */
+  DETECT_STATUS_UART_ERROR,   /**< UART 通信发生错误。 */
+  DETECT_STATUS_BUSY,         /**< UART DMA 发送缓冲区正在使用。 */
+  DETECT_STATUS_TIMEOUT,      /**< 等待二维码结果超时。 */
+  DETECT_STATUS_BAD_PARAMETER /**< 调用参数不合法。 */
 } Detect_Status_t;
 
 /** 单个视觉检测目标的结果。 */
@@ -58,6 +65,8 @@ Detect_Status_t detect_color_start(void);
 Detect_Status_t detect_circle_start(void);
 /** 启动圆盘中心检测。 */
 Detect_Status_t detect_disk_center_start(void);
+/** 启动一次二维码检测会话。 */
+Detect_Status_t detect_qr_start(void);
 /** 停止当前检测任务。 */
 Detect_Status_t detect_stop(void);
 
@@ -65,6 +74,10 @@ Detect_Status_t detect_stop(void);
 uint8_t detect_get_targets(Detect_TargetList_t *result);
 /** 获取最近一次圆盘中心检测结果。 */
 uint8_t detect_get_disk_center(Detect_DiskCenter_t *result);
+/** 获取最近一次二维码任务码，返回值为 1 表示成功复制新结果。 */
+uint8_t detect_get_qr(char code[DETECT_QR_CODE_LENGTH + 1U]);
+/** 启动二维码检测并阻塞等待一次结果或超时。 */
+Detect_Status_t detect_qr_read_blocking(char code[DETECT_QR_CODE_LENGTH + 1U]);
 /** 查询检测任务是否处于运行状态。 */
 uint8_t detect_is_active(void);
 /** 查询最近一次检测结果是否在指定超时时间内刷新。 */
@@ -76,6 +89,8 @@ void CommJetson_Init(UART_HandleTypeDef *huart);
 void CommJetson_OnUartRxEvent(UART_HandleTypeDef *huart, uint16_t size);
 /** 处理 UART 错误事件并恢复接收。 */
 void CommJetson_OnUartError(UART_HandleTypeDef *huart);
+/** 处理 UART DMA 发送完成事件。 */
+void CommJetson_OnUartTxComplete(UART_HandleTypeDef *huart);
 
 #ifdef __cplusplus
 }
