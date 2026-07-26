@@ -46,7 +46,7 @@ def main() -> None:
                 cv2.circle(result_frame, (center_x, center_y), 8, color, -1)
                 cv2.putText(
                     result_frame,
-                    f"ID:{detection['tracking_id']} {detection['type']} {detection['confidence']:.2f} {state}",
+                    f"{detection['type']} {detection['confidence']:.2f} {state}",
                     (center_x + 12, max(24, center_y - 12)),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.65,
