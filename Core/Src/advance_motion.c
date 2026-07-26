@@ -380,7 +380,7 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
   return ADVANCE_MOTION_STATUS_OK;
 }
 
-/* 阻塞复用既有轮询控制器，避免维护第二套 PID 逻辑。 */
+/* 启动目标后仅等待 TIM6 将运动状态推进到终态。 */
 AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(const WorldGoalPose2D_t *goal, uint8_t acc)
 {
   AdvanceMotion_Status_t status;
@@ -525,7 +525,7 @@ void AdvanceMotion_Update(void)
   g_motion.updated_tick = now_tick;
 }
 
-/* 取消当前运动任务并平滑停止底盘。 */
+/* 取消当前运动任务、释放控制权并停止底盘。 */
 void AdvanceMotion_Cancel(void)
 {
   AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED);

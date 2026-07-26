@@ -93,7 +93,7 @@ extern "C"
   AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(const WorldGoalPose2D_t *goal, uint8_t acc);
   /** @brief 轮询推进位姿导航控制器。 */
 void AdvanceMotion_Update(void);
-  /** @brief 仅在存在活动目标时取消并平滑停车，避免空闲状态产生多余停止帧。 */
+  /** @brief 仅在存在活动目标时取消、释放控制权并停车。 */
   void AdvanceMotion_CancelIfActive(void);
   /** @brief 取消当前导航目标并停车。 */
   void AdvanceMotion_Cancel(void);
