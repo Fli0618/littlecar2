@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+import sys
+from typing import Any, Literal
 
 import numpy as np
 
@@ -14,13 +15,66 @@ _COLOR_MODEL_PATH = _PROJECT_ROOT / "assets" / "models" / "6color-circle-v3.pt"
 _CIRCLE_MODEL_PATH = _PROJECT_ROOT / "assets" / "models" / "circle-with-number-v3.pt"
 _CONFIDENCE_THRESHOLD = 0.5
 _IOU_THRESHOLD = 0.45
+_IMAGE_SIZE = 640
+ModelBackend = Literal["pt", "engine"]
+
+_MODEL_PATHS: dict[str, dict[str, Path]] = {
+    "pt": {
+        "color": _COLOR_MODEL_PATH,
+        "circle": _CIRCLE_MODEL_PATH,
+    },
+    "engine": {
+        "color": _COLOR_MODEL_PATH.with_suffix(".engine"),
+        "circle": _CIRCLE_MODEL_PATH.with_suffix(".engine"),
+    },
+}
+_MODEL_BACKEND: ModelBackend = "pt"
+
+
+def configure_model_backend(backend: ModelBackend) -> None:
+    """选择 YOLO 后端，并清空旧后端的模型缓存。"""
+    if backend not in ("pt", "engine"):
+        raise ValueError(f"unsupported model backend: {backend!r}; expected 'pt' or 'engine'")
+    if backend == "engine":
+        missing = [path for path in _MODEL_PATHS[backend].values() if not path.is_file()]
+        if missing:
+            formatted = ", ".join(str(path) for path in missing)
+            raise FileNotFoundError(f"TensorRT engine files are missing: {formatted}; run export_models.py on Jetson")
+
+    global _MODEL_BACKEND
+    _MODEL_BACKEND = backend
+    _get_model.cache_clear()
+
+
+def get_model_backend() -> ModelBackend:
+    """返回当前 YOLO 后端。"""
+    return _MODEL_BACKEND
+
+
+def _model_path(model_kind: str) -> Path:
+    return _MODEL_PATHS[_MODEL_BACKEND][model_kind]
 
 
 def _create_yolo_model(model_path: Path) -> Any:
     """构造一个 YOLO 模型，供缓存加载函数调用。"""
+    if model_path.suffix == ".engine":
+        # JetPack installs the TensorRT Python binding for system Python,
+        # while this project normally runs from a Conda environment.
+        system_dist_packages = Path(
+            f"/usr/lib/python{sys.version_info.major}.{sys.version_info.minor}/dist-packages"
+        )
+        if system_dist_packages.is_dir() and str(system_dist_packages) not in sys.path:
+            sys.path.append(str(system_dist_packages))
     from ultralytics import YOLO
 
-    return YOLO(str(model_path))
+    try:
+        return YOLO(str(model_path))
+    except Exception as exc:
+        if model_path.suffix == ".engine":
+            raise RuntimeError(
+                f"failed to load TensorRT engine {model_path}; check JetPack, TensorRT and engine compatibility"
+            ) from exc
+        raise
 
 
 @lru_cache(maxsize=2)
@@ -55,8 +109,19 @@ def _to_numpy(value: Any) -> np.ndarray:
 def _detect(frame_bgr: np.ndarray, model_path: Path) -> dict[str, list[dict[str, Any]]]:
     _validate_frame(frame_bgr)
     model = _get_model(model_path)
+    # Jetson Orin uses unified memory. FP16 substantially reduces the CUDA
+    # workspace required by the attention layers while keeping CPU inference
+    # in the default FP32 path.
+    try:
+        import torch
+
+        use_half = bool(torch.cuda.is_available())
+    except Exception:
+        use_half = False
     result = model.predict(
         source=frame_bgr,
+        imgsz=_IMAGE_SIZE,
+        half=use_half,
         conf=_CONFIDENCE_THRESHOLD,
         iou=_IOU_THRESHOLD,
         verbose=False,
@@ -81,12 +146,12 @@ def _detect(frame_bgr: np.ndarray, model_path: Path) -> dict[str, list[dict[str,
 
 def detect_color(frame_bgr: np.ndarray) -> dict[str, list[dict[str, Any]]]:
     """识别彩色物料和 EmptySlot，返回类型、中心点及置信度。"""
-    return _detect(frame_bgr, _COLOR_MODEL_PATH)
+    return _detect(frame_bgr, _model_path("color"))
 
 
 def detect_circle(frame_bgr: np.ndarray) -> dict[str, list[dict[str, Any]]]:
     """识别带数字的同心圆，返回类型、中心点及置信度。"""
-    return _detect(frame_bgr, _CIRCLE_MODEL_PATH)
+    return _detect(frame_bgr, _model_path("circle"))
 
 
 def load_yolo_model(model_path: str | Path) -> Any:

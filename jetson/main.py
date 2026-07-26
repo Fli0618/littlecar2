@@ -2,15 +2,9 @@
 
 from __future__ import annotations
 
-import sys
 import time
-from pathlib import Path
 
 import cv2
-
-ROOT = Path(__file__).resolve().parent
-if str(ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(ROOT / "src"))
 
 from protocol.commands import (
     ACK_BAD_CMD,
@@ -38,14 +32,16 @@ from vision import (
     advance_detect_color,
     advance_detect_disk_center,
     advance_detect_qr,
+    configure_model_backend,
     reset_advance_tracking,
     reset_qr_tracking,
 )
 
 SERIAL_PORT = "/dev/ttyTHS1"
 SERIAL_BAUDRATE = 115200
-CAMERA_QR_ID = 0
-CAMERA_VISION_ID = 1
+CAMERA_QR_DEVICE = "/dev/video0"
+CAMERA_VISION_DEVICE = "/dev/video1"
+MODEL_BACKEND = "pt"  # "pt" or "engine"
 DEFAULT_PERIOD_MS = 40
 MAX_TARGETS = 8
 IDLE_SLEEP_SECONDS = 0.001
@@ -170,15 +166,16 @@ def run_detection(port: object, cameras: dict[str, object], state: dict[str, obj
 def main() -> None:
     import serial
 
+    configure_model_backend(MODEL_BACKEND)
     state = make_service_state()
     port = serial.Serial(SERIAL_PORT, SERIAL_BAUDRATE, timeout=0, write_timeout=0)
-    qr_camera = cv2.VideoCapture(CAMERA_QR_ID)
-    vision_camera = cv2.VideoCapture(CAMERA_VISION_ID)
+    qr_camera = cv2.VideoCapture(CAMERA_QR_DEVICE, cv2.CAP_V4L2)
+    vision_camera = cv2.VideoCapture(CAMERA_VISION_DEVICE, cv2.CAP_V4L2)
     if not qr_camera.isOpened() or not vision_camera.isOpened():
         qr_camera.release()
         vision_camera.release()
         port.close()
-        raise RuntimeError(f"cannot open cameras qr={CAMERA_QR_ID}, vision={CAMERA_VISION_ID}")
+        raise RuntimeError(f"cannot open cameras qr={CAMERA_QR_DEVICE}, vision={CAMERA_VISION_DEVICE}")
     cameras = {"qr": qr_camera, "vision": vision_camera}
     try:
         while True:

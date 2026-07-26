@@ -1,11 +1,7 @@
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+import pytest
 
 import vision.advance_yolo as advance_yolo
 import vision.qr as qr
@@ -91,3 +87,44 @@ def test_advance_qr_changes_code_and_reset_clears_latch():
     with patch.object(qr, "detect_qr", return_value=first):
         results = [qr.advance_detect_qr(frame) for _ in range(3)]
     assert results[-1]["status"] == "FIRST_DETECTED"
+
+
+def test_model_backend_rejects_unknown_values():
+    yolo.configure_model_backend("pt")
+    with pytest.raises(ValueError):
+        yolo.configure_model_backend("onnx")
+
+
+def test_engine_backend_requires_both_engine_files(tmp_path, monkeypatch):
+    engine_paths = {
+        "color": tmp_path / "color.engine",
+        "circle": tmp_path / "circle.engine",
+    }
+    monkeypatch.setitem(yolo._MODEL_PATHS, "engine", engine_paths)
+    yolo.configure_model_backend("pt")
+    with pytest.raises(FileNotFoundError):
+        yolo.configure_model_backend("engine")
+
+    engine_paths["color"].touch()
+    engine_paths["circle"].touch()
+    yolo.configure_model_backend("engine")
+    assert yolo.get_model_backend() == "engine"
+    yolo.configure_model_backend("pt")
+
+
+def test_switching_backend_clears_model_cache(tmp_path, monkeypatch):
+    pt_path = tmp_path / "model.pt"
+    engine_path = tmp_path / "model.engine"
+    pt_path.touch()
+    engine_path.touch()
+    paths = {"color": pt_path, "circle": pt_path}
+    monkeypatch.setitem(yolo._MODEL_PATHS, "pt", paths)
+    monkeypatch.setitem(yolo._MODEL_PATHS, "engine", {"color": engine_path, "circle": engine_path})
+    fake_model = object()
+    with patch.object(yolo, "_create_yolo_model", return_value=fake_model):
+        yolo.configure_model_backend("pt")
+        yolo._get_model(pt_path)
+        assert yolo._get_model.cache_info().currsize == 1
+        yolo.configure_model_backend("engine")
+        assert yolo._get_model.cache_info().currsize == 0
+    yolo.configure_model_backend("pt")
