@@ -8,7 +8,7 @@ from .advance_yolo import (
     reset_advance_tracking,
 )
 from .materials import advance_detect_disk_center, detect_disk_center
-from .qr import detect_qr
+from .qr import QR_CONFIRM_COUNT, QR_MISSING_THRESHOLD, QR_WINDOW_SIZE, advance_detect_qr, detect_qr, reset_qr_tracking
 from .yolo import detect_circle, detect_color
 
 __all__ = [
@@ -22,4 +22,9 @@ __all__ = [
     "CAMERA_INDEX_COLOR_CIRCLE",
     "CAMERA_INDEX_QR",
     "detect_qr",
+    "advance_detect_qr",
+    "reset_qr_tracking",
+    "QR_WINDOW_SIZE",
+    "QR_CONFIRM_COUNT",
+    "QR_MISSING_THRESHOLD",
 ]

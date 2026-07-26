@@ -1,4 +1,4 @@
-"""STM32 驱动的单线程持续视觉服务。"""
+"""STM32 驱动的单线程常驻视觉服务。"""
 
 from __future__ import annotations
 
@@ -13,23 +13,46 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from protocol.commands import (
-    ACK_BAD_CMD, ACK_BAD_LENGTH, ACK_BAD_PERIOD, ACK_OK,
-    CMD_ACK, CMD_CIRCLE_RESULT, CMD_COLOR_RESULT, CMD_DISK_CENTER_RESULT,
-    CMD_START_CIRCLE, CMD_START_COLOR, CMD_START_DISK_CENTER, CMD_STOP,
-    DISK_CENTER_NO_TARGET, DISK_CENTER_OK, START_COMMANDS,
+    ACK_BAD_CMD,
+    ACK_BAD_LENGTH,
+    ACK_BAD_PERIOD,
+    ACK_OK,
+    CMD_ACK,
+    CMD_CIRCLE_RESULT,
+    CMD_COLOR_RESULT,
+    CMD_DISK_CENTER_RESULT,
+    CMD_QR_RESULT,
+    CMD_START_CIRCLE,
+    CMD_START_COLOR,
+    CMD_START_DISK_CENTER,
+    CMD_START_QR,
+    CMD_STOP,
+    DISK_CENTER_NO_TARGET,
+    DISK_CENTER_OK,
+    START_COMMANDS,
+    TASK_CODE_LENGTH,
 )
 from protocol.frame import pack_frame, parse_frames
-from vision import advance_detect_circle, advance_detect_color, advance_detect_disk_center, reset_advance_tracking
+from vision import (
+    advance_detect_circle,
+    advance_detect_color,
+    advance_detect_disk_center,
+    advance_detect_qr,
+    reset_advance_tracking,
+    reset_qr_tracking,
+)
 
 SERIAL_PORT = "/dev/ttyTHS1"
 SERIAL_BAUDRATE = 115200
-CAMERA_ID = 1
+CAMERA_QR_ID = 0
+CAMERA_VISION_ID = 1
 DEFAULT_PERIOD_MS = 40
 MAX_TARGETS = 8
+IDLE_SLEEP_SECONDS = 0.001
 
 
 def make_service_state() -> dict[str, object]:
-    return {"mode": 0, "session": 0, "period_ms": DEFAULT_PERIOD_MS, "last_send": 0.0, "rx": bytearray()}
+    return {"mode": 0, "session": 0, "period_ms": DEFAULT_PERIOD_MS, "last_run": float("-inf"), "rx": bytearray()}
 
 
 def _write_ack(port: object, session: int, command: int, status: int) -> None:
@@ -46,14 +69,17 @@ def handle_command(port: object, state: dict[str, object], command: int, session
             _write_ack(port, session, command, ACK_BAD_PERIOD)
             return
         reset_advance_tracking()
-        state.update(mode=command, session=session, period_ms=period_ms, last_send=0.0)
+        if command == CMD_START_QR:
+            reset_qr_tracking()
+        state.update(mode=command, session=session, period_ms=period_ms, last_run=float("-inf"))
         _write_ack(port, session, command, ACK_OK)
     elif command == CMD_STOP:
         if payload:
             _write_ack(port, session, command, ACK_BAD_LENGTH)
             return
         reset_advance_tracking()
-        state.update(mode=0, session=session, last_send=0.0)
+        reset_qr_tracking()
+        state.update(mode=0, session=session, last_run=float("-inf"))
         _write_ack(port, session, command, ACK_OK)
     else:
         _write_ack(port, session, command, ACK_BAD_CMD)
@@ -90,28 +116,55 @@ def _disk_payload(result: dict[str, object]) -> bytes:
     return bytes((status,)) + int(x).to_bytes(2, "little", signed=True) + int(y).to_bytes(2, "little", signed=True) + bytes((support_count & 0xFF, measured_count & 0xFF))
 
 
-def run_detection(port: object, camera: object, state: dict[str, object], now: float) -> None:
+def _qr_payload(code: object) -> bytes | None:
+    if not isinstance(code, str):
+        return None
+    try:
+        payload = code.encode("ascii")
+    except UnicodeEncodeError:
+        return None
+    return payload if len(payload) == TASK_CODE_LENGTH else None
+
+
+def run_detection(port: object, cameras: dict[str, object], state: dict[str, object], now: float) -> None:
     mode = int(state["mode"])
-    if not mode:
+    if not mode or now - float(state["last_run"]) < int(state["period_ms"]) / 1000.0:
         return
-    ok, frame = camera.read()
+    state["last_run"] = now
+    camera = cameras["qr" if mode == CMD_START_QR else "vision"]
+    try:
+        ok, frame = camera.read()
+    except Exception:
+        return
     if not ok:
         return
+
     session = int(state["session"])
-    if mode == CMD_START_COLOR:
+    if mode == CMD_START_QR:
+        try:
+            result = advance_detect_qr(frame)
+        except Exception:
+            return
+        response = CMD_QR_RESULT
+    elif mode == CMD_START_COLOR:
         result, response = advance_detect_color(frame), CMD_COLOR_RESULT
     elif mode == CMD_START_CIRCLE:
         result, response = advance_detect_circle(frame), CMD_CIRCLE_RESULT
     else:
         result, response = advance_detect_disk_center(frame), CMD_DISK_CENTER_RESULT
+
     poll_commands(port, state)
     if int(state["mode"]) != mode or int(state["session"]) != session:
         return
-    if now - float(state["last_send"]) < int(state["period_ms"]) / 1000.0:
-        return
-    payload = _disk_payload(result) if response == CMD_DISK_CENTER_RESULT else _target_payload(result)
+    if response == CMD_QR_RESULT:
+        payload = _qr_payload(result.get("code"))
+        if payload is None:
+            return
+    elif response == CMD_DISK_CENTER_RESULT:
+        payload = _disk_payload(result)
+    else:
+        payload = _target_payload(result)
     port.write(pack_frame(response, session, payload))
-    state["last_send"] = now
 
 
 def main() -> None:
@@ -119,17 +172,24 @@ def main() -> None:
 
     state = make_service_state()
     port = serial.Serial(SERIAL_PORT, SERIAL_BAUDRATE, timeout=0, write_timeout=0)
-    camera = cv2.VideoCapture(CAMERA_ID)
-    if not camera.isOpened():
+    qr_camera = cv2.VideoCapture(CAMERA_QR_ID)
+    vision_camera = cv2.VideoCapture(CAMERA_VISION_ID)
+    if not qr_camera.isOpened() or not vision_camera.isOpened():
+        qr_camera.release()
+        vision_camera.release()
         port.close()
-        raise RuntimeError(f"cannot open camera {CAMERA_ID}")
+        raise RuntimeError(f"cannot open cameras qr={CAMERA_QR_ID}, vision={CAMERA_VISION_ID}")
+    cameras = {"qr": qr_camera, "vision": vision_camera}
     try:
         while True:
             poll_commands(port, state)
-            run_detection(port, camera, state, time.monotonic())
+            run_detection(port, cameras, state, time.monotonic())
+            time.sleep(IDLE_SLEEP_SECONDS)
     finally:
         reset_advance_tracking()
-        camera.release()
+        reset_qr_tracking()
+        qr_camera.release()
+        vision_camera.release()
         port.close()
 
 
