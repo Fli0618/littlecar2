@@ -13,11 +13,25 @@ CAMERA_VISION_DEVICE = "/dev/video1"
 
 可先运行 `scripts/jetson上测试/找摄像头.ipynb`，根据 `device_index` 和预览图确认编号与实际摄像头位置，再填写这两个常量。
 
+主服务还可以通过 `MODEL_BACKEND` 选择 YOLO 推理后端：
+
+```python
+MODEL_BACKEND = "pt"       # 使用 .pt
+MODEL_BACKEND = "engine"   # 使用 TensorRT .engine
+```
+
+TensorRT engine 需要在当前 Jetson 上先生成：
+
+```bash
+PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python scripts/tensorrt推理测试/export_models.py
+PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python scripts/tensorrt推理测试/jetson_test_vision.py
+```
+
 Jetson 上可使用以下无图形界面测试脚本。脚本顶部的 `CAMERA_DEVICE` 可以分别修改为目标设备路径，按 `Ctrl+C` 退出：
 
 ```bash
-/home/jetson/miniconda3/envs/yolo_env/bin/python scripts/jetson上测试/jetson_test_qr.py
-/home/jetson/miniconda3/envs/yolo_env/bin/python scripts/jetson上测试/jetson_test_vision.py
+PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python scripts/jetson上测试/jetson_test_qr.py
+PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python scripts/jetson上测试/jetson_test_vision.py
 ```
 
 二维码脚本逐帧打印原始二维码内容、确认后的任务码和状态；视觉脚本在同一帧上依次运行圆形检测和颜色物料检测，并打印两组结果。
@@ -25,9 +39,9 @@ Jetson 上可使用以下无图形界面测试脚本。脚本顶部的 `CAMERA_D
 ```bash
 cd /home/jetson/Project/new_littlecar2/littlecar2/jetson
 
-/home/jetson/miniconda3/envs/yolo_env/bin/python -m pip install -e .
-/home/jetson/miniconda3/envs/yolo_env/bin/python -m pytest tests -q
-/home/jetson/miniconda3/envs/yolo_env/bin/python main.py
+PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python -m pip install -e .
+PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python -m pytest tests -q
+PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python main.py
 ```
 
 安装后，视觉代码以顶层包 `vision` 导入，协议代码以顶层包 `protocol` 导入。

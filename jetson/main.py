@@ -32,6 +32,7 @@ from vision import (
     advance_detect_color,
     advance_detect_disk_center,
     advance_detect_qr,
+    configure_model_backend,
     reset_advance_tracking,
     reset_qr_tracking,
 )
@@ -40,6 +41,7 @@ SERIAL_PORT = "/dev/ttyTHS1"
 SERIAL_BAUDRATE = 115200
 CAMERA_QR_DEVICE = "/dev/video0"
 CAMERA_VISION_DEVICE = "/dev/video1"
+MODEL_BACKEND = "pt"  # "pt" or "engine"
 DEFAULT_PERIOD_MS = 40
 MAX_TARGETS = 8
 IDLE_SLEEP_SECONDS = 0.001
@@ -164,6 +166,7 @@ def run_detection(port: object, cameras: dict[str, object], state: dict[str, obj
 def main() -> None:
     import serial
 
+    configure_model_backend(MODEL_BACKEND)
     state = make_service_state()
     port = serial.Serial(SERIAL_PORT, SERIAL_BAUDRATE, timeout=0, write_timeout=0)
     qr_camera = cv2.VideoCapture(CAMERA_QR_DEVICE, cv2.CAP_V4L2)
