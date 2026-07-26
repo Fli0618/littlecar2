@@ -189,10 +189,6 @@ void BusServo_OnUartError(void)
   (void)BusServo_StartReceive();
 }
 
-void BusServo_Poll(void)
-{
-}
-
 BusServo_Status_t BusServo_SetPosition(uint8_t id, int32_t position)
 {
   return BusServo_SetPositionEx(id, drive_bus_servo_DEFAULT_ACCELERATION, position, drive_bus_servo_DEFAULT_SPEED);

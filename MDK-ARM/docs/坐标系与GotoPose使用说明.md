@@ -197,12 +197,11 @@ wz = 车体逆时针角速度，deg/s
 
 ```c
 AdvanceMotion_GotoPoseEx(&goal, acc);
-AdvanceMotion_Poll();
 AdvanceMotion_GetStatus(&status);
 AdvanceMotion_Cancel();
 ```
 
-`main.c` 通过 TIM6 周期调用 `AdvanceMotion_Poll()`。控制状态机由 STM32 本地业务逻辑触发；取消操作会先撤销活动目标，阻止下一控制周期重新下发速度。
+`main.c`通过 TIM6 每 20 ms 调用 `AdvanceMotion_Update()`，业务层不得主动调用。Blocking 版本在启动目标后只通过 `__WFI()`等待终态；取消操作会释放 `WORLD`控制权并停车。
 
 ## 8. GotoPose 目标结构
 

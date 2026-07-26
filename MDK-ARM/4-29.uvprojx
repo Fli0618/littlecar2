@@ -411,6 +411,11 @@
               <FilePath>../Core/Src/advance_chassis.c</FilePath>
             </File>
             <File>
+              <FileName>advance_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/advance_control.c</FilePath>
+            </File>
+            <File>
               <FileName>advance_world.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/advance_world.c</FilePath>

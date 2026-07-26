@@ -1,8 +1,8 @@
 #include "advance_motion.h"
 
 #include "advance_chassis.h"
+#include "advance_control.h"
 #include "advance_world.h"
-#include "drive_emm.h"
 #include "main.h"
 #include <math.h>
 
@@ -28,8 +28,9 @@ typedef struct
   uint8_t acc;
 } AdvanceMotion_Control_t;
 
-static AdvanceMotion_RuntimeStatus_t g_motion = {0};
+static AdvanceMotion_RuntimeStatus_t g_motion = {ADVANCE_MOTION_STATE_IDLE};
 static AdvanceMotion_Control_t g_motion_control = {0};
+static volatile AdvanceMotion_RunState_t g_motion_state = ADVANCE_MOTION_STATE_IDLE;
 
 /* 返回浮点数的绝对值。 */
 static float AdvanceMotion_AbsFloat(float value)
@@ -264,17 +265,14 @@ static AdvanceMotion_Status_t AdvanceMotion_GetFreshPose(WorldPose2D_t *pose)
   return ADVANCE_MOTION_STATUS_OK;
 }
 
-static void AdvanceMotion_SetTerminalState(AdvanceMotion_RunState_t state, uint8_t stop_acc)
+static void AdvanceMotion_SetTerminalState(AdvanceMotion_RunState_t state)
 {
-  g_motion.state = state;
   g_motion.updated_tick = HAL_GetTick();
-  if ((state != ADVANCE_MOTION_STATE_ARRIVED) || (g_motion_control.arrival_stop_sent == 0U))
-  {
-    Chassis_SmoothStop(stop_acc);
-  }
   g_motion_control.arrive_hold_start_tick = 0U;
   g_motion_control.arrival_stop_sent = 0U;
   AdvanceMotion_ResetPidAndProgress();
+  AdvanceControl_SetMode(ADVANCE_CONTROL_NONE);
+  g_motion_state = state;
 }
 
 static AdvanceMotion_Status_t AdvanceMotion_ApplyWorldVelocityEx(float vx_world_mm_s, float vy_world_mm_s, float wz_ccw_deg_s, uint8_t acc, const WorldPose2D_t *pose)
@@ -322,17 +320,17 @@ static AdvanceMotion_Status_t AdvanceMotion_ApplyWorldVelocityEx(float vx_world_
 /* 初始化世界坐标运动控制器。 */
 void AdvanceMotion_Init(void)
 {
-  g_motion = (AdvanceMotion_RuntimeStatus_t){0};
+  g_motion = (AdvanceMotion_RuntimeStatus_t){ADVANCE_MOTION_STATE_IDLE};
   g_motion_control = (AdvanceMotion_Control_t){0};
-  g_motion.state = ADVANCE_MOTION_STATE_IDLE;
+  g_motion_state = ADVANCE_MOTION_STATE_IDLE;
 }
 
 /* 设置世界坐标系速度，并取消正在执行的到点任务。 */
 AdvanceMotion_Status_t AdvanceMotion_SetWorldVelocityEx(float vx_world_mm_s, float vy_world_mm_s, float wz_ccw_deg_s, uint8_t acc)
 {
-  if (g_motion.state == ADVANCE_MOTION_STATE_RUNNING)
+  if (g_motion_state == ADVANCE_MOTION_STATE_RUNNING)
   {
-    g_motion.state = ADVANCE_MOTION_STATE_CANCELED;
+    g_motion_state = ADVANCE_MOTION_STATE_CANCELED;
     g_motion.updated_tick = HAL_GetTick();
     g_motion_control.arrive_hold_start_tick = 0U;
     g_motion_control.arrival_stop_sent = 0U;
@@ -349,6 +347,11 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
   AdvanceMotion_Status_t pose_status;
 
   if (AdvanceMotion_IsGoalValid(goal) == 0U)
+  {
+    return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+  }
+  if ((AdvanceControl_GetMode() != ADVANCE_CONTROL_NONE) &&
+      (AdvanceControl_GetMode() != ADVANCE_CONTROL_WORLD))
   {
     return ADVANCE_MOTION_STATUS_INVALID_PARAM;
   }
@@ -371,15 +374,15 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
   g_motion.position_error_mm = 0.0f;
   g_motion.yaw_error_deg = 0.0f;
   g_motion_control.acc = acc;
-  g_motion.state = ADVANCE_MOTION_STATE_RUNNING;
+  AdvanceControl_SetMode(ADVANCE_CONTROL_WORLD);
   AdvanceMotion_SavePidPose(&g_motion.pose, g_motion.started_tick);
+  g_motion_state = ADVANCE_MOTION_STATE_RUNNING;
   return ADVANCE_MOTION_STATUS_OK;
 }
 
-/* 阻塞复用既有轮询控制器，避免维护第二套 PID 逻辑。 */
+/* 启动目标后仅等待 TIM6 将运动状态推进到终态。 */
 AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(const WorldGoalPose2D_t *goal, uint8_t acc)
 {
-  uint32_t last_control_tick;
   AdvanceMotion_Status_t status;
 
   status = AdvanceMotion_GotoPoseEx(goal, acc);
@@ -388,26 +391,16 @@ AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(const WorldGoalPose2D_t 
     return ADVANCE_MOTION_STATE_CANCELED;
   }
 
-  last_control_tick = HAL_GetTick();
-  while (g_motion.state == ADVANCE_MOTION_STATE_RUNNING)
+  while (g_motion_state == ADVANCE_MOTION_STATE_RUNNING)
   {
-    uint32_t now_tick = HAL_GetTick();
-
-    drive_emm_Poll();
-    if ((now_tick - last_control_tick) >= ADVANCE_MOTION_CONTROL_PERIOD_MS)
-    {
-      last_control_tick = now_tick;
-      AdvanceMotion_Poll();
-    }
-
     __WFI();
   }
 
-  return g_motion.state;
+  return g_motion_state;
 }
 
 /* 周期性读取世界位姿，计算误差并驱动到点控制状态机。 */
-void AdvanceMotion_Poll(void)
+void AdvanceMotion_Update(void)
 {
   uint32_t now_tick = HAL_GetTick();
   AdvanceMotion_Status_t pose_status;
@@ -424,7 +417,7 @@ void AdvanceMotion_Poll(void)
   uint8_t linear_saturated;
   uint8_t yaw_saturated = 0U;
 
-  if (g_motion.state != ADVANCE_MOTION_STATE_RUNNING)
+  if (g_motion_state != ADVANCE_MOTION_STATE_RUNNING)
   {
     return;
   }
@@ -432,19 +425,19 @@ void AdvanceMotion_Poll(void)
   if ((g_motion.goal.timeout_ms > 0U) &&
       ((now_tick - g_motion.started_tick) >= g_motion.goal.timeout_ms))
   {
-    AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_TIMEOUT, g_motion_control.acc);
+    AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_TIMEOUT);
     return;
   }
 
   pose_status = AdvanceMotion_GetFreshPose(&g_motion.pose);
   if (pose_status == ADVANCE_MOTION_STATUS_NO_ORIGIN)
   {
-    AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_ORIGIN, g_motion_control.acc);
+    AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_ORIGIN);
     return;
   }
   if (pose_status != ADVANCE_MOTION_STATUS_OK)
   {
-    AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_POSE, g_motion_control.acc);
+    AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_POSE);
     return;
   }
 
@@ -456,7 +449,7 @@ void AdvanceMotion_Poll(void)
   if ((yaw_required != 0U) &&
       ((now_tick - g_motion.pose.yaw_updated_tick) > ADVANCE_MOTION_YAW_TIMEOUT_MS))
   {
-    AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_POSE, g_motion_control.acc);
+    AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_POSE);
     return;
   }
   g_motion.yaw_error_deg = yaw_required ? AdvanceWorld_WrapAngleDeg(g_motion.goal.yaw_deg - g_motion.pose.yaw_deg) : 0.0f;
@@ -477,7 +470,7 @@ void AdvanceMotion_Poll(void)
     }
     if ((now_tick - g_motion_control.arrive_hold_start_tick) >= ADVANCE_MOTION_ARRIVE_HOLD_MS)
     {
-      AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_ARRIVED, g_motion_control.acc);
+      AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_ARRIVED);
     }
     return;
   }
@@ -524,7 +517,7 @@ void AdvanceMotion_Poll(void)
                              (vy_world_mm_s * vy_world_mm_s));
   if (AdvanceMotion_HasNoProgress(now_tick, command_magnitude) != 0U)
   {
-    AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED, g_motion_control.acc);
+    AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED);
     return;
   }
 
@@ -532,42 +525,38 @@ void AdvanceMotion_Poll(void)
   g_motion.updated_tick = now_tick;
 }
 
-/* 取消当前运动任务并平滑停止底盘。 */
+/* 取消当前运动任务、释放控制权并停止底盘。 */
 void AdvanceMotion_Cancel(void)
 {
-  AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED, CHASSIS_DEFAULT_ACC);
+  AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED);
 }
 
 /* 仅在存在运行中任务时取消运动。 */
 void AdvanceMotion_CancelIfActive(void)
 {
-  if (g_motion.state == ADVANCE_MOTION_STATE_RUNNING)
+  if (g_motion_state == ADVANCE_MOTION_STATE_RUNNING)
   {
     AdvanceMotion_Cancel();
-  }
-}
-
-/* 取消当前任务但不向底盘发送停止命令。 */
-void AdvanceMotion_CancelWithoutStop(void)
-{
-  if (g_motion.state == ADVANCE_MOTION_STATE_RUNNING)
-  {
-    g_motion.state = ADVANCE_MOTION_STATE_CANCELED;
-    g_motion.updated_tick = HAL_GetTick();
-    g_motion_control.arrive_hold_start_tick = 0U;
-    g_motion_control.arrival_stop_sent = 0U;
-    AdvanceMotion_ResetPidAndProgress();
   }
 }
 
 /* 读取当前运动状态、目标位姿和误差。 */
 AdvanceMotion_Status_t AdvanceMotion_GetStatus(AdvanceMotion_RuntimeStatus_t *status)
 {
+  uint32_t primask;
+
   if (status == 0)
   {
     return ADVANCE_MOTION_STATUS_INVALID_PARAM;
   }
 
+  primask = __get_PRIMASK();
+  __disable_irq();
   *status = g_motion;
+  status->state = g_motion_state;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
   return ADVANCE_MOTION_STATUS_OK;
 }

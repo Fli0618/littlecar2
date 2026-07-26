@@ -81,7 +81,6 @@ extern "C"
    * @note   当前首版为纯发送设备层，该接口保留为空实现，方便后续扩展回读协议。
    * @retval None
    */
-  void BusServo_Poll(void);
 
   /**
    * @brief  使用默认加速度和速度发送位置控制命令。
