@@ -28,6 +28,7 @@
 #include "drive_emm.h"
 #include "advance_chassis.h"
 #include "advance_control.h"
+#include "advance_visual.h"
 #include "advance_motion.h"
 #include "advance_world.h"
 #include "advance_arm.h"
@@ -164,7 +165,7 @@ static void App_TimerUpdate(void)
         break;
 
       case ADVANCE_CONTROL_VISUAL:
-        /* 视觉定位控制将在对应模块实现后接入。 */
+        AdvanceVisual_Update();
         break;
 
       default:
@@ -263,6 +264,7 @@ int main(void)
   CarPose_Init();
   AdvanceWorld_Init();
   AdvanceControl_Init();
+  AdvanceVisual_Init();
   AdvanceMotion_Init();
   if (drive_emm_Init() != HAL_OK)
   {

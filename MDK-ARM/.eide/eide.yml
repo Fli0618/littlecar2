@@ -23,6 +23,7 @@ virtualFolder:
                 - path: ../Core/Src/drive_bus_servo.c
                 - path: ../Core/Src/drive_emm.c
                 - path: ../Core/Src/advance_chassis.c
+                - path: ../Core/Src/advance_visual.c
                 - path: ../Core/Src/advance_world.c
                 - path: ../Core/Src/advance_motion.c
                 - path: ../Core/Src/car_pose.c
@@ -36,6 +37,7 @@ virtualFolder:
                 - path: ../Core/Src/stm32f4xx_hal_msp.c
                 - path: ../Core/Inc/advance_arm.h
                 - path: ../Core/Inc/advance_chassis.h
+                - path: ../Core/Inc/advance_visual.h
                 - path: ../Core/Inc/advance_motion.h
                 - path: ../Core/Inc/advance_test.h
                 - path: ../Core/Inc/advance_world.h
