@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 import cv2
+import numpy as np
 
 from protocol.commands import (
     ACK_BAD_CMD,
@@ -33,6 +34,8 @@ from vision import (
     advance_detect_disk_center,
     advance_detect_qr,
     configure_model_backend,
+    detect_circle,
+    detect_color,
     reset_advance_tracking,
     reset_qr_tracking,
 )
@@ -45,10 +48,30 @@ MODEL_BACKEND = "pt"  # "pt" or "engine"
 DEFAULT_PERIOD_MS = 40
 MAX_TARGETS = 8
 IDLE_SLEEP_SECONDS = 0.001
+MODEL_WARMUP_FRAME_SIZE = 640
 
 
 def make_service_state() -> dict[str, object]:
     return {"mode": 0, "session": 0, "period_ms": DEFAULT_PERIOD_MS, "last_run": float("-inf"), "rx": bytearray()}
+
+
+def warmup_vision_models() -> None:
+    """启动时加载并预热颜色、数字圆环两个 YOLO 模型。"""
+    frame = np.zeros((MODEL_WARMUP_FRAME_SIZE, MODEL_WARMUP_FRAME_SIZE, 3), dtype=np.uint8)
+
+    started = time.perf_counter()
+    detect_color(frame)
+    color_ms = (time.perf_counter() - started) * 1000.0
+
+    started = time.perf_counter()
+    detect_circle(frame)
+    circle_ms = (time.perf_counter() - started) * 1000.0
+
+    print(
+        f"vision models ready backend={MODEL_BACKEND} "
+        f"color_warmup_ms={color_ms:.1f} circle_warmup_ms={circle_ms:.1f}",
+        flush=True,
+    )
 
 
 def _write_ack(port: object, session: int, command: int, status: int) -> None:
@@ -167,6 +190,7 @@ def main() -> None:
     import serial
 
     configure_model_backend(MODEL_BACKEND)
+    warmup_vision_models()
     state = make_service_state()
     port = serial.Serial(SERIAL_PORT, SERIAL_BAUDRATE, timeout=0, write_timeout=0)
     qr_camera = cv2.VideoCapture(CAMERA_QR_DEVICE, cv2.CAP_V4L2)
