@@ -28,6 +28,7 @@ static volatile uint8_t g_drive_emm_tx_head = 0U;
 static volatile uint8_t g_drive_emm_tx_tail = 0U;
 static volatile uint8_t g_drive_emm_tx_count = 0U;
 static volatile uint8_t g_drive_emm_tx_active = 0U;
+static volatile uint8_t g_drive_emm_tx_abort_pending = 0U;
 static uint32_t g_drive_emm_tx_started_tick = 0U;
 static uint32_t g_drive_emm_tx_error_count = 0U;
 static uint32_t g_drive_emm_last_tx_error_tick = 0U;
@@ -1144,6 +1145,7 @@ HAL_StatusTypeDef drive_emm_Init(void)
   g_drive_emm_tx_tail = 0U;
   g_drive_emm_tx_count = 0U;
   g_drive_emm_tx_active = 0U;
+  g_drive_emm_tx_abort_pending = 0U;
   g_drive_emm_tx_error_count = 0U;
   g_drive_emm_last_tx_error_tick = 0U;
   g_drive_emm_rx_last_pos = 0U;
@@ -1215,7 +1217,9 @@ HAL_StatusTypeDef drive_emm_MonitorMotor(uint8_t id)
 
 void drive_emm_OnTxComplete(UART_HandleTypeDef *huart)
 {
-  if ((huart != drive_emm_UART) || (g_drive_emm_tx_active == 0U))
+  if ((huart != drive_emm_UART) ||
+      (g_drive_emm_tx_active == 0U) ||
+      (g_drive_emm_tx_abort_pending != 0U))
   {
     return;
   }
@@ -1223,6 +1227,24 @@ void drive_emm_OnTxComplete(UART_HandleTypeDef *huart)
   g_drive_emm_tx_tail = (uint8_t)((g_drive_emm_tx_tail + 1U) % DRIVE_EMM_TX_QUEUE_DEPTH);
   --g_drive_emm_tx_count;
   g_drive_emm_tx_active = 0U;
+  (void)DriveEmm_StartQueuedTransmit();
+}
+
+void drive_emm_OnTxAbortComplete(UART_HandleTypeDef *huart)
+{
+  if ((huart != drive_emm_UART) || (g_drive_emm_tx_abort_pending == 0U))
+  {
+    return;
+  }
+
+  if ((g_drive_emm_tx_active != 0U) && (g_drive_emm_tx_count > 0U))
+  {
+    g_drive_emm_tx_tail = (uint8_t)((g_drive_emm_tx_tail + 1U) % DRIVE_EMM_TX_QUEUE_DEPTH);
+    --g_drive_emm_tx_count;
+  }
+  g_drive_emm_tx_active = 0U;
+  g_drive_emm_tx_abort_pending = 0U;
+  DriveEmm_RecordTxError();
   (void)DriveEmm_StartQueuedTransmit();
 }
 
@@ -1277,21 +1299,29 @@ void drive_emm_OnUartError(UART_HandleTypeDef *huart)
   }
 }
 
-void drive_emm_Poll(void)
+void drive_emm_Update(void)
 {
   static const SysParams_t query_types[] = {S_VEL, S_CPOS, S_PERR, S_FLAG};
   uint32_t now_tick = HAL_GetTick();
 
   if ((g_drive_emm_tx_active != 0U) &&
+      (g_drive_emm_tx_abort_pending == 0U) &&
       ((now_tick - g_drive_emm_tx_started_tick) > DRIVE_EMM_TX_TIMEOUT_MS))
   {
-    (void)HAL_UART_AbortTransmit(drive_emm_UART);
-    g_drive_emm_tx_tail = (uint8_t)((g_drive_emm_tx_tail + 1U) % DRIVE_EMM_TX_QUEUE_DEPTH);
-    --g_drive_emm_tx_count;
-    g_drive_emm_tx_active = 0U;
-    DriveEmm_RecordTxError();
+    if (HAL_UART_AbortTransmit_IT(drive_emm_UART) == HAL_OK)
+    {
+      g_drive_emm_tx_abort_pending = 1U;
+    }
+    else
+    {
+      g_drive_emm_tx_started_tick = now_tick;
+      DriveEmm_RecordTxError();
+    }
   }
-  (void)DriveEmm_StartQueuedTransmit();
+  if (g_drive_emm_tx_abort_pending == 0U)
+  {
+    (void)DriveEmm_StartQueuedTransmit();
+  }
 
   if (DRIVE_EMM_FEEDBACK_MONITOR_ENABLE == 0U)
   {

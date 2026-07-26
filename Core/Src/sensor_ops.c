@@ -267,7 +267,7 @@ OPS_Status_t OPS_Init(UART_HandleTypeDef *huart)
   return OPS_STATUS_OK;
 }
 
-void OPS_Poll(void)
+void OPS_Update(void)
 {
   OPS_InvalidateStaleData();
 }

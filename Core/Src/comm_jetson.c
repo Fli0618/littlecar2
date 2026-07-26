@@ -37,6 +37,9 @@ static volatile uint8_t g_ack_new;
 static volatile uint8_t g_ack_command;
 static volatile Detect_Status_t g_ack_status;
 static volatile uint32_t g_last_result_tick;
+static volatile uint8_t g_qr_waiting;
+static volatile Detect_Status_t g_qr_wait_status;
+static uint32_t g_qr_wait_started_tick;
 
 static uint16_t CommJetson_Crc16(const uint8_t *data, uint16_t size)
 {
@@ -316,9 +319,46 @@ void CommJetson_Init(UART_HandleTypeDef *huart)
   g_active = 0U;
   g_mode = 0U;
   g_tx_busy = 0U;
+  g_qr_waiting = 0U;
+  g_qr_wait_status = DETECT_STATUS_OK;
+  g_qr_wait_started_tick = 0U;
   CommJetson_ClearResults();
   CommJetson_ClearAck();
   CommJetson_StartRx();
+}
+
+void CommJetson_Update(void)
+{
+  if (g_qr_waiting == 0U)
+  {
+    return;
+  }
+
+  if (g_qr_new != 0U)
+  {
+    g_qr_wait_status = DETECT_STATUS_OK;
+    g_qr_waiting = 0U;
+    return;
+  }
+
+  if ((g_ack_new != 0U) && (g_ack_command == COMM_JETSON_CMD_QR_START))
+  {
+    Detect_Status_t ack_status = g_ack_status;
+
+    g_ack_new = 0U;
+    if (ack_status != DETECT_STATUS_OK)
+    {
+      g_qr_wait_status = ack_status;
+      g_qr_waiting = 0U;
+      return;
+    }
+  }
+
+  if ((HAL_GetTick() - g_qr_wait_started_tick) >= DETECT_QR_TIMEOUT_MS)
+  {
+    g_qr_wait_status = DETECT_STATUS_TIMEOUT;
+    g_qr_waiting = 0U;
+  }
 }
 
 void CommJetson_OnUartRxEvent(UART_HandleTypeDef *huart, uint16_t size)
@@ -435,7 +475,6 @@ uint8_t detect_get_qr(char code[DETECT_QR_CODE_LENGTH + 1U])
 
 Detect_Status_t detect_qr_read_blocking(char code[DETECT_QR_CODE_LENGTH + 1U])
 {
-  uint32_t started_tick;
   Detect_Status_t status;
 
   if (code == NULL)
@@ -451,30 +490,25 @@ Detect_Status_t detect_qr_read_blocking(char code[DETECT_QR_CODE_LENGTH + 1U])
     return status;
   }
 
-  started_tick = HAL_GetTick();
-  while ((HAL_GetTick() - started_tick) < DETECT_QR_TIMEOUT_MS)
+  g_qr_wait_started_tick = HAL_GetTick();
+  g_qr_wait_status = DETECT_STATUS_BUSY;
+  g_qr_waiting = 1U;
+  while (g_qr_waiting != 0U)
   {
-    if (detect_get_qr(code) != 0U)
-    {
-      (void)detect_stop();
-      return DETECT_STATUS_OK;
-    }
-    if ((g_ack_new != 0U) && (g_ack_command == COMM_JETSON_CMD_QR_START))
-    {
-      g_ack_new = 0U;
-      if (g_ack_status != DETECT_STATUS_OK)
-      {
-        code[0] = '\0';
-        (void)detect_stop();
-        return g_ack_status;
-      }
-    }
-    HAL_Delay(1U);
+    __WFI();
   }
 
-  code[0] = '\0';
+  status = g_qr_wait_status;
+  if ((status != DETECT_STATUS_OK) || (detect_get_qr(code) == 0U))
+  {
+    code[0] = '\0';
+    if (status == DETECT_STATUS_OK)
+    {
+      status = DETECT_STATUS_UART_ERROR;
+    }
+  }
   (void)detect_stop();
-  return DETECT_STATUS_TIMEOUT;
+  return status;
 }
 
 uint8_t detect_is_active(void) { return g_active; }

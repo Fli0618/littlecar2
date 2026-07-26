@@ -75,7 +75,7 @@ extern "C"
   AdvanceWorld_Status_t AdvanceWorld_ResetOrigin(void);
   AdvanceWorld_Status_t AdvanceWorld_PoseOffset(float x_mm, float y_mm, float yaw_deg);
   /** @brief 轮询更新世界坐标和传感器状态。 */
-  void AdvanceWorld_Poll(void);
+void AdvanceWorld_Update(void);
   /** @brief 获取当前世界位姿副本。 @param pose 输出位姿结构体。 @return 获取结果状态。 */
   AdvanceWorld_Status_t AdvanceWorld_GetPoseCopy(WorldPose2D_t *pose);
 

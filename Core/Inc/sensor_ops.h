@@ -55,7 +55,7 @@ extern "C"
    * @brief 数据存活轮询 (建议在 main 循环中调用)
    * @details 若超过 500ms 未收到新数据，将自动把 valid 标志位置 0
    */
-  void OPS_Poll(void);
+  void OPS_Update(void);
 
   /**
    * @brief 串口接收中断回调处理 (必须在 HAL_UART_RxCpltCallback 中调用)

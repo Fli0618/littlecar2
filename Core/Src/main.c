@@ -27,6 +27,7 @@
 #include "sensor_wit.h"
 #include "drive_emm.h"
 #include "advance_chassis.h"
+#include "advance_control.h"
 #include "advance_motion.h"
 #include "advance_world.h"
 #include "advance_arm.h"
@@ -46,20 +47,11 @@
 #define DEBUG_UART_ENABLE (1U)
 
 /* TIM6 提供 1 ms 调度节拍，所有业务周期统一在这里配置。 */
-#define APP_SCHEDULER_TICK_MS ((uint32_t)1U)
 #define APP_WORLD_PERIOD_MS ((uint32_t)10U)
-#define APP_MOTION_PERIOD_MS ADVANCE_MOTION_CONTROL_PERIOD_MS
-#define APP_MOTOR_PERIOD_MS ((uint32_t)20U)
 #define APP_ORIGIN_PERIOD_MS ((uint32_t)1000U)
 #define APP_LED_PERIOD_MS ((uint32_t)500U)
-#define APP_VISUAL_RESULT_TIMEOUT_MS ((uint32_t)200U)
 
-/* TIM6 仅置位这些任务，不在中断上下文执行业务逻辑。 */
-#define APP_TASK_WORLD ((uint32_t)0x00000002U)
-#define APP_TASK_MOTION ((uint32_t)0x00000008U)
-#define APP_TASK_MOTOR ((uint32_t)0x00000010U)
-#define APP_TASK_ORIGIN ((uint32_t)0x00000020U)
-#define APP_TASK_LED ((uint32_t)0x00000040U)
+/* TIM6 是全部周期 Update 的唯一执行入口。 */
 
 /* USER CODE END PD */
 
@@ -85,9 +77,6 @@ DMA_HandleTypeDef hdma_usart6_rx;
 DMA_HandleTypeDef hdma_usart6_tx;
 
 /* USER CODE BEGIN PV */
-static volatile uint32_t g_app_pending_tasks = 0U;
-static uint8_t g_visual_stage = 3U;
-static uint32_t g_visual_started_tick = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -124,17 +113,6 @@ static void App_ToggleLed(void)
   HAL_GPIO_TogglePin(GPIOF, GPIO_PIN_9 | GPIO_PIN_10);
 }
 
-static uint32_t App_TakePendingTasks(void)
-{
-  uint32_t pending;
-
-  __disable_irq();
-  pending = g_app_pending_tasks;
-  g_app_pending_tasks = 0U;
-  __enable_irq();
-  return pending;
-}
-
 static void App_TryResetWorldOrigin(void)
 {
   WorldPose2D_t pose = {0};
@@ -146,86 +124,59 @@ static void App_TryResetWorldOrigin(void)
   }
 }
 
-static void App_ProcessVisualDetect(void)
+static void App_RunTask(void)
 {
-  enum
-  {
-    APP_VISUAL_START = 0U,
-    APP_VISUAL_RUNNING,
-    APP_VISUAL_STOP,
-    APP_VISUAL_DONE,
-    APP_VISUAL_ERROR
-  };
-
-  if ((g_visual_stage == APP_VISUAL_DONE) && (detect_is_active() != 0U))
-  {
-    g_visual_stage = APP_VISUAL_START;
-  }
-
-  if (g_visual_stage == APP_VISUAL_START)
-  {
-    /* 视觉任务接管前取消既有到点运动，后续控制律由业务层消费最新视觉结果。 */
-    AdvanceMotion_CancelIfActive();
-    g_visual_started_tick = HAL_GetTick();
-    g_visual_stage = APP_VISUAL_RUNNING;
-  }
-  else if (g_visual_stage == APP_VISUAL_RUNNING)
-  {
-    if (detect_is_active() == 0U)
-    {
-      g_visual_stage = APP_VISUAL_DONE;
-    }
-    else if (((HAL_GetTick() - g_visual_started_tick) >= APP_VISUAL_RESULT_TIMEOUT_MS) &&
-             (detect_is_fresh(APP_VISUAL_RESULT_TIMEOUT_MS) == 0U))
-    {
-      g_visual_stage = APP_VISUAL_STOP;
-    }
-  }
-  else if (g_visual_stage == APP_VISUAL_STOP)
-  {
-    AdvanceMotion_Cancel();
-    if (detect_stop() == DETECT_STATUS_OK)
-    {
-      g_visual_stage = APP_VISUAL_DONE;
-    }
-    else
-    {
-      g_visual_stage = APP_VISUAL_ERROR;
-    }
-  }
+  /* 后续比赛流程在此按顺序调用 Blocking 高级接口。 */
 }
 
-static void App_RunScheduledTasks(uint32_t pending)
+static void App_TimerUpdate(void)
 {
-  if ((pending & APP_TASK_WORLD) != 0U)
+  static uint16_t world_elapsed_ms = 0U;
+  static uint16_t control_elapsed_ms = 0U;
+  static uint16_t origin_elapsed_ms = 0U;
+  static uint16_t led_elapsed_ms = 0U;
+
+  CommJetson_Update();
+
+  if (++world_elapsed_ms >= APP_WORLD_PERIOD_MS)
   {
-    OPS_Poll();
-    WIT_Poll();
-    AdvanceWorld_Poll();
+    world_elapsed_ms = 0U;
+    OPS_Update();
+    WIT_Update();
+    AdvanceWorld_Update();
   }
 
-  if ((pending & APP_TASK_MOTOR) != 0U)
+  if (++control_elapsed_ms >= ADVANCE_MOTION_CONTROL_PERIOD_MS)
   {
-    drive_emm_Poll();
-    BusServo_Poll();
+    control_elapsed_ms = 0U;
+    drive_emm_Update();
+
+    switch (AdvanceControl_GetMode())
+    {
+      case ADVANCE_CONTROL_WORLD:
+        AdvanceMotion_Update();
+        break;
+
+      case ADVANCE_CONTROL_VISUAL:
+        /* 视觉定位控制将在对应模块实现后接入。 */
+        break;
+
+      default:
+        break;
+    }
   }
 
-  if ((pending & APP_TASK_ORIGIN) != 0U)
+  if (++origin_elapsed_ms >= APP_ORIGIN_PERIOD_MS)
   {
+    origin_elapsed_ms = 0U;
     App_TryResetWorldOrigin();
   }
 
-  if ((pending & APP_TASK_MOTION) != 0U)
+  if (++led_elapsed_ms >= APP_LED_PERIOD_MS)
   {
-    AdvanceMotion_Poll();
-  }
-
-  if ((pending & APP_TASK_LED) != 0U)
-  {
+    led_elapsed_ms = 0U;
     App_ToggleLed();
   }
-
-  App_ProcessVisualDetect();
 }
 
 /* USER CODE END 0 */
@@ -305,6 +256,7 @@ int main(void)
   /* 上层模块先绑定传感器数据视图，再初始化自身状态。 */
   CarPose_Init();
   AdvanceWorld_Init();
+  AdvanceControl_Init();
   AdvanceMotion_Init();
   if (drive_emm_Init() != HAL_OK)
   {
@@ -333,7 +285,9 @@ int main(void)
     App_ToggleLed();
     HAL_Delay(100);
   }
-  
+
+  App_RunTask();
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -343,15 +297,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    uint32_t pending = App_TakePendingTasks();
-    if (pending == 0U)
-    {
-      __WFI();
-    }
-    else
-    {
-      App_RunScheduledTasks(pending);
-    }
+    __WFI();
   }
   /* USER CODE END 3 */
 }
@@ -765,6 +711,14 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 
 }
 
+void HAL_UART_AbortTransmitCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART3)
+  {
+    drive_emm_OnTxAbortComplete(huart);
+  }
+}
+
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART3)
@@ -796,41 +750,9 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-  static uint16_t world_tick = 0U;
-  static uint16_t motion_tick = 0U;
-  static uint16_t motor_tick = 0U;
-  static uint16_t origin_tick = 0U;
-  static uint16_t led_tick = 0U;
-
-  if (htim->Instance != TIM6)
+  if (htim->Instance == TIM6)
   {
-    return;
-  }
-
-  if (++world_tick >= (APP_WORLD_PERIOD_MS / APP_SCHEDULER_TICK_MS))
-  {
-    world_tick = 0U;
-    g_app_pending_tasks |= APP_TASK_WORLD;
-  }
-  if (++motion_tick >= (APP_MOTION_PERIOD_MS / APP_SCHEDULER_TICK_MS))
-  {
-    motion_tick = 0U;
-    g_app_pending_tasks |= APP_TASK_MOTION;
-  }
-  if (++motor_tick >= (APP_MOTOR_PERIOD_MS / APP_SCHEDULER_TICK_MS))
-  {
-    motor_tick = 0U;
-    g_app_pending_tasks |= APP_TASK_MOTOR;
-  }
-  if (++origin_tick >= (APP_ORIGIN_PERIOD_MS / APP_SCHEDULER_TICK_MS))
-  {
-    origin_tick = 0U;
-    g_app_pending_tasks |= APP_TASK_ORIGIN;
-  }
-  if (++led_tick >= (APP_LED_PERIOD_MS / APP_SCHEDULER_TICK_MS))
-  {
-    led_tick = 0U;
-    g_app_pending_tasks |= APP_TASK_LED;
+    App_TimerUpdate();
   }
 }
 
