@@ -411,6 +411,21 @@
               <FilePath>../Core/Src/advance_chassis.c</FilePath>
             </File>
             <File>
+              <FileName>advance_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/advance_control.c</FilePath>
+            </File>
+            <File>
+              <FileName>advance_visual.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/advance_visual.c</FilePath>
+            </File>
+            <File>
+              <FileName>advance_visual.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/advance_visual.h</FilePath>
+            </File>
+            <File>
               <FileName>advance_world.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/advance_world.c</FilePath>

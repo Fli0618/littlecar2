@@ -35,7 +35,6 @@ void AdvanceTest_BlockingMain(void)
   drive_emm_Vel_Control(1, ZDT_DIR_CW, 150, 10, false);
   for (poll_count = 0; poll_count < 100; ++poll_count)
   {
-    drive_emm_Poll();
     HAL_Delay(20);
   }
   HAL_Delay(1000);
@@ -45,7 +44,6 @@ void AdvanceTest_BlockingMain(void)
   drive_emm_Vel_Control(1, ZDT_DIR_CCW, 150, 10, false);
   for (poll_count = 0; poll_count < 100; ++poll_count)
   {
-    drive_emm_Poll();
     HAL_Delay(20);
   }
   HAL_Delay(1000);
@@ -60,7 +58,6 @@ void AdvanceTest_BlockingMain(void)
     drive_emm_Pos_Control(1, ZDT_DIR_CW, 150, 10, 3200, false, false);
     for (poll_count = 0; poll_count < 250; ++poll_count)
     {
-      drive_emm_Poll();
       if (drive_emm_IsMotorReached(1, target_pulse, 100, 500) != 0U)
       {
         reached = 1U;
@@ -86,7 +83,6 @@ void AdvanceTest_BlockingMain(void)
     drive_emm_Pos_Control(1, ZDT_DIR_CCW, 150, 10, 3200, false, false);
     for (poll_count = 0; poll_count < 250; ++poll_count)
     {
-      drive_emm_Poll();
       if (drive_emm_IsMotorReached(1, target_pulse, 100, 500) != 0U)
       {
         reached = 1U;
@@ -120,7 +116,6 @@ void AdvanceTest_BlockingMain(void)
   drive_emm_Vel_Control(2, ZDT_DIR_CW, 150, 10, false);
   for (poll_count = 0; poll_count < 100; ++poll_count)
   {
-    drive_emm_Poll();
     HAL_Delay(20);
   }
   drive_emm_Stop_Now(2, false);
@@ -129,7 +124,6 @@ void AdvanceTest_BlockingMain(void)
   drive_emm_Vel_Control(2, ZDT_DIR_CCW, 150, 10, false);
   for (poll_count = 0; poll_count < 100; ++poll_count)
   {
-    drive_emm_Poll();
     HAL_Delay(20);
   }
   drive_emm_Stop_Now(2, false);
@@ -142,7 +136,6 @@ void AdvanceTest_BlockingMain(void)
     drive_emm_Pos_Control(2, ZDT_DIR_CW, 150, 10, 3200, false, false);
     for (poll_count = 0; poll_count < 250; ++poll_count)
     {
-      drive_emm_Poll();
       if (drive_emm_IsMotorReached(2, target_pulse, 100, 500) != 0U)
       {
         reached = 1U;
@@ -166,7 +159,6 @@ void AdvanceTest_BlockingMain(void)
     drive_emm_Pos_Control(2, ZDT_DIR_CCW, 150, 10, 3200, false, false);
     for (poll_count = 0; poll_count < 250; ++poll_count)
     {
-      drive_emm_Poll();
       if (drive_emm_IsMotorReached(2, target_pulse, 100, 500) != 0U)
       {
         reached = 1U;
@@ -199,7 +191,6 @@ void AdvanceTest_BlockingMain(void)
   drive_emm_Vel_Control(3, ZDT_DIR_CW, 150, 10, false);
   for (poll_count = 0; poll_count < 100; ++poll_count)
   {
-    drive_emm_Poll();
     HAL_Delay(20);
   }
   drive_emm_Stop_Now(3, false);
@@ -208,7 +199,6 @@ void AdvanceTest_BlockingMain(void)
   drive_emm_Vel_Control(3, ZDT_DIR_CCW, 150, 10, false);
   for (poll_count = 0; poll_count < 100; ++poll_count)
   {
-    drive_emm_Poll();
     HAL_Delay(20);
   }
   drive_emm_Stop_Now(3, false);
@@ -221,7 +211,6 @@ void AdvanceTest_BlockingMain(void)
     drive_emm_Pos_Control(3, ZDT_DIR_CW, 150, 10, 3200, false, false);
     for (poll_count = 0; poll_count < 250; ++poll_count)
     {
-      drive_emm_Poll();
       if (drive_emm_IsMotorReached(3, target_pulse, 100, 500) != 0U)
       {
         reached = 1U;
@@ -245,7 +234,6 @@ void AdvanceTest_BlockingMain(void)
     drive_emm_Pos_Control(3, ZDT_DIR_CCW, 150, 10, 3200, false, false);
     for (poll_count = 0; poll_count < 250; ++poll_count)
     {
-      drive_emm_Poll();
       if (drive_emm_IsMotorReached(3, target_pulse, 100, 500) != 0U)
       {
         reached = 1U;
@@ -278,7 +266,6 @@ void AdvanceTest_BlockingMain(void)
   drive_emm_Vel_Control(4, ZDT_DIR_CW, 150, 10, false);
   for (poll_count = 0; poll_count < 100; ++poll_count)
   {
-    drive_emm_Poll();
     HAL_Delay(20);
   }
   drive_emm_Stop_Now(4, false);
@@ -287,7 +274,6 @@ void AdvanceTest_BlockingMain(void)
   drive_emm_Vel_Control(4, ZDT_DIR_CCW, 150, 10, false);
   for (poll_count = 0; poll_count < 100; ++poll_count)
   {
-    drive_emm_Poll();
     HAL_Delay(20);
   }
   drive_emm_Stop_Now(4, false);
@@ -300,7 +286,6 @@ void AdvanceTest_BlockingMain(void)
     drive_emm_Pos_Control(4, ZDT_DIR_CW, 150, 10, 3200, false, false);
     for (poll_count = 0; poll_count < 250; ++poll_count)
     {
-      drive_emm_Poll();
       if (drive_emm_IsMotorReached(4, target_pulse, 100, 500) != 0U)
       {
         reached = 1U;
@@ -324,7 +309,6 @@ void AdvanceTest_BlockingMain(void)
     drive_emm_Pos_Control(4, ZDT_DIR_CCW, 150, 10, 3200, false, false);
     for (poll_count = 0; poll_count < 250; ++poll_count)
     {
-      drive_emm_Poll();
       if (drive_emm_IsMotorReached(4, target_pulse, 100, 500) != 0U)
       {
         reached = 1U;

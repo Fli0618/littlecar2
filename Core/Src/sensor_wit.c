@@ -239,7 +239,7 @@ WIT_Status_t WIT_Init(void)
   return WIT_STATUS_OK;
 }
 
-void WIT_Poll(void)
+void WIT_Update(void)
 {
   uint32_t now_tick = HAL_GetTick();
 

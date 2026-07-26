@@ -51,6 +51,10 @@ virtualFolder:
                 - path: ../Core/Src/system_stm32f4xx.c
                 - path: ../Core/Src/comm_jetson.c
                 - path: ../Core/Inc/comm_jetson.h
+                - path: ../Core/Inc/advance_control.h
+                - path: ../Core/Src/advance_control.c
+                - path: ../Core/Inc/advance_visual.h
+                - path: ../Core/Src/advance_visual.c
               folders: []
     - name: Drivers
       files: []

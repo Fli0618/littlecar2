@@ -113,6 +113,8 @@ extern __IO uint16_t MMCL_count, MMCL_cmd[MMCL_LEN];
 /* USART3 发送队列与反馈监督配置。数值需与电机回包速率一起实车验证。 */
 /** @brief USART 发送队列深度。 */
 #define DRIVE_EMM_TX_QUEUE_DEPTH ((uint8_t)8U)
+/** @brief TIM6 中电机通信维护（DMA 队列和反馈监督）的更新周期。 */
+#define DRIVE_EMM_UPDATE_PERIOD_MS ((uint32_t)10U)
 /** @brief 单次 USART 发送超时时间，单位为毫秒。 */
 #define DRIVE_EMM_TX_TIMEOUT_MS ((uint32_t)100U)
 /** @brief 电机反馈轮询周期，单位为毫秒。 */
@@ -185,9 +187,8 @@ void drive_emm_ConfigureChassisFeedback(uint8_t lf_id, uint8_t rf_id, uint8_t lr
 /** @retval HAL_OK 配置成功。 */
 /** @retval 其他值 配置失败。 */
 HAL_StatusTypeDef drive_emm_MonitorMotor(uint8_t id);
-/* 主循环轮询：推进 DMA 队列、查询四电机反馈并检测发送超时。 */
-/** @brief 在主循环中推进 DMA 队列、查询反馈并检测发送超时。 */
-void drive_emm_Poll(void);
+/** @brief 在 TIM6 周期中推进 DMA 队列、查询反馈并检测发送超时。 */
+void drive_emm_Update(void);
 /** @brief 处理 UART 接收事件。 */
 /** @param huart 产生接收事件的 UART 句柄。 */
 /** @param size 本次接收的数据长度。 */
@@ -195,6 +196,9 @@ void drive_emm_OnUartRxEvent(UART_HandleTypeDef *huart, uint16_t size);
 /** @brief 处理 UART 发送完成事件。 */
 /** @param huart 完成发送的 UART 句柄。 */
 void drive_emm_OnTxComplete(UART_HandleTypeDef *huart);
+/** @brief 处理 UART 异步发送中止完成事件。 */
+/** @param huart 完成发送中止的 UART 句柄。 */
+void drive_emm_OnTxAbortComplete(UART_HandleTypeDef *huart);
 /** @brief 处理 UART 错误事件。 */
 /** @param huart 发生错误的 UART 句柄。 */
 void drive_emm_OnUartError(UART_HandleTypeDef *huart);

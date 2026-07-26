@@ -28,7 +28,10 @@ typedef struct
 volatile WorldPose2D_t g_world_pose = {0};
 static AdvanceWorld_Origin_t g_world_origin = {0};
 static AdvanceWorld_PoseOffset_t g_world_pose_offset = {0};
+static volatile AdvanceWorld_Status_t g_world_status = ADVANCE_WORLD_STATUS_NOT_READY;
+#if (ADVANCE_WORLD_DEBUG_ENABLE != 0U)
 static uint32_t g_last_debug_print_tick = 0U;
+#endif
 
 /* 将角度从度转换为弧度。 */
 static float AdvanceWorld_DegToRad(float deg)
@@ -215,7 +218,10 @@ void AdvanceWorld_Init(void)
   g_world_origin = (AdvanceWorld_Origin_t){0};
   g_world_pose_offset = (AdvanceWorld_PoseOffset_t){0};
   g_world_pose = (WorldPose2D_t){0};
+  g_world_status = ADVANCE_WORLD_STATUS_NOT_READY;
+#if (ADVANCE_WORLD_DEBUG_ENABLE != 0U)
   g_last_debug_print_tick = 0U;
+#endif
 }
 
 /* 以当前传感器位置和航向建立世界坐标原点。 */
@@ -231,6 +237,7 @@ AdvanceWorld_Status_t AdvanceWorld_ResetOrigin(void)
   {
     g_world_origin.ready = 0U;
     g_world_pose = (WorldPose2D_t){0};
+    g_world_status = ADVANCE_WORLD_STATUS_NO_OPS;
     return ADVANCE_WORLD_STATUS_NO_OPS;
   }
 
@@ -255,6 +262,7 @@ AdvanceWorld_Status_t AdvanceWorld_ResetOrigin(void)
     AdvanceWorld_ApplyPoseOffset(&sensor_pose);
   }
   g_world_pose = sensor_pose;
+  g_world_status = status;
   return status;
 }
 
@@ -274,6 +282,7 @@ AdvanceWorld_Status_t AdvanceWorld_PoseOffset(float x_mm, float y_mm, float yaw_
   if (AdvanceWorld_ReadSensorSnapshot(&ops, &imu) == 0U)
   {
     g_world_pose = sensor_pose;
+    g_world_status = ADVANCE_WORLD_STATUS_NOT_READY;
     return ADVANCE_WORLD_STATUS_NOT_READY;
   }
 
@@ -281,6 +290,7 @@ AdvanceWorld_Status_t AdvanceWorld_PoseOffset(float x_mm, float y_mm, float yaw_
   if (status != ADVANCE_WORLD_STATUS_OK)
   {
     g_world_pose = sensor_pose;
+    g_world_status = status;
     return status;
   }
 
@@ -290,36 +300,24 @@ AdvanceWorld_Status_t AdvanceWorld_PoseOffset(float x_mm, float y_mm, float yaw_
 
   AdvanceWorld_ApplyPoseOffset(&sensor_pose);
   g_world_pose = sensor_pose;
+  g_world_status = ADVANCE_WORLD_STATUS_OK;
   return ADVANCE_WORLD_STATUS_OK;
 }
 
 /* 周期性刷新世界坐标位姿。 */
-void AdvanceWorld_Poll(void)
-{
-  WorldPose2D_t pose;
-
-  (void)AdvanceWorld_GetPoseCopy(&pose);
-}
-
-/* 基于最新传感器快照计算并复制当前世界位姿。 */
-AdvanceWorld_Status_t AdvanceWorld_GetPoseCopy(WorldPose2D_t *pose)
+void AdvanceWorld_Update(void)
 {
   OPS_Pose_t ops;
   WIT_Data_t imu;
   WorldPose2D_t latest_pose = {0};
   AdvanceWorld_Status_t status;
 
-  if (pose == NULL)
-  {
-    return ADVANCE_WORLD_STATUS_NOT_READY;
-  }
-
   latest_pose.origin_ready = g_world_origin.ready;
   if (AdvanceWorld_ReadSensorSnapshot(&ops, &imu) == 0U)
   {
-    *pose = latest_pose;
     g_world_pose = latest_pose;
-    return ADVANCE_WORLD_STATUS_NOT_READY;
+    g_world_status = ADVANCE_WORLD_STATUS_NOT_READY;
+    return;
   }
 
   status = AdvanceWorld_CalculateSensorPose(&ops, &imu, &latest_pose);
@@ -328,20 +326,41 @@ AdvanceWorld_Status_t AdvanceWorld_GetPoseCopy(WorldPose2D_t *pose)
     AdvanceWorld_ApplyPoseOffset(&latest_pose);
   }
 
-  *pose = latest_pose;
   g_world_pose = latest_pose;
+  g_world_status = status;
+}
+
+/* 在极短临界区内复制由 TIM6 更新的世界位姿缓存。 */
+AdvanceWorld_Status_t AdvanceWorld_GetPoseCopy(WorldPose2D_t *pose)
+{
+  uint32_t primask;
+  AdvanceWorld_Status_t status;
+
+  if (pose == NULL)
+  {
+    return ADVANCE_WORLD_STATUS_NOT_READY;
+  }
+
+  primask = __get_PRIMASK();
+  __disable_irq();
+  *pose = g_world_pose;
+  status = g_world_status;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
   return status;
 }
 
 /* 将角度归一化到 [-180, 180] 度范围。 */
 float AdvanceWorld_WrapAngleDeg(float angle_deg)
 {
-  while (angle_deg > 180.0f)
+  angle_deg = fmodf(angle_deg, 360.0f);
+  if (angle_deg > 180.0f)
   {
     angle_deg -= 360.0f;
   }
-
-  while (angle_deg < -180.0f)
+  else if (angle_deg < -180.0f)
   {
     angle_deg += 360.0f;
   }

@@ -39,7 +39,7 @@ extern "C"
   /** @brief 初始化 WIT IMU。 @return 初始化结果状态。 */
   WIT_Status_t WIT_Init(void);
   /** @brief 轮询解析 WIT IMU 数据。 */
-  void WIT_Poll(void);
+  void WIT_Update(void);
 
   /** @brief 处理 WIT 串口接收事件。 @param huart 串口句柄。 @param size 本次接收字节数。 */
   void WIT_OnUartRxEvent(UART_HandleTypeDef *huart, uint16_t size);

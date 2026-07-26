@@ -4,7 +4,7 @@
 
 STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `comm_jetson` 发送 START/STOP，Jetson 以 START 的周期持续上报最新检测结果；默认周期为 `DETECT_DEFAULT_PERIOD_MS=40 ms`。USART6 保持既有 DMA + IDLE 配置，不修改 CubeMX。
 
-`main.c` 只维护 START、RUNNING、STOP、DONE、ERROR 阶段并转发串口回调。进入视觉阶段会取消已有 `AdvanceMotion` 目标；当前会话数据超过 200 ms 未刷新会停车并结束阶段。协议、字段、状态码和 SESSION 过滤见 [通信协议](docs/上下位机通信协议.md)。
+`main.c` 不再维护通用视觉阶段机。USART6 回调只缓存帧结果，TIM6 推进二维码等待与超时；协议、字段、状态码和 SESSION 过滤见 [通信协议](docs/上下位机通信协议.md)。
 
 ## 1. 项目说明
 
@@ -97,7 +97,7 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 - 接收：`DMA + UART 空闲中断`
 - 当前解析：`0x51` 加速度、`0x52` 角速度、`0x53` 姿态角三类标准帧。
 - 对外数据：`accel_g`、`gyro_dps`、`angle_deg`，每组三轴数据带 `valid` 和 `updated_tick`。
-- 典型接口：`WIT_Init()`、`WIT_Poll()`、`WIT_OnUartRxEvent()`、`WIT_GetData()`。
+- 典型接口：`WIT_Init()`、`WIT_Update()`、`WIT_OnUartRxEvent()`、`WIT_GetData()`。
 
 ### 4.4 OPS 定位传感器
 
@@ -107,7 +107,7 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 - 接收：单字节中断。
 - 当前边界：只解析 OPS 上行位姿数据帧，不转发到 Jetson，不下发 OPS 配置命令。
 - 对外数据：`zangle_deg`、`xangle_deg`、`yangle_deg`、`pos_x_mm`、`pos_y_mm`、`w_z_dps`。
-- 典型接口：`OPS_Init()`、`OPS_Poll()`、`OPS_OnByteReceived()`、`OPS_GetPose()`、`OPS_GetPoseRef()`。
+- 典型接口：`OPS_Init()`、`OPS_Update()`、`OPS_OnByteReceived()`、`OPS_GetPose()`、`OPS_GetPoseRef()`。
 
 ### 4.5 底盘高级运动
 
@@ -116,6 +116,9 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 - 当前能力：前进、后退、左右平移、左右旋转、差速转向、四轮 RPM 直接控制、三轴麦克纳姆速度合成。
 - 配置位置：四个电机 ID、方向修正、默认 RPM、默认加速度和预设动作参数集中在 `advance_chassis.h`。
 - 典型接口：`Chassis_Enable()`、`Chassis_Stop()`、`Chassis_SetMotorRPMEx()`、`Chassis_MoveMecanumEx()`。
+- 底盘控制权由 `advance_control` 统一维护：`NONE` 表示无控制器输出，`WORLD` 由 `advance_motion` 使用，`VISUAL` 为后续视觉定位预留。活动模式不能直接互切，必须先切换到 `NONE`，释放时会入队停止命令。
+
+`AdvanceControl_Init()`、`AdvanceControl_SetMode()` 和 `AdvanceControl_GetMode()` 是该模块的完整公共接口。模块只维护一个 `volatile` 模式变量，不创建任务队列或通用状态机。
 
 ### 4.6 全局坐标系
 
@@ -124,7 +127,8 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 - 坐标定义：`world +Y` 为小车初始车头方向，`world +X` 为初始右侧，`yaw=0` 朝 `world +Y`，yaw 逆时针为正。
 - 角度方向：俯视小车时，逆时针旋转为角度增大。若 OPS 或 WIT 因安装方向导致角度增减相反，在 `advance_world.h` 中将 `ADVANCE_WORLD_OPS_YAW_REVERSED` 或 `ADVANCE_WORLD_WIT_YAW_REVERSED` 改为 `1`。
 - 初始化：OPS / WIT 掉电后会保留自身历史状态，软件不假设其上电为零；OPS 静止初始化后调用 `AdvanceWorld_ResetOrigin()`，将当前 OPS 位置、OPS 航向和 WIT yaw 记录为本次 world 坐标系零点。
-- 典型接口：`AdvanceWorld_Init()`、`AdvanceWorld_Poll()`、`AdvanceWorld_GetPose()`、`AdvanceWorld_WorldToBodyVelocity()`。
+- 典型接口：`AdvanceWorld_Init()`、`AdvanceWorld_Update()`、`AdvanceWorld_GetPoseCopy()`、`AdvanceWorld_WorldToBodyVelocity()`。
+- `AdvanceWorld_Update()` 仅由 TIM6 调用并更新缓存；业务层通过 `AdvanceWorld_GetPoseCopy()` 读取缓存，不在读取接口内重复解析 OPS/WIT。
 
 ### 4.7 车辆状态视图
 
@@ -136,20 +140,22 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 ### 4.8 Jetson 连续视觉通信
 
 - 文件：`Core/Inc/comm_jetson.h`、`Core/Src/comm_jetson.c`
-- 用途：STM32 通过 USART6 启动或停止 Jetson 视觉任务，并缓存当前会话的最新颜色、数字圆环或物料盘中心结果。
+- 用途：STM32 通过 USART6 启动或停止 Jetson 视觉任务，并缓存当前会话的最新颜色、数字圆环、盘中心或二维码结果。
 - 链路：`USART6`，DMA Circular + UART IDLE 接收，DMA 发送；帧格式为 `5A A5 CMD SESSION LEN PAYLOAD CRC16_L CRC16_H`，CRC16-Modbus 覆盖 CMD、SESSION、LEN 和 Payload。
-- 检测模式：`detect_color_start()`、`detect_circle_start()`、`detect_disk_center_start()`；`detect_stop()` 只停止当前检测，Jetson 保持运行并等待下一条 START。
+- 检测模式：`detect_color_start()`、`detect_circle_start()`、`detect_disk_center_start()`、`detect_qr_start()`；`detect_stop()` 只停止当前检测，Jetson 保持运行并等待下一条 START。
 - 默认周期：`DETECT_DEFAULT_PERIOD_MS`，默认 40 ms。每次 START 递增 SESSION，模块丢弃旧会话、错误 CRC 和模式不匹配的数据。
 - 数据边界：仅缓存最新结果，`detect_get_targets()` 与 `detect_get_disk_center()` 成功读取未消费的新数据时返回 1；最多缓存 8 个目标。目标包含模型 `class_id`、像素中心、置信度、`measured` 与 `support_count`；盘中心包含状态、坐标、支持点数和 `measured_count`。
-- 安全规则：主循环视觉阶段开始时取消原有 `AdvanceMotion` 目标；当前会话 200 ms 没有有效数据时停车并结束阶段。盘中心零支持点固定为无目标和 `(0, 0)`，业务层不得仅凭预测结果判定到达。
-- 回调接口：`CommJetson_Init()`、`CommJetson_OnUartRxEvent()`、`CommJetson_OnUartError()` 仅供 `main.c` 的 USART6 初始化和 HAL 回调分发使用。
+- 二维码：`detect_qr_read_blocking()` 启动一次 QR 会话并等待固定 15 字节 ASCII 任务码；等待由 `CommJetson_Update()` 在 TIM6 中推进，超时为本地 2000 ms，不在 Blocking 循环中主动轮询 UART。
+- 安全规则：盘中心零支持点固定为无目标和 `(0, 0)`，业务层不得仅凭预测结果判定到达。
+- 回调与调度接口：`CommJetson_Init()`、`CommJetson_Update()`、`CommJetson_OnUartRxEvent()`、`CommJetson_OnUartError()` 和 `CommJetson_OnUartTxComplete()` 仅供 `main.c` 的 USART6 初始化、TIM6 调度和 HAL 回调分发使用。
 
 ## 5. 主循环与回调边界
 
-- `main.c` 负责系统初始化、外设初始化、模块初始化、主循环轮询和 HAL 回调分发。
+- `main.c` 负责初始化、顺序业务入口、TIM6 周期入口和 HAL 回调分发；最外层循环只执行 `__WFI()`。
 - `HAL_UARTEx_RxEventCallback()` 中只分发 DMA / IDLE 接收事件，不直接执行业务动作。
 - `HAL_UART_RxCpltCallback()` 中分发单字节中断接收，例如 OPS 和总线舵机。
 - `HAL_UART_ErrorCallback()` 中按串口来源调用对应模块错误处理函数并重启接收。
+- `HAL_UART_AbortTransmitCpltCallback()` 仅分发 USART3 电机 DMA 发送中止完成事件；USART6 发送完成仍由 `CommJetson_OnUartTxComplete()`处理。
 
 ## 6. 调试边界
 
@@ -181,34 +187,28 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 
 ## 8. GotoPose 异步目标点控制
 
-`advance_motion` 提供 world 坐标下的异步目标点控制。上位机发送 `CHASSIS_GOTO_POSE` 后，ACK 只表示目标已接收；是否到达需要通过 `CHASSIS_GET_MOTION_STATUS` 查询。
+`advance_motion` 提供 world 坐标下的本地异步目标点控制。当前仓库没有接入 `CHASSIS_GOTO_POSE` 或 `CHASSIS_GET_MOTION_STATUS` 上位机协议，顺序业务直接调用 Blocking 接口。
 
-新增接口：
+可用接口：
 
-- `AdvanceMotion_GotoPose(const WorldGoalPose2D_t *goal)`：按默认加速度接收目标点。
 - `AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, uint8_t acc)`：接收目标点并指定 Emm 加速度参数。
-- `AdvanceMotion_Poll()`：异步状态机轮询，内部按 `ADVANCE_MOTION_CONTROL_PERIOD_MS` 自调度。
-- `AdvanceMotion_Cancel()`：取消当前目标并平滑停车。
+- `AdvanceMotion_GotoPoseBlocking(const WorldGoalPose2D_t *goal, uint8_t acc)`：启动目标后仅等待状态终止，等待期间只执行 `__WFI()`。
+- `AdvanceMotion_Update()`：由 TIM6 按 `ADVANCE_MOTION_CONTROL_PERIOD_MS` 推进一次目标点控制。
+- `AdvanceMotion_Cancel()`：取消当前目标、释放 `WORLD` 控制权并停车。
 - `AdvanceMotion_GetStatus()`：读取状态、当前位姿、误差和活动目标摘要。
 
-协议新增底盘命令：
+当前 `comm_jetson` 只实现 Jetson 视觉协议；运动目标由 STM32 本地 C 接口启动，不通过当前 Jetson 通信层传输。
 
-| CmdID | 命令 | Payload 长度 | 说明 |
-| ---: | --- | ---: | --- |
-| `0x07` | `CHASSIS_GOTO_POSE` | 22 | 接收 world 目标点并启动异步状态机 |
-| `0x08` | `CHASSIS_CANCEL_GOAL` | 0 | 取消当前目标并平滑停车 |
-| `0x0B` | `CHASSIS_GET_MOTION_STATUS` | 0 | ACK 后返回 `MSG_DATA` 状态包 |
-
-当前 `main.c` 通过 TIM6 任务标志调度 `AdvanceMotion_Poll()`，并在无待处理任务时执行 `__WFI()`。坐标系、速度变换、GotoPose 运算逻辑和协议字段详见 `docs/坐标系与GotoPose使用说明.md` 与 `docs/上下位机通信协议.md`。
+当前 `main.c` 直接在 TIM6 周期入口调度 `AdvanceMotion_Update()`；主循环不参与周期调度，只执行 `__WFI()`。坐标系、速度变换、GotoPose 运算逻辑和协议字段详见 `docs/坐标系与GotoPose使用说明.md` 与 `docs/上下位机通信协议.md`。
 
 ## 9. 闭环、安全与通信保护
 
-TIM6 以 1 ms 周期仅置位调度标志；主循环由 `__WFI()` 唤醒后依次执行协议、电机通信、OPS/WIT、world 位姿和 `AdvanceMotion_Poll()`。系统不再使用启动阶段的固定延时等待传感器，而是在 OPS 位姿有效后自动建立 world 原点。
+TIM6 以 1 ms 为唯一周期入口：每 1 ms 推进 Jetson 通信状态，每 10 ms 更新 OPS/WIT、world 位姿以及 `drive_emm_Update()`，每 20 ms 按控制权执行 `AdvanceMotion_Update()`。电机通信维护与底盘闭环使用独立周期，提升 DMA/反馈超时处理及时性，同时不改变既有 20 ms PID 采样周期。主循环只运行顺序业务和 `__WFI()`。
 
-- `GotoPose` 在进入位置和角度容差时立即下发零速度，连续稳定 `ADVANCE_MOTION_ARRIVE_HOLD_MS` 后才进入 `ARRIVED`。
-- 急停、心跳超时、普通停止、取消目标和禁用底盘都会先取消活动的 `GotoPose`，避免状态机在下一周期重新输出速度。
-- RPM、麦轮、车体速度、世界速度和 `GotoPose` 使用互斥控制权；新运动命令会取消正在运行的目标点控制。
-- USART3 已使用 DMA 发送队列和 DMA/IDLE 接收。`drive_emm_Poll()` 保留底盘驱动反馈轮询；机械臂高层不读取反馈、不以位置闭环判定到位。
+- `GotoPose` 在进入位置和角度容差时立即下发零速度，连续稳定 `ADVANCE_MOTION_ARRIVE_HOLD_MS` 后才进入 `ARRIVED`，终态时释放 `WORLD` 控制权。
+- `AdvanceControl_SetMode(NONE)` 会入队底盘停止命令；`WORLD` 与 `VISUAL` 不能同时持有控制权。
+- `AdvanceMotion_Update()` 每个控制周期只消费一次已验证的 world 位姿缓存；不在 TIM6 路径中执行阻塞 UART、`HAL_Delay()` 或等待 DMA。
+- USART3 使用 DMA 发送队列和 DMA/IDLE 接收。`drive_emm_Update()`在 TIM6 中推进反馈查询；发送超时使用异步 abort，不在中断内阻塞。
 - 机械臂使用固定编译期参数：伸出、回收、下降、上升、夹爪打开和夹爪闭合均等待 1000 ms。高层不检查限位、不维护软件零点或任务状态；`ARM_CONFIG`、`ARM_GET_STATUS` 和 `ARM_RESET_ZERO` 返回 `ACK_UNKNOWN_CMD`。
 - 驱动器心跳保护默认写为 `500 ms`，配置见 `drive_emm.h`。首次上板必须确认实际 Emm 固件支持该参数，且周期反馈查询会被驱动器视为有效心跳。
 - ACK 与状态数据使用 UART 中断发送队列；UART/DMA 回调仅负责接收、入队或释放发送槽位，不直接执行业务控制。

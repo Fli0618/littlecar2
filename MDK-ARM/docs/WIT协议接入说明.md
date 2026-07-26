@@ -38,7 +38,7 @@
 - `WIT_Init()` 调用 `HAL_UARTEx_ReceiveToIdle_DMA(&huart2, ...)`
 - 在 `main.c` 的统一 `HAL_UARTEx_RxEventCallback()` 中分发到 `WIT_OnUartRxEvent()`
 - 在 `main.c` 的统一 `HAL_UART_ErrorCallback()` 中分发到 `WIT_OnUartError()`
-- 在主循环调用 `WIT_Poll()`，超时后将对应缓存标记为无效
+- 在主循环调用 `WIT_Update()`，超时后将对应缓存标记为无效
 
 ## 3. 帧格式
 
@@ -121,7 +121,7 @@ yaw   = raw_yaw   / 32768 * 180
 当前开放的接口如下：
 
 - `WIT_Init()`
-- `WIT_Poll()`
+- `WIT_Update()`
 - `WIT_OnUartRxEvent()`
 - `WIT_OnUartError()`
 - `WIT_GetData()`
