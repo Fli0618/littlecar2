@@ -16,7 +16,7 @@ conda run -n low_numpy python -m pytest tests -q
 
 高级二维码检测在最近 5 帧中确认同一码至少 3 次，仅在首次确认、任务码变更或已消失任务码再次出现时上报一次。短暂漏检不会解除锁存，连续 5 帧未识别到合法任务码后才重新布防。
 
-可使用以下脚本检查相机和逐帧状态，脚本不创建 GUI，按 Ctrl+C 正常退出：
+可使用以下脚本检查二维码相机和逐帧检测状态；脚本会显示实时画面及识别状态，按 `Q` 或 `Esc` 退出：
 
 ```powershell
 conda run -n low_numpy python scripts/qr_advance_test.py
