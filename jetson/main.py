@@ -38,8 +38,8 @@ from vision import (
 
 SERIAL_PORT = "/dev/ttyTHS1"
 SERIAL_BAUDRATE = 115200
-CAMERA_QR_ID = 0
-CAMERA_VISION_ID = 1
+CAMERA_QR_DEVICE = "/dev/video0"
+CAMERA_VISION_DEVICE = "/dev/video1"
 DEFAULT_PERIOD_MS = 40
 MAX_TARGETS = 8
 IDLE_SLEEP_SECONDS = 0.001
@@ -166,13 +166,13 @@ def main() -> None:
 
     state = make_service_state()
     port = serial.Serial(SERIAL_PORT, SERIAL_BAUDRATE, timeout=0, write_timeout=0)
-    qr_camera = cv2.VideoCapture(CAMERA_QR_ID)
-    vision_camera = cv2.VideoCapture(CAMERA_VISION_ID)
+    qr_camera = cv2.VideoCapture(CAMERA_QR_DEVICE, cv2.CAP_V4L2)
+    vision_camera = cv2.VideoCapture(CAMERA_VISION_DEVICE, cv2.CAP_V4L2)
     if not qr_camera.isOpened() or not vision_camera.isOpened():
         qr_camera.release()
         vision_camera.release()
         port.close()
-        raise RuntimeError(f"cannot open cameras qr={CAMERA_QR_ID}, vision={CAMERA_VISION_ID}")
+        raise RuntimeError(f"cannot open cameras qr={CAMERA_QR_DEVICE}, vision={CAMERA_VISION_DEVICE}")
     cameras = {"qr": qr_camera, "vision": vision_camera}
     try:
         while True:

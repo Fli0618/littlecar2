@@ -4,7 +4,14 @@
 
 ## 配置与运行
 
-在 `main.py` 顶部配置 `SERIAL_PORT`、`SERIAL_BAUDRATE`、`CAMERA_QR_ID`、`CAMERA_VISION_ID` 和 `DEFAULT_PERIOD_MS`。默认二维码相机为 `0`，视觉相机为 `1`。
+在 `main.py` 顶部配置 `SERIAL_PORT`、`SERIAL_BAUDRATE`、`CAMERA_QR_DEVICE`、`CAMERA_VISION_DEVICE` 和 `DEFAULT_PERIOD_MS`。摄像头使用设备路径配置，例如：
+
+```python
+CAMERA_QR_DEVICE = "/dev/video0"
+CAMERA_VISION_DEVICE = "/dev/video1"
+```
+
+可先运行 `scripts/jetson上测试/找摄像头.ipynb`，根据 `device_index` 和预览图确认编号与实际摄像头位置，再填写这两个常量。
 
 ```bash
 cd /home/jetson/Project/new_littlecar2/littlecar2/jetson
