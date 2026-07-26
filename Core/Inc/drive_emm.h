@@ -113,6 +113,8 @@ extern __IO uint16_t MMCL_count, MMCL_cmd[MMCL_LEN];
 /* USART3 发送队列与反馈监督配置。数值需与电机回包速率一起实车验证。 */
 /** @brief USART 发送队列深度。 */
 #define DRIVE_EMM_TX_QUEUE_DEPTH ((uint8_t)8U)
+/** @brief TIM6 中电机通信维护（DMA 队列和反馈监督）的更新周期。 */
+#define DRIVE_EMM_UPDATE_PERIOD_MS ((uint32_t)10U)
 /** @brief 单次 USART 发送超时时间，单位为毫秒。 */
 #define DRIVE_EMM_TX_TIMEOUT_MS ((uint32_t)100U)
 /** @brief 电机反馈轮询周期，单位为毫秒。 */

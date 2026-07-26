@@ -203,7 +203,7 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 
 ## 9. 闭环、安全与通信保护
 
-TIM6 以 1 ms 为唯一周期入口：每 1 ms 推进 Jetson 通信状态，每 10 ms 更新 OPS/WIT 和 world 位姿，每 20 ms 更新电机通信并按控制权执行 `AdvanceMotion_Update()`。主循环只运行顺序业务和 `__WFI()`。
+TIM6 以 1 ms 为唯一周期入口：每 1 ms 推进 Jetson 通信状态，每 10 ms 更新 OPS/WIT、world 位姿以及 `drive_emm_Update()`，每 20 ms 按控制权执行 `AdvanceMotion_Update()`。电机通信维护与底盘闭环使用独立周期，提升 DMA/反馈超时处理及时性，同时不改变既有 20 ms PID 采样周期。主循环只运行顺序业务和 `__WFI()`。
 
 - `GotoPose` 在进入位置和角度容差时立即下发零速度，连续稳定 `ADVANCE_MOTION_ARRIVE_HOLD_MS` 后才进入 `ARRIVED`，终态时释放 `WORLD` 控制权。
 - `AdvanceControl_SetMode(NONE)` 会入队底盘停止命令；`WORLD` 与 `VISUAL` 不能同时持有控制权。

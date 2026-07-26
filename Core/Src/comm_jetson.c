@@ -14,6 +14,8 @@
 #define COMM_JETSON_CMD_CIRCLE_RESULT ((uint8_t)0x82U)
 #define COMM_JETSON_CMD_DISK_RESULT ((uint8_t)0x83U)
 #define COMM_JETSON_CMD_QR_RESULT ((uint8_t)0x84U)
+#define COMM_JETSON_DISK_CENTER_NO_TARGET ((uint8_t)0U)
+#define COMM_JETSON_DISK_CENTER_OK ((uint8_t)1U)
 #define COMM_JETSON_RX_DMA_SIZE ((uint16_t)128U)
 #define COMM_JETSON_FRAME_BUFFER_SIZE ((uint16_t)128U)
 
@@ -214,7 +216,9 @@ static void CommJetson_HandleDiskCenter(const uint8_t *payload, uint8_t length)
   {
     return;
   }
-  g_disk_center.status = (payload[0] == 0U) ? DETECT_STATUS_OK : DETECT_STATUS_NO_TARGET;
+  g_disk_center.status = (payload[0] == COMM_JETSON_DISK_CENTER_OK)
+                           ? DETECT_STATUS_OK
+                           : DETECT_STATUS_NO_TARGET;
   g_disk_center.x = CommJetson_ReadI16(&payload[1]);
   g_disk_center.y = CommJetson_ReadI16(&payload[3]);
   g_disk_center.support_count = payload[5];

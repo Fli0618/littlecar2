@@ -132,6 +132,7 @@ static void App_RunTask(void)
 static void App_TimerUpdate(void)
 {
   static uint16_t world_elapsed_ms = 0U;
+  static uint16_t drive_elapsed_ms = 0U;
   static uint16_t control_elapsed_ms = 0U;
   static uint16_t origin_elapsed_ms = 0U;
   static uint16_t led_elapsed_ms = 0U;
@@ -146,10 +147,15 @@ static void App_TimerUpdate(void)
     AdvanceWorld_Update();
   }
 
+  if (++drive_elapsed_ms >= DRIVE_EMM_UPDATE_PERIOD_MS)
+  {
+    drive_elapsed_ms = 0U;
+    drive_emm_Update();
+  }
+
   if (++control_elapsed_ms >= ADVANCE_MOTION_CONTROL_PERIOD_MS)
   {
     control_elapsed_ms = 0U;
-    drive_emm_Update();
 
     switch (AdvanceControl_GetMode())
     {
