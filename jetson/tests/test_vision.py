@@ -8,8 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import vision.advance_yolo as advance_yolo
-from vision.materials import advance_detect_disk_center, detect_disk_center
+import vision.qr as qr
 from vision import yolo
+from vision.materials import advance_detect_disk_center, detect_disk_center
 
 
 def detection(kind, x, y, confidence=0.9):
@@ -50,3 +51,43 @@ def test_advanced_disk_center_returns_measured_count():
     with patch.object(advance_yolo, "advance_detect_color", return_value={"detections": [dict(detection(1, 20, 30), measured=True), dict(detection(2, 50, 30), measured=False)]}):
         result = advance_detect_disk_center(frame)
     assert result["support_count"] == 2 and result["measured_count"] == 1
+
+
+def test_advance_qr_confirms_repeats_disappears_and_reappears():
+    frame = np.zeros((20, 20, 3), dtype=np.uint8)
+    code = "156+123+516+231"
+    qr.reset_qr_tracking()
+    with patch.object(qr, "detect_qr", side_effect=[code, code, code, code, None, None, None, None, None, code, code, code]):
+        results = [qr.advance_detect_qr(frame) for _ in range(12)]
+    assert [item["status"] for item in results[:4]] == ["CONFIRMING", "CONFIRMING", "FIRST_DETECTED", "REPEATED"]
+    assert results[2]["code"] == code and results[3]["code"] is None
+    assert [item["status"] for item in results[4:9]] == ["MISSING", "MISSING", "MISSING", "MISSING", "DISAPPEARED"]
+    assert [item["status"] for item in results[9:]] == ["CONFIRMING", "CONFIRMING", "REAPPEARED"]
+    assert results[-1]["code"] == code
+
+
+def test_advance_qr_rejects_invalid_and_counts_it_as_missing():
+    frame = np.zeros((20, 20, 3), dtype=np.uint8)
+    code = "156+123+516+231"
+    qr.reset_qr_tracking()
+    with patch.object(qr, "detect_qr", side_effect=["bad", code, code, code, "invalid", "invalid", "invalid", "invalid", "invalid"]):
+        results = [qr.advance_detect_qr(frame) for _ in range(9)]
+    assert results[0] == {"raw_code": "bad", "code": None, "status": "INVALID"}
+    assert results[3]["status"] == "FIRST_DETECTED"
+    assert [item["status"] for item in results[4:8]] == ["INVALID"] * 4
+    assert results[8]["status"] == "DISAPPEARED"
+
+
+def test_advance_qr_changes_code_and_reset_clears_latch():
+    frame = np.zeros((20, 20, 3), dtype=np.uint8)
+    first = "156+123+516+231"
+    second = "111+222+333+444"
+    qr.reset_qr_tracking()
+    with patch.object(qr, "detect_qr", side_effect=[first, first, first, second, second, second]):
+        results = [qr.advance_detect_qr(frame) for _ in range(6)]
+    assert results[2]["status"] == "FIRST_DETECTED"
+    assert results[-1] == {"raw_code": second, "code": second, "status": "CHANGED"}
+    qr.reset_qr_tracking()
+    with patch.object(qr, "detect_qr", return_value=first):
+        results = [qr.advance_detect_qr(frame) for _ in range(3)]
+    assert results[-1]["status"] == "FIRST_DETECTED"

@@ -8,10 +8,12 @@
 #define COMM_JETSON_CMD_CIRCLE_START ((uint8_t)0x02U)
 #define COMM_JETSON_CMD_DISK_START ((uint8_t)0x03U)
 #define COMM_JETSON_CMD_STOP ((uint8_t)0x04U)
+#define COMM_JETSON_CMD_QR_START ((uint8_t)0x05U)
 #define COMM_JETSON_CMD_ACK ((uint8_t)0x80U)
 #define COMM_JETSON_CMD_COLOR_RESULT ((uint8_t)0x81U)
 #define COMM_JETSON_CMD_CIRCLE_RESULT ((uint8_t)0x82U)
 #define COMM_JETSON_CMD_DISK_RESULT ((uint8_t)0x83U)
+#define COMM_JETSON_CMD_QR_RESULT ((uint8_t)0x84U)
 #define COMM_JETSON_RX_DMA_SIZE ((uint16_t)128U)
 #define COMM_JETSON_FRAME_BUFFER_SIZE ((uint16_t)128U)
 
@@ -26,8 +28,14 @@ static uint8_t g_active;
 static uint8_t g_mode;
 static Detect_TargetList_t g_targets;
 static Detect_DiskCenter_t g_disk_center;
+static char g_qr_code[DETECT_QR_CODE_LENGTH + 1U];
 static volatile uint8_t g_targets_new;
 static volatile uint8_t g_disk_center_new;
+static volatile uint8_t g_qr_new;
+static volatile uint8_t g_tx_busy;
+static volatile uint8_t g_ack_new;
+static volatile uint8_t g_ack_command;
+static volatile Detect_Status_t g_ack_status;
 static volatile uint32_t g_last_result_tick;
 
 static uint16_t CommJetson_Crc16(const uint8_t *data, uint16_t size)
@@ -69,6 +77,10 @@ static Detect_Status_t CommJetson_Send(uint8_t command, const uint8_t *payload, 
   {
     return DETECT_STATUS_UART_ERROR;
   }
+  if (g_tx_busy != 0U)
+  {
+    return DETECT_STATUS_BUSY;
+  }
 
   g_tx_frame[0] = COMM_JETSON_SYNC0;
   g_tx_frame[1] = COMM_JETSON_SYNC1;
@@ -83,9 +95,13 @@ static Detect_Status_t CommJetson_Send(uint8_t command, const uint8_t *payload, 
   g_tx_frame[5U + length] = (uint8_t)(crc & 0xFFU);
   g_tx_frame[6U + length] = (uint8_t)(crc >> 8U);
   frame_size = (uint16_t)(7U + length);
-
-  return (HAL_UART_Transmit_DMA(g_uart, g_tx_frame, frame_size) == HAL_OK) ?
-             DETECT_STATUS_OK : DETECT_STATUS_UART_ERROR;
+  g_tx_busy = 1U;
+  if (HAL_UART_Transmit_DMA(g_uart, g_tx_frame, frame_size) != HAL_OK)
+  {
+    g_tx_busy = 0U;
+    return DETECT_STATUS_UART_ERROR;
+  }
+  return DETECT_STATUS_OK;
 }
 
 static void CommJetson_ClearResults(void)
@@ -93,14 +109,24 @@ static void CommJetson_ClearResults(void)
   g_targets = (Detect_TargetList_t){0};
   g_disk_center = (Detect_DiskCenter_t){0};
   g_disk_center.status = DETECT_STATUS_NO_TARGET;
+  memset(g_qr_code, 0, sizeof(g_qr_code));
   g_targets_new = 0U;
   g_disk_center_new = 0U;
+  g_qr_new = 0U;
   g_last_result_tick = 0U;
+}
+
+static void CommJetson_ClearAck(void)
+{
+  g_ack_new = 0U;
+  g_ack_command = 0U;
+  g_ack_status = DETECT_STATUS_OK;
 }
 
 static Detect_Status_t CommJetson_Start(uint8_t command)
 {
   uint8_t payload[2];
+  uint8_t previous_session = g_session;
   Detect_Status_t status;
 
   ++g_session;
@@ -113,12 +139,44 @@ static Detect_Status_t CommJetson_Start(uint8_t command)
     g_mode = command;
     CommJetson_ClearResults();
   }
+  else
+  {
+    g_session = previous_session;
+  }
   return status;
 }
 
 static int16_t CommJetson_ReadI16(const uint8_t *data)
 {
   return (int16_t)((uint16_t)data[0] | ((uint16_t)data[1] << 8U));
+}
+
+static Detect_Status_t CommJetson_MapAckStatus(uint8_t status)
+{
+  switch (status)
+  {
+    case 0U:
+      return DETECT_STATUS_OK;
+    case 1U:
+      return DETECT_STATUS_BAD_COMMAND;
+    case 2U:
+      return DETECT_STATUS_BAD_LENGTH;
+    case 3U:
+      return DETECT_STATUS_BAD_PERIOD;
+    default:
+      return DETECT_STATUS_BAD_COMMAND;
+  }
+}
+
+static void CommJetson_HandleAck(const uint8_t *payload, uint8_t length)
+{
+  if (length != 2U)
+  {
+    return;
+  }
+  g_ack_command = payload[0];
+  g_ack_status = CommJetson_MapAckStatus(payload[1]);
+  g_ack_new = 1U;
 }
 
 static void CommJetson_HandleTargets(const uint8_t *payload, uint8_t length)
@@ -168,6 +226,18 @@ static void CommJetson_HandleDiskCenter(const uint8_t *payload, uint8_t length)
   g_last_result_tick = HAL_GetTick();
 }
 
+static void CommJetson_HandleQr(const uint8_t *payload, uint8_t length)
+{
+  if (length != DETECT_QR_CODE_LENGTH)
+  {
+    return;
+  }
+  memcpy(g_qr_code, payload, DETECT_QR_CODE_LENGTH);
+  g_qr_code[DETECT_QR_CODE_LENGTH] = '\0';
+  g_qr_new = 1U;
+  g_last_result_tick = HAL_GetTick();
+}
+
 static void CommJetson_HandleFrame(const uint8_t *frame, uint16_t frame_size)
 {
   uint8_t command = frame[2];
@@ -175,8 +245,16 @@ static void CommJetson_HandleFrame(const uint8_t *frame, uint16_t frame_size)
   const uint8_t *payload = &frame[5];
   uint16_t received_crc = (uint16_t)frame[frame_size - 2U] | ((uint16_t)frame[frame_size - 1U] << 8U);
 
-  if ((CommJetson_Crc16(&frame[2], (uint16_t)(3U + length)) != received_crc) ||
-      (frame[3] != g_session) || (g_active == 0U))
+  if ((CommJetson_Crc16(&frame[2], (uint16_t)(3U + length)) != received_crc) || (frame[3] != g_session))
+  {
+    return;
+  }
+  if (command == COMM_JETSON_CMD_ACK)
+  {
+    CommJetson_HandleAck(payload, length);
+    return;
+  }
+  if (g_active == 0U)
   {
     return;
   }
@@ -188,6 +266,10 @@ static void CommJetson_HandleFrame(const uint8_t *frame, uint16_t frame_size)
   else if ((command == COMM_JETSON_CMD_DISK_RESULT) && (g_mode == COMM_JETSON_CMD_DISK_START))
   {
     CommJetson_HandleDiskCenter(payload, length);
+  }
+  else if ((command == COMM_JETSON_CMD_QR_RESULT) && (g_mode == COMM_JETSON_CMD_QR_START))
+  {
+    CommJetson_HandleQr(payload, length);
   }
 }
 
@@ -233,7 +315,9 @@ void CommJetson_Init(UART_HandleTypeDef *huart)
   g_session = 0U;
   g_active = 0U;
   g_mode = 0U;
+  g_tx_busy = 0U;
   CommJetson_ClearResults();
+  CommJetson_ClearAck();
   CommJetson_StartRx();
 }
 
@@ -293,19 +377,26 @@ void CommJetson_OnUartError(UART_HandleTypeDef *huart)
   }
 }
 
+void CommJetson_OnUartTxComplete(UART_HandleTypeDef *huart)
+{
+  if (huart == g_uart)
+  {
+    g_tx_busy = 0U;
+  }
+}
+
 Detect_Status_t detect_color_start(void) { return CommJetson_Start(COMM_JETSON_CMD_COLOR_START); }
 Detect_Status_t detect_circle_start(void) { return CommJetson_Start(COMM_JETSON_CMD_CIRCLE_START); }
 Detect_Status_t detect_disk_center_start(void) { return CommJetson_Start(COMM_JETSON_CMD_DISK_START); }
+Detect_Status_t detect_qr_start(void) { return CommJetson_Start(COMM_JETSON_CMD_QR_START); }
 
 Detect_Status_t detect_stop(void)
 {
   Detect_Status_t status = CommJetson_Send(COMM_JETSON_CMD_STOP, NULL, 0U);
-  if (status == DETECT_STATUS_OK)
-  {
-    g_active = 0U;
-    g_mode = 0U;
-    CommJetson_ClearResults();
-  }
+
+  g_active = 0U;
+  g_mode = 0U;
+  CommJetson_ClearResults();
   return status;
 }
 
@@ -329,6 +420,61 @@ uint8_t detect_get_disk_center(Detect_DiskCenter_t *result)
   *result = g_disk_center;
   g_disk_center_new = 0U;
   return 1U;
+}
+
+uint8_t detect_get_qr(char code[DETECT_QR_CODE_LENGTH + 1U])
+{
+  if ((code == NULL) || (g_qr_new == 0U))
+  {
+    return 0U;
+  }
+  memcpy(code, g_qr_code, sizeof(g_qr_code));
+  g_qr_new = 0U;
+  return 1U;
+}
+
+Detect_Status_t detect_qr_read_blocking(char code[DETECT_QR_CODE_LENGTH + 1U])
+{
+  uint32_t started_tick;
+  Detect_Status_t status;
+
+  if (code == NULL)
+  {
+    return DETECT_STATUS_BAD_PARAMETER;
+  }
+  code[0] = '\0';
+  CommJetson_ClearResults();
+  CommJetson_ClearAck();
+  status = detect_qr_start();
+  if (status != DETECT_STATUS_OK)
+  {
+    return status;
+  }
+
+  started_tick = HAL_GetTick();
+  while ((HAL_GetTick() - started_tick) < DETECT_QR_TIMEOUT_MS)
+  {
+    if (detect_get_qr(code) != 0U)
+    {
+      (void)detect_stop();
+      return DETECT_STATUS_OK;
+    }
+    if ((g_ack_new != 0U) && (g_ack_command == COMM_JETSON_CMD_QR_START))
+    {
+      g_ack_new = 0U;
+      if (g_ack_status != DETECT_STATUS_OK)
+      {
+        code[0] = '\0';
+        (void)detect_stop();
+        return g_ack_status;
+      }
+    }
+    HAL_Delay(1U);
+  }
+
+  code[0] = '\0';
+  (void)detect_stop();
+  return DETECT_STATUS_TIMEOUT;
 }
 
 uint8_t detect_is_active(void) { return g_active; }
