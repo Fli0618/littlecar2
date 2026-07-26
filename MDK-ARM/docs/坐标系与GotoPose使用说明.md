@@ -95,7 +95,7 @@ OPS 和 WIT 可能保留自身历史读数，因此软件不假设传感器上�
 AdvanceWorld_ResetOrigin();
 ```
 
-调用该函数时，模块会记录当前 OPS 位置、OPS yaw 和 WIT yaw 作为本次运行的软件原点。之后 `AdvanceWorld_GetPose()` 返回的是相对该软件原点的 world 位姿。
+调用该函数时，模块会记录当前 OPS 位置、OPS yaw 和 WIT yaw 作为本次运行的软件原点。之后 `AdvanceWorld_GetPoseCopy()` 返回的是相对该软件原点的 world 位姿。
 
 要求：
 
@@ -121,7 +121,7 @@ OPS 原始位置 / OPS 原始 yaw / WIT 原始 yaw
 
 ```c
 WorldPose2D_t pose;
-AdvanceWorld_GetPose(&pose);
+AdvanceWorld_GetPoseCopy(&pose);
 ```
 
 `WorldPose2D_t` 中关键字段：
@@ -247,7 +247,7 @@ AdvanceMotion_Cancel();
 4. 当前位姿是否超过 `ADVANCE_MOTION_POSE_TIMEOUT_MS`。
 5. 是否超过目标 `timeout_ms`。
 
-如果前置条件失败，状态机会平滑停车并进入对应状态：
+如果前置条件失败，状态机会停车并进入对应状态：
 
 | 条件 | 状态 |
 | --- | --- |
@@ -352,44 +352,34 @@ ADVANCE_MOTION_ARRIVE_HOLD_MS
 
 这样可以避免位姿短暂抖动导致误判到达。
 
-## 10. 状态查询协议
+## 10. 当前运动接口与调度边界
 
-底盘命令位于 `CMDSET_CHASSIS = 0x03`。
+当前仓库没有实现 `CMDSET_CHASSIS`、`CHASSIS_GOTO_POSE` 或运动状态查询协议。运动控制通过本地 C 接口完成：
 
-| CmdID | 命令 | Payload 长度 | 说明 |
-| ---: | --- | ---: | --- |
-| `0x07` | `CHASSIS_GOTO_POSE` | 22 | 启动异步目标点 |
-| `0x08` | `CHASSIS_CANCEL_GOAL` | 0 | 取消目标 |
-| `0x09` | `CHASSIS_RESET_WORLD_ORIGIN` | 0 | 重置 world 原点 |
-| `0x0A` | `CHASSIS_GET_WORLD_POSE` | 0 | 预留 |
-| `0x0B` | `CHASSIS_GET_MOTION_STATUS` | 0 | 查询运动状态 |
+```c
+AdvanceMotion_GotoPoseEx(&goal, acc);
+AdvanceMotion_Update();
+AdvanceMotion_GetStatus(&status);
+AdvanceMotion_Cancel();
+```
 
-`0x07` Payload：
+`AdvanceMotion_Update()`只能由 TIM6 周期入口调用，控制周期为 `ADVANCE_MOTION_CONTROL_PERIOD_MS`。它从 `AdvanceWorld_GetPoseCopy()` 获取已经由 TIM6 更新的缓存位姿，每个控制周期只读取一次。
 
-| 偏移 | 字段 | 类型 | 单位 |
-| ---: | --- | --- | --- |
-| 0 | `x_mm` | `int32_t` | mm |
-| 4 | `y_mm` | `int32_t` | mm |
-| 8 | `yaw_cdeg` | `int32_t` | 0.01 deg |
-| 12 | `vmax_mm_s` | `int16_t` | mm/s |
-| 14 | `wmax_cdeg_s` | `int16_t` | 0.01 deg/s |
-| 16 | `timeout_ms` | `uint32_t` | ms |
-| 20 | `goal_flags` | `uint8_t` | bit0 启用 yaw |
-| 21 | `acc` | `uint8_t` | Emm 加速度参数 |
+需要顺序等待时使用：
 
-`0x0B` 会先返回 ACK，再返回同 `Seq/CmdSet/CmdID` 的 `MSG_DATA`。状态包字段详见 `docs/上下位机通信协议.md`。
+```c
+AdvanceMotion_GotoPoseBlocking(&goal, acc);
+```
 
-## 11. 上位机使用流程
+该接口启动目标后只检查运动终态并执行 `__WFI()`；传感器、世界位姿、电机 DMA 和超时检查仍由中断异步推进。
 
-推荐流程：
+## 11. 当前本地使用流程
 
-1. 上电后等待 OPS / WIT 数据稳定。
-2. 小车静止，发送 `CHASSIS_RESET_WORLD_ORIGIN`。
-3. 低速发送 `CHASSIS_SET_WORLD_VELOCITY` 验证 world 方向。
-4. 发送小距离 `CHASSIS_GOTO_POSE`，例如 `(300, 0)` 或 `(0, 300)`。
-5. 周期查询 `CHASSIS_GET_MOTION_STATUS`。
-6. 状态进入 `ARRIVED` 后发送下一个目标。
-7. 异常时发送 `CHASSIS_CANCEL_GOAL` 或安全停止命令。
+1. 初始化 OPS、WIT、`CarPose`、`AdvanceWorld`、`AdvanceControl`、`AdvanceMotion` 和 `drive_emm`。
+2. 等待 TIM6 更新传感器缓存，并在原点未建立时由周期任务调用 `AdvanceWorld_ResetOrigin()`。
+3. 通过 `AdvanceMotion_GotoPoseEx()`启动异步目标，或使用 `AdvanceMotion_GotoPoseBlocking()`执行顺序流程。
+4. 通过 `AdvanceMotion_GetStatus()`读取状态；完成、失败、取消或超时后控制权回到 `ADVANCE_CONTROL_NONE`。
+5. 不要在业务等待循环中调用任何 `*_Update()`、UART 发送或 `HAL_Delay()`。
 
 ## 12. 实车调试建议
 

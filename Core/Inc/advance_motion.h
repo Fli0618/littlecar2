@@ -87,12 +87,12 @@ extern "C"
   /**
    * @brief 阻塞执行位姿导航，返回前不会继续执行调用方后续代码。
    * @details UART/DMA 中断在阻塞期间仍可运行，但本函数不处理上位机协议队列。
-   * 外部通信控制应使用异步 AdvanceMotion_GotoPoseEx 和主循环调度；本接口用于本地测试和固定业务流程。
+   * 外部通信控制应使用异步 AdvanceMotion_GotoPoseEx；本接口用于本地测试和固定顺序业务流程。
    * @return 最终 AdvanceMotion_RunState_t，不得从中断上下文调用。
    */
   AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(const WorldGoalPose2D_t *goal, uint8_t acc);
-  /** @brief 轮询推进位姿导航控制器。 */
-void AdvanceMotion_Update(void);
+  /** @brief 由 TIM6 按控制周期推进一次位姿导航控制器。 */
+  void AdvanceMotion_Update(void);
   /** @brief 仅在存在活动目标时取消、释放控制权并停车。 */
   void AdvanceMotion_CancelIfActive(void);
   /** @brief 取消当前导航目标并停车。 */

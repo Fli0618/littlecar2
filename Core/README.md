@@ -34,5 +34,5 @@
 - `sensor_limit` 统一管理升降上/下、滑台前/后四个限位的电平极性；默认高电平有效，可在 `sensor_limit.h` 中改为低电平有效。
 - `advance_arm` 不读取机械臂限位或电机反馈；Pick/Place 以固定顺序完成五个 1000 ms 原子动作，不能证明机械机构实际到位。
 - TIM6 是周期 Update 的唯一入口；主循环只运行一次顺序业务入口，之后以 `__WFI()` 等待中断。
-- 视觉通信使用 USART6 DMA + IDLE。业务层通过 `detect_color_start()`、`detect_circle_start()`、`detect_disk_center_start()` 和 `detect_stop()` 控制服务，默认周期由 `COMM_JETSON_DEFAULT_PERIOD_MS` 配置为 40 ms。
+- 视觉通信使用 USART6 DMA + IDLE。业务层通过 `detect_color_start()`、`detect_circle_start()`、`detect_disk_center_start()`、`detect_qr_start()` 和 `detect_stop()` 控制服务，默认周期由 `DETECT_DEFAULT_PERIOD_MS` 配置为 40 ms。
 - 详细配置、参数含义与上板验收流程见 `MDK-ARM/docs/下位机闭环与安全修复说明.md`。
