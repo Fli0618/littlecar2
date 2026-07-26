@@ -1308,12 +1308,10 @@ void drive_emm_Update(void)
       (g_drive_emm_tx_abort_pending == 0U) &&
       ((now_tick - g_drive_emm_tx_started_tick) > DRIVE_EMM_TX_TIMEOUT_MS))
   {
-    if (HAL_UART_AbortTransmit_IT(drive_emm_UART) == HAL_OK)
+    g_drive_emm_tx_abort_pending = 1U;
+    if (HAL_UART_AbortTransmit_IT(drive_emm_UART) != HAL_OK)
     {
-      g_drive_emm_tx_abort_pending = 1U;
-    }
-    else
-    {
+      g_drive_emm_tx_abort_pending = 0U;
       g_drive_emm_tx_started_tick = now_tick;
       DriveEmm_RecordTxError();
     }
