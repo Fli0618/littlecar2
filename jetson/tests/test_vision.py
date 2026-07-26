@@ -1,11 +1,6 @@
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 
 import vision.advance_yolo as advance_yolo
 import vision.qr as qr

@@ -25,3 +25,4 @@ package-dir = {"" = ".", "protocol" = "src/protocol", "vision" = "src/vision"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+namespaces = false
