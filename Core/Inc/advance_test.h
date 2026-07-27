@@ -47,6 +47,41 @@ void AdvanceTest_BlockingMain(void);
  */
 void AdvanceTest_ScrewMotor(uint8_t id, bool is_x);
 
+/**
+ * @brief 测试底盘电机正反转方向是否与底盘约定一致。
+ */
+void Test_Chasis_sign(void);
+
+/**
+ * @brief 测试 Chassis_SetBodyVelocityEx 的常用车体速度组合。
+ */
+void Test_Chasis_SetBodyVelocityEx(void);
+
+/**
+ * @brief 测试 Chassis_MoveMecanumEx 的常用麦克纳姆轮速度组合。
+ */
+void Test_Chasis_MoveMecanumEx(void);
+
+/**
+ * @brief 测试底盘使能、平滑停车、立即停车及运动命令状态。
+ */
+void Test_Chasis_EnableAndStop(void);
+
+/**
+ * @brief 测试 Chassis_SetMotorRPMEx 的差速轮速与限速特殊用例。
+ */
+void Test_Chasis_SetMotorRPMExSpecial(void);
+
+/**
+ * @brief 测试 Chassis_SetBodyVelocityEx 的反向组合与零速度特殊用例。
+ */
+void Test_Chasis_SetBodyVelocityExSpecial(void);
+
+/**
+ * @brief 测试 Chassis_MoveMecanumEx 的原地旋转与三自由度组合用例。
+ */
+void Test_Chasis_MoveMecanumExSpecial(void);
+
 #ifdef __cplusplus
 }
 #endif
