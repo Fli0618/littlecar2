@@ -2,6 +2,8 @@
 
 `main.py` 是由 STM32 指令驱动的单线程常驻视觉服务。服务启动时同时打开二维码相机和视觉相机；二维码模式仅使用二维码相机，颜色、圆环和圆盘中心模式仅使用视觉相机。
 
+服务初始化完成后会打开 Tkinter 比赛窗口。窗口是普通桌面窗口，不使用独占全屏、置顶或隐藏鼠标；可最小化、最大化、调整尺寸和通过 Alt+Tab 切换。
+
 ## 配置与运行
 
 在 `main.py` 顶部配置 `SERIAL_PORT`、`SERIAL_BAUDRATE`、`CAMERA_QR_DEVICE`、`CAMERA_VISION_DEVICE` 和 `DEFAULT_PERIOD_MS`。摄像头使用设备路径配置，例如：
@@ -44,10 +46,18 @@ PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python -m pytest te
 PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python main.py
 ```
 
+可单独预览界面，不会访问串口、相机或模型：
+
+```bash
+PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python scripts/gui_preview.py
+```
+
 安装后，视觉代码以顶层包 `vision` 导入，协议代码以顶层包 `protocol` 导入。
 `src` 是源码目录，不应作为包名使用；不要运行 `python -m src.vision.advance_yolo`。
 
 二维码命令为 `CMD_START_QR = 0x05`，结果命令为 `CMD_QR_RESULT = 0x84`。二维码结果 Payload 只包含任务码本身，必须严格为 15 个 ASCII 字节，例如 `156+123+516+231`；不包含长度、结束符、状态或换行。
+
+比赛开始命令为 `CMD_COMPETITION_START = 0x10`，由用户点击“开始比赛”后以 session `0`、空 Payload 发送。发送成功后界面进入运行页并开始计时，此时任务码为空属于正常行为。二维码识别仍只由 STM32 后续的 `0x05` 命令触发；确认得到合法任务码后，Jetson 继续发送 `0x84`，并在窗口中保留显示该任务码。正确抓取和正确放置统计当前固定显示 `0 / 6`，尚未接入 STM32。
 
 高级二维码检测在最近 5 帧中确认同一码至少 3 次，仅在首次确认、任务码变更或已消失任务码再次出现时上报一次。短暂漏检不会解除锁存，连续 5 帧未识别到合法任务码后才重新布防。
 

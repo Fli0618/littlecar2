@@ -11,6 +11,7 @@ from protocol.commands import (
     ACK_OK,
     CMD_ACK,
     CMD_COLOR_RESULT,
+    CMD_COMPETITION_START,
     CMD_QR_RESULT,
     CMD_START_COLOR,
     CMD_START_QR,
@@ -151,3 +152,49 @@ def test_qr_camera_and_detector_failures_do_not_exit(monkeypatch):
     monkeypatch.setattr(main, "advance_detect_qr", lambda frame: (_ for _ in ()).throw(RuntimeError("detector")))
     main.run_detection(port, {"qr": qr_camera, "vision": Camera()}, state, 0.002)
     assert port.output == b"" and qr_camera.reads == 1
+
+
+def test_start_competition_sends_once_and_allows_retry_after_write_failure():
+    class Gui:
+        def __init__(self):
+            self.running = 0
+            self.elapsed = []
+
+        def show_running_page(self):
+            self.running += 1
+
+        def set_elapsed(self, seconds):
+            self.elapsed.append(seconds)
+
+    class FailingPort(Port):
+        def write(self, data):
+            raise OSError("serial unavailable")
+
+    gui, state = Gui(), main.make_service_state()
+    assert not main.start_competition(FailingPort(), state, gui, 1.0)
+    assert not state.get("competition_started", False)
+
+    port = Port()
+    assert main.start_competition(port, state, gui, 2.0)
+    assert main.start_competition(port, state, gui, 3.0)
+    assert frames(port) == [(CMD_COMPETITION_START, 0, b"")]
+    assert gui.running == 1 and gui.elapsed == [0]
+
+
+def test_qr_result_updates_gui_once_and_keeps_previous_value_after_missing(monkeypatch):
+    port, state = Port(), main.make_service_state()
+    state.update(mode=CMD_START_QR, session=4, period_ms=1, last_run=-1.0)
+    qr_camera = Camera(reads=[object(), object()])
+    code = "156+123+516+231"
+    results = iter([
+        {"raw_code": code, "code": code, "status": "FIRST_DETECTED"},
+        {"raw_code": None, "code": None, "status": "MISSING"},
+    ])
+    updates = []
+    monkeypatch.setattr(main, "advance_detect_qr", lambda frame: next(results))
+
+    main.run_detection(port, {"qr": qr_camera, "vision": Camera()}, state, 0.0, updates.append)
+    main.run_detection(port, {"qr": qr_camera, "vision": Camera()}, state, 0.002, updates.append)
+
+    assert updates == [code]
+    assert frames(port) == [(CMD_QR_RESULT, 4, code.encode("ascii"))]

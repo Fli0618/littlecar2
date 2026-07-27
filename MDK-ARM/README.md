@@ -146,6 +146,7 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 - 默认周期：`DETECT_DEFAULT_PERIOD_MS`，默认 40 ms。每次 START 递增 SESSION，模块丢弃旧会话、错误 CRC 和模式不匹配的数据。
 - 数据边界：仅缓存最新结果，`detect_get_targets()` 与 `detect_get_disk_center()` 成功读取未消费的新数据时返回 1；最多缓存 8 个目标。目标包含模型 `class_id`、像素中心、置信度、`measured` 与 `support_count`；盘中心包含状态、坐标、支持点数和 `measured_count`。
 - 二维码：`detect_qr_read_blocking()` 启动一次 QR 会话并等待固定 15 字节 ASCII 任务码；等待由 `CommJetson_Update()` 在 TIM6 中推进，超时为本地 2000 ms，不在 Blocking 循环中主动轮询 UART。
+- 比赛启动：Jetson 使用 `0x10`、session `0`、空 Payload 发送启动请求。`CommJetson_TakeCompetitionStart()` 消费该请求，`main.c` 每次上电仅调用一次 `App_RunTask()`；该命令不参与视觉 session 校验。
 - 安全规则：盘中心零支持点固定为无目标和 `(0, 0)`，业务层不得仅凭预测结果判定到达。
 - 回调与调度接口：`CommJetson_Init()`、`CommJetson_Update()`、`CommJetson_OnUartRxEvent()`、`CommJetson_OnUartError()` 和 `CommJetson_OnUartTxComplete()` 仅供 `main.c` 的 USART6 初始化、TIM6 调度和 HAL 回调分发使用。
 

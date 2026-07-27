@@ -9,6 +9,7 @@
 #define COMM_JETSON_CMD_DISK_START ((uint8_t)0x03U)
 #define COMM_JETSON_CMD_STOP ((uint8_t)0x04U)
 #define COMM_JETSON_CMD_QR_START ((uint8_t)0x05U)
+#define COMM_JETSON_CMD_COMPETITION_START ((uint8_t)0x10U)
 #define COMM_JETSON_CMD_ACK ((uint8_t)0x80U)
 #define COMM_JETSON_CMD_COLOR_RESULT ((uint8_t)0x81U)
 #define COMM_JETSON_CMD_CIRCLE_RESULT ((uint8_t)0x82U)
@@ -41,6 +42,7 @@ static volatile Detect_Status_t g_ack_status;
 static volatile uint32_t g_last_result_tick;
 static volatile uint8_t g_qr_waiting;
 static volatile Detect_Status_t g_qr_wait_status;
+static volatile uint8_t g_competition_start_pending;
 static uint32_t g_qr_wait_started_tick;
 
 static uint16_t CommJetson_Crc16(const uint8_t *data, uint16_t size)
@@ -252,7 +254,16 @@ static void CommJetson_HandleFrame(const uint8_t *frame, uint16_t frame_size)
   const uint8_t *payload = &frame[5];
   uint16_t received_crc = (uint16_t)frame[frame_size - 2U] | ((uint16_t)frame[frame_size - 1U] << 8U);
 
-  if ((CommJetson_Crc16(&frame[2], (uint16_t)(3U + length)) != received_crc) || (frame[3] != g_session))
+  if (CommJetson_Crc16(&frame[2], (uint16_t)(3U + length)) != received_crc)
+  {
+    return;
+  }
+  if ((command == COMM_JETSON_CMD_COMPETITION_START) && (length == 0U))
+  {
+    g_competition_start_pending = 1U;
+    return;
+  }
+  if (frame[3] != g_session)
   {
     return;
   }
@@ -326,9 +337,20 @@ void CommJetson_Init(UART_HandleTypeDef *huart)
   g_qr_waiting = 0U;
   g_qr_wait_status = DETECT_STATUS_OK;
   g_qr_wait_started_tick = 0U;
+  g_competition_start_pending = 0U;
   CommJetson_ClearResults();
   CommJetson_ClearAck();
   CommJetson_StartRx();
+}
+
+uint8_t CommJetson_TakeCompetitionStart(void)
+{
+  if (g_competition_start_pending == 0U)
+  {
+    return 0U;
+  }
+  g_competition_start_pending = 0U;
+  return 1U;
 }
 
 void CommJetson_Update(void)
