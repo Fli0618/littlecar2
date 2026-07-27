@@ -47,6 +47,36 @@ void AdvanceTest_BlockingMain(void);
  */
 void AdvanceTest_ScrewMotor(uint8_t id, bool is_x);
 
+/**
+ * @brief 测试底盘电机正反转方向是否与底盘约定一致。
+ */
+void Test_Chassis_Sign(void);
+
+/**
+ * @brief 测试 Chassis_SetBodyVelocityEx 的常用车体速度组合。
+ */
+void Test_Chassis_SetBodyVelocityEx(void);
+
+/**
+ * @brief 测试 Chassis_MoveMecanumEx 的常用麦克纳姆轮速度组合。
+ */
+void Test_Chassis_MoveMecanumEx(void);
+
+/**
+ * @brief 测试 AdvanceMotion_SetWorldVelocityEx 的世界坐标系速度控制。
+ */
+void Test_Motion_SetWorldVelocityEx(void);
+
+/**
+ * @brief 测试 AdvanceMotion_GotoPoseBlocking 的位置到点动作。
+ */
+void Test_Motion_GotoPoseBlocking(void);
+
+/**
+ * @brief 测试 AdvanceMotion_GotoPoseEx 的航向到点与取消动作。
+ */
+void Test_Motion_GotoPoseYawAndCancel(void);
+
 #ifdef __cplusplus
 }
 #endif
