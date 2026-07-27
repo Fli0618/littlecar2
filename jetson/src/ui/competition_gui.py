@@ -134,7 +134,7 @@ class CompetitionGUI:
             return
         canvas.delete("all")
 
-        reserved_top, reserved_bottom, reserved_side = 84, 110, 108
+        reserved_top, reserved_bottom, reserved_side = 84, 110, 220
         scale = min((width - reserved_side * 2) / 2400, (height - reserved_top - reserved_bottom) / 2400)
         field_size = 2400 * scale
         left = (width - field_size) / 2
@@ -153,6 +153,20 @@ class CompetitionGUI:
         def line(x1: float, y1: float, x2: float, y2: float, **options: object) -> int:
             return canvas.create_line(*point(x1, y1), *point(x2, y2), **options)
 
+        def horizontal_dimension(x1: float, x2: float, edge_y: float, dimension_y: float, label: str) -> None:
+            """绘制与水平边界端点对齐的尺寸线及延长线。"""
+            line(x1, edge_y, x1, dimension_y, fill=DIMENSION_COLOR, width=1)
+            line(x2, edge_y, x2, dimension_y, fill=DIMENSION_COLOR, width=1)
+            line(x1, dimension_y, x2, dimension_y, fill=DIMENSION_COLOR, width=2, arrow="both")
+            text((x1 + x2) / 2, dimension_y - 70, label, 18, fill=DIMENSION_COLOR)
+
+        def vertical_dimension(y1: float, y2: float, edge_x: float, dimension_x: float, label: str) -> None:
+            """绘制与垂直边界端点对齐的尺寸线及延长线。"""
+            line(edge_x, y1, dimension_x, y1, fill=DIMENSION_COLOR, width=1)
+            line(edge_x, y2, dimension_x, y2, fill=DIMENSION_COLOR, width=1)
+            line(dimension_x, y1, dimension_x, y2, fill=DIMENSION_COLOR, width=2, arrow="both")
+            text(dimension_x + 75, (y1 + y2) / 2, label, 16, fill=DIMENSION_COLOR, angle=90)
+
         rectangle(0, 0, 2400, 2400, fill=FIELD_SURFACE_COLOR, outline="#666666", width=2)
         for x1, y1 in ((550, 500), (1400, 500), (550, 1450), (1400, 1450)):
             rectangle(x1, y1, x1 + 450, y1 + 450, fill=FIELD_PLATFORM_COLOR, outline="")
@@ -161,6 +175,10 @@ class CompetitionGUI:
         line(0, 1200, 2400, 1200, fill="#5B5B5B", width=2, dash=(18, 12))
         for x, y in ((2250, 150), (2250, 2250)):
             rectangle(x - 150, y - 150, x + 150, y + 150, fill=START_ZONE_COLOR, outline="")
+
+        # 白色底板使暂存区和粗加工区的同心圆与场地底色清晰区分。
+        rectangle(0, 950, 155, 1450, fill=TEXT_COLOR, outline="")
+        rectangle(960, 2250, 1440, 2400, fill=TEXT_COLOR, outline="")
 
         source_x, source_y = point(1200, 0)
         radius = 140 * scale
@@ -182,21 +200,12 @@ class CompetitionGUI:
         text(2100, 420, "启停区1", 20)
         text(2100, 1980, "启停区2", 20)
 
-        dimension = {"fill": DIMENSION_COLOR, "width": 2, "arrow": "both"}
-        line(0, 2575, 2400, 2575, **dimension)
-        text(1200, 2650, "2400", 18, fill=DIMENSION_COLOR)
-        line(1000, 420, 1400, 420, **dimension)
-        text(1200, 350, "400", 18, fill=DIMENSION_COLOR)
-        line(550, 1080, 1000, 1080, **dimension)
-        text(775, 1010, "450", 18, fill=DIMENSION_COLOR)
-        line(1950, 60, 2250, 60, **dimension)
-        text(2100, 120, "300", 18, fill=DIMENSION_COLOR)
-        line(2460, 0, 2460, 2400, **dimension)
-        text(2545, 1200, "2400", 18, fill=DIMENSION_COLOR, angle=90)
-        line(-70, 0, -70, 150, **dimension)
-        text(-145, 75, "150", 16, fill=DIMENSION_COLOR, angle=90)
-        line(2525, 0, 2525, 1200, **dimension)
-        text(2610, 600, "1100-1300", 16, fill=DIMENSION_COLOR, angle=90)
+        horizontal_dimension(0, 2400, 2400, 2525, "2400")
+        horizontal_dimension(1000, 1400, 500, 420, "400")
+        horizontal_dimension(550, 1000, 950, 1020, "450")
+        horizontal_dimension(2100, 2400, 0, -100, "300×300")
+        vertical_dimension(0, 2400, 2400, 2480, "2400")
+        vertical_dimension(0, 1200, 2400, 2560, "1100-1300")
 
     def _pick_font(self, *preferred_fonts: str) -> str:
         available = set(tkfont.families(self.root))
