@@ -255,6 +255,7 @@ def main() -> None:
         return started
 
     def service_tick() -> None:
+        # 场地标注页只改变 GUI 视图；服务轮询始终持续运行。
         try:
             poll_commands(port, state)
             run_detection(port, cameras, state, time.monotonic(), gui.set_task_code)

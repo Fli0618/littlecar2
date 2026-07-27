@@ -21,21 +21,28 @@ class Widget:
     def configure(self, **kwargs):
         self.options.update(kwargs)
 
+    def focus_set(self):
+        self.calls.append(("focus_set", {}))
+
 
 def make_gui():
     gui = CompetitionGUI.__new__(CompetitionGUI)
     gui._start_frame = Widget()
     gui._running_frame = Widget()
+    gui._field_frame = Widget()
+    gui._field_canvas = Widget()
     gui._task_code = Widget()
     gui._count_values = [Widget(), Widget(), Widget()]
     gui._start_clicked = False
     gui._start_callback = None
+    gui._draw_field_annotation = lambda: None
     return gui
 
 
 def test_pages_switch_and_running_values_update():
     gui = make_gui()
     gui.show_start_page()
+    gui.show_field_page()
     gui.show_running_page()
     gui.set_task_code("156+123+516+231")
     gui.set_counts(1, 2)
@@ -45,6 +52,19 @@ def test_pages_switch_and_running_values_update():
     assert [value.options["text"] for value in gui._count_values] == ["1 / 6", "2 / 6", "01:05"]
     assert gui._start_frame.calls[-1][0] == "pack_forget"
     assert gui._running_frame.calls[-1][0] == "pack"
+    assert gui._field_frame.calls[-1][0] == "pack_forget"
+
+
+def test_field_page_returns_without_starting_competition():
+    gui = make_gui()
+    calls = []
+    gui.set_start_callback(lambda: calls.append("started") or True)
+    gui.show_field_page()
+    gui.show_start_page()
+
+    assert calls == []
+    assert gui._field_frame.calls[-1][0] == "pack_forget"
+    assert gui._start_frame.calls[-1][0] == "pack"
 
 
 def test_start_callback_locks_after_success_and_allows_retry_after_failure():
