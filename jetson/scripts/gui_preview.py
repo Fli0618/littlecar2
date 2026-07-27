@@ -28,6 +28,7 @@ def main() -> None:
         return True
 
     gui.set_start_callback(start_preview)
+    root.bind("<F2>", lambda _event: gui.show_field_page())
     gui.run()
 
 
