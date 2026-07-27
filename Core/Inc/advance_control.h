@@ -5,6 +5,10 @@
 extern "C" {
 #endif
 
+#include "advance_chassis.h"
+
+// 底盘控制器控制权，这个是给视觉控制来用的
+
 typedef enum
 {
   ADVANCE_CONTROL_NONE = 0U, /**< 无底盘控制器持有控制权。 */

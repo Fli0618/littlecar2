@@ -1,7 +1,5 @@
 #include "advance_chassis.h"
 
-#include "drive_emm.h"
-
 #define CHASSIS_PI (3.14159265358979323846f)
 
 typedef struct

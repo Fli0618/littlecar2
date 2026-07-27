@@ -7,6 +7,9 @@ extern "C"
 #endif
 
 #include <stdint.h>
+#include "advance_chassis.h"
+#include "advance_control.h"
+#include "comm_jetson.h"
 
 /* 默认视觉图像尺寸；三组参考点可在后续标定时分别改为独立像素值。 */
 #define ADVANCE_VISUAL_IMAGE_WIDTH ((int16_t)640)

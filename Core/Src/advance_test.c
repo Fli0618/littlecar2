@@ -388,3 +388,233 @@ void AdvanceTest_ScrewMotor(uint8_t id, bool is_x)
   drive_emm_Stop_Now(id, false);
   HAL_Delay(1000U);
 }
+
+/* 依赖顺序：
+// 以下头文件按照依赖顺序进行排列
+// 驱动类
+#include "drive_emm.h"
+#include "drive_bus_servo.h"
+
+// 通信类
+#include "comm_jetson.h" // 不依赖前者
+
+// 传感器
+#include "sensor_ops.h"
+#include "sensor_wit.h"
+#include "sensor_limit.h"
+#include "advance_world.h" // 依赖ops和wit，提供世界坐标数据
+
+// 高级动作类（依赖于驱动和传感器）
+// 整车运动
+#include "advance_chassis.h" 
+#include "advance_motion.h"
+#include "advance_control.h" // 依赖advance_chassis
+#include "advance_visual.h" // 依赖comm_jetson、advance_chassis
+
+// 机械臂运动
+#include "advance_arm.h"
+
+*/
+
+
+// ----------------------------------------------------------------------------------
+// CHASSIS TEST
+// chassis 需要设置相关车长、轮子相关数据，请进行标定
+
+/**
+ * @brief 测试底盘电机正反转方向是否与底盘约定一致。
+ */
+void Test_Chassis_Sign(void)
+{
+  printf("[TEST] chassis sign test\r\n");
+  Chassis_Enable(true);
+  HAL_Delay(1000);
+
+  Chassis_SetMotorRPMEx(200, 200, 200, 200, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+  Chassis_SetMotorRPMEx(-200, -200, -200, -200, 50);
+  HAL_Delay(1000);
+  Chassis_SmoothStop(50);
+  HAL_Delay(1000);
+}
+
+/**
+ * @brief  Chassis_SetBodyVelocityEx(float vx_right_mm_s, float vy_forward_mm_s, float wz_ccw_deg_s, uint8_t acc);
+ */
+void Test_Chassis_SetBodyVelocityEx(void)
+{
+  printf("[TEST] chassis SetBodyVelocityEx test\r\n");
+  Chassis_Enable(true);
+  HAL_Delay(1000);
+
+  // 预期：车体向右移动，其他方向不动
+  Chassis_SetBodyVelocityEx(200.0f, 0.0f, 0.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+
+  // 预期：车体向前移动，其他方向不动
+  Chassis_SetBodyVelocityEx(0.0f, 200.0f, 0.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+
+  // 预期：车体逆时针旋转，其他方向不动
+  Chassis_SetBodyVelocityEx(0.0f, 0.0f, 90.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+
+  // 预期：车体顺时针旋转，其他方向不动
+  Chassis_SetBodyVelocityEx(0.0f, 0.0f, -90.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+
+  // 预期：车体向右移动并逆时针旋转，其他方向不动
+  Chassis_SetBodyVelocityEx(200.0f, 0.0f, 90.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+}
+
+/**
+ * @brief  Chassis_MoveMecanumEx(int16_t forward_rpm, int16_t strafe_rpm, int16_t wz_ccw_rpm, uint8_t acc);
+ */
+void Test_Chassis_MoveMecanumEx(void)
+{ 
+  printf("[TEST] chassis MoveMecanumEx test\r\n");
+  Chassis_Enable(true);
+  HAL_Delay(1000);
+
+  // 预期：车体向右移动并逆时针旋转，其他方向不动
+  Chassis_MoveMecanumEx(0.0, 200.0f, 90.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+
+  // 预期：车体向前并向左运动，其他方向不动
+  Chassis_MoveMecanumEx(200.0f, -200.0f, 0.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+}
+
+// ----------------------------------------------------------------------------------
+// MOTION TEST
+// motion 依赖世界坐标数据，请确认 OPS、WIT 已正常更新且世界原点已建立
+
+/**
+ * @brief 测试 AdvanceMotion_SetWorldVelocityEx 的世界坐标系速度控制。
+ */
+void Test_Motion_SetWorldVelocityEx(void)
+{
+  AdvanceMotion_Status_t status;
+
+  printf("[TEST] motion SetWorldVelocityEx test\r\n");
+  AdvanceMotion_Init();
+  AdvanceControl_SetMode(ADVANCE_CONTROL_NONE);
+  Chassis_Enable(true);
+  HAL_Delay(1000);
+
+  // 预期：车体沿世界坐标系 X 轴正方向运动，航向角保持不变
+  status = AdvanceMotion_SetWorldVelocityEx(150.0f, 0.0f, 0.0f, 50);
+  printf("[TEST] motion world velocity x status=%d\r\n", (int)status);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+
+  // 预期：车体沿世界坐标系 Y 轴负方向运动并顺时针旋转
+  status = AdvanceMotion_SetWorldVelocityEx(0.0f, -150.0f, -45.0f, 50);
+  printf("[TEST] motion world velocity y status=%d\r\n", (int)status);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  Chassis_Enable(false);
+}
+
+/**
+ * @brief 测试 AdvanceMotion_GotoPoseBlocking 的位置到点动作。
+ */
+void Test_Motion_GotoPoseBlocking(void)
+{
+  AdvanceWorld_Status_t world_status;
+  AdvanceMotion_RunState_t state;
+  WorldPose2D_t pose;
+  WorldGoalPose2D_t goal;
+
+  printf("[TEST] motion GotoPoseBlocking test\r\n");
+  AdvanceMotion_Init();
+  AdvanceControl_SetMode(ADVANCE_CONTROL_NONE);
+  Chassis_Enable(true);
+  HAL_Delay(1000);
+
+  world_status = AdvanceWorld_GetPoseCopy(&pose);
+  if (world_status != ADVANCE_WORLD_STATUS_OK)
+  {
+    printf("[TEST] motion pose unavailable status=%d\r\n", (int)world_status);
+    Chassis_Enable(false);
+    return;
+  }
+
+  // 预期：车体保持当前航向，移动至世界坐标系 X 轴正方向 300mm 处
+  goal.x_mm = pose.x_mm + 300.0f;
+  goal.y_mm = pose.y_mm;
+  goal.yaw_deg = pose.yaw_deg;
+  goal.vmax_mm_s = 150.0f;
+  goal.wmax_deg_s = 0.0f;
+  goal.timeout_ms = 10000U;
+  goal.goal_flags = 0U;
+  state = AdvanceMotion_GotoPoseBlocking(&goal, 50);
+  printf("[TEST] motion goto position state=%d\r\n", (int)state);
+  Chassis_Stop();
+  Chassis_Enable(false);
+}
+
+/**
+ * @brief 测试 AdvanceMotion_GotoPoseEx 的航向到点与取消动作。
+ */
+void Test_Motion_GotoPoseYawAndCancel(void)
+{
+  AdvanceWorld_Status_t world_status;
+  AdvanceMotion_RuntimeStatus_t motion_status;
+  AdvanceMotion_Status_t status;
+  WorldPose2D_t pose;
+  WorldGoalPose2D_t goal;
+
+  printf("[TEST] motion GotoPoseYawAndCancel test\r\n");
+  AdvanceMotion_Init();
+  AdvanceControl_SetMode(ADVANCE_CONTROL_NONE);
+  Chassis_Enable(true);
+  HAL_Delay(1000);
+
+  world_status = AdvanceWorld_GetPoseCopy(&pose);
+  if (world_status != ADVANCE_WORLD_STATUS_OK)
+  {
+    printf("[TEST] motion pose unavailable status=%d\r\n", (int)world_status);
+    Chassis_Enable(false);
+    return;
+  }
+
+  // 预期：车体保持当前位置，逆时针旋转 45 度后到点
+  goal.x_mm = pose.x_mm;
+  goal.y_mm = pose.y_mm;
+  goal.yaw_deg = AdvanceWorld_WrapAngleDeg(pose.yaw_deg + 45.0f);
+  goal.vmax_mm_s = 0.0f;
+  goal.wmax_deg_s = 45.0f;
+  goal.timeout_ms = 10000U;
+  goal.goal_flags = ADVANCE_MOTION_GOAL_USE_YAW;
+  status = AdvanceMotion_GotoPoseEx(&goal, 50);
+  printf("[TEST] motion goto yaw status=%d\r\n", (int)status);
+  HAL_Delay(500);
+
+  // 预期：取消当前到点任务，底盘停止且状态变为 CANCELED
+  AdvanceMotion_CancelIfActive();
+  status = AdvanceMotion_GetStatus(&motion_status);
+  printf("[TEST] motion cancel status=%d state=%d\r\n", (int)status, (int)motion_status.state);
+  Chassis_Stop();
+  Chassis_Enable(false);
+}
+
+// ----------------------------------------------------------------------------------
