@@ -8,6 +8,7 @@ extern "C"
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "drive_emm.h"
 
 /*
  * 四个电机地址在这里配置，用于匹配 ZDT 驱动器实际 ID。
@@ -84,9 +85,10 @@ extern "C"
     void Chassis_SetMotorRPMEx(int16_t lf_rpm, int16_t rf_rpm, int16_t lr_rpm, int16_t rr_rpm, uint8_t acc);
 
     /*
-     * Set chassis velocity with physical units.
-     * vx_right_mm_s > 0: move right; vy_forward_mm_s > 0: move forward.
-     * wz_ccw_deg_s > 0: rotate counter-clockwise when viewed from above.
+     * 输入速度为 mm/s 和度/s，会转换为电机 RPM。
+     * 输入速度超出范围时，会进行限速。
+     * vx_right_mm_s > 0：向右移动；vy_forward_mm_s > 0：向前移动
+     * wz_ccw_deg_s > 0：从上往下看（俯视）时逆时针旋转。
      */
     void Chassis_SetBodyVelocityEx(float vx_right_mm_s, float vy_forward_mm_s, float wz_ccw_deg_s, uint8_t acc);
 

@@ -1,11 +1,5 @@
 #include "advance_motion.h"
 
-#include "advance_chassis.h"
-#include "advance_control.h"
-#include "advance_world.h"
-#include "main.h"
-#include <math.h>
-
 typedef struct
 {
   uint32_t arrive_hold_start_tick;

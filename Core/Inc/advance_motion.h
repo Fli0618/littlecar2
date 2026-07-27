@@ -7,7 +7,11 @@ extern "C"
 #endif
 
 #include <stdint.h>
+#include "advance_chassis.h"
+#include "advance_control.h"
 #include "advance_world.h"
+#include "main.h"
+#include <math.h>
 
 #define ADVANCE_MOTION_POSE_TIMEOUT_MS ((uint32_t)100U) /*!< 位姿数据超时时间，单位为 ms。 */
 #define ADVANCE_MOTION_YAW_TIMEOUT_MS ((uint32_t)100U) /*!< 航向角数据超时时间，单位为 ms。 */

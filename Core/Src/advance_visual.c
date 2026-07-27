@@ -1,9 +1,5 @@
 #include "advance_visual.h"
 
-#include "advance_chassis.h"
-#include "advance_control.h"
-#include "comm_jetson.h"
-
 typedef enum
 {
   ADVANCE_VISUAL_FRAME_NONE = 0U,

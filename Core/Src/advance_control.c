@@ -1,7 +1,5 @@
 #include "advance_control.h"
 
-#include "advance_chassis.h"
-
 /* 唯一的底盘控制权状态；周期控制器和顺序业务都只通过本模块访问。 */
 static volatile AdvanceControl_Mode_t g_control_mode = ADVANCE_CONTROL_NONE;
 

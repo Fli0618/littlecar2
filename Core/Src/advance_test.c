@@ -388,3 +388,118 @@ void AdvanceTest_ScrewMotor(uint8_t id, bool is_x)
   drive_emm_Stop_Now(id, false);
   HAL_Delay(1000U);
 }
+
+/* 依赖顺序：
+// 以下头文件按照依赖顺序进行排列
+// 驱动类
+#include "drive_emm.h"
+#include "drive_bus_servo.h"
+
+// 通信类
+#include "comm_jetson.h" // 不依赖前者
+
+// 传感器
+#include "sensor_ops.h"
+#include "sensor_wit.h"
+#include "sensor_limit.h"
+#include "advance_world.h" // 依赖ops和wit，提供世界坐标数据
+
+// 高级动作类（依赖于驱动和传感器）
+// 整车运动
+#include "advance_chassis.h" 
+#include "advance_motion.h"
+#include "advance_control.h" // 依赖advance_chassis
+#include "advance_visual.h" // 依赖comm_jetson、advance_chassis
+
+// 机械臂运动
+#include "advance_arm.h"
+
+*/
+
+
+// ----------------------------------------------------------------------------------
+// CHASIS TEST
+// chasis 需要设置相关车长、轮子相关数据，请进行标定
+
+/**
+ * @brief 测试底盘电机正反转方向是否与底盘约定一致。
+ */
+void Test_Chasis_sign(void)
+{
+  printf("[TEST] chasis sign test\r\n");
+  Chassis_Enable(true);
+  HAL_Delay(1000);
+
+  Chassis_SetMotorRPMEx(200, 200, 200, 200, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+  Chassis_SetMotorRPMEx(-200, -200, -200, -200, 50);
+  HAL_Delay(1000);
+  Chassis_SmoothStop(50);
+  HAL_Delay(1000);
+}
+
+/**
+ * @brief  Chassis_SetBodyVelocityEx(float vx_right_mm_s, float vy_forward_mm_s, float wz_ccw_deg_s, uint8_t acc);
+ */
+void Test_Chasis_SetBodyVelocityEx(void)
+{
+  printf("[TEST] chasis SetBodyVelocityEx test\r\n");
+  Chassis_Enable(true);
+  HAL_Delay(1000);
+
+  // 预期：车体向右移动，其他方向不动
+  Chassis_SetBodyVelocityEx(200.0f, 0.0f, 0.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+
+  // 预期：车体向前移动，其他方向不动
+  Chassis_SetBodyVelocityEx(0.0f, 200.0f, 0.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+
+  // 预期：车体逆时针旋转，其他方向不动
+  Chassis_SetBodyVelocityEx(0.0f, 0.0f, 90.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+
+  // 预期：车体顺时针旋转，其他方向不动
+  Chassis_SetBodyVelocityEx(0.0f, 0.0f, -90.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+
+  // 预期：车体向右移动并逆时针旋转，其他方向不动
+  Chassis_SetBodyVelocityEx(200.0f, 0.0f, 90.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+}
+
+/**
+ * @brief  Chassis_MoveMecanumEx(int16_t forward_rpm, int16_t strafe_rpm, int16_t wz_ccw_rpm, uint8_t acc);
+ */
+void Test_Chasis_MoveMecanumEx(void)
+{ 
+  printf("[TEST] chasis MoveMecanumEx test\r\n");
+  Chassis_Enable(true);
+  HAL_Delay(1000);
+
+  // 预期：车体向右移动并逆时针旋转，其他方向不动
+  Chassis_MoveMecanumEx(0.0, 200.0f, 90.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+
+  // 预期：车体向前并向左运动，其他方向不动
+  Chassis_MoveMecanumEx(200.0f, -200.0f, 0.0f, 50);
+  HAL_Delay(1000);
+  Chassis_Stop();
+  HAL_Delay(1000);
+}
+
+// ----------------------------------------------------------------------------------
