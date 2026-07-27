@@ -146,6 +146,7 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 - 默认周期：`DETECT_DEFAULT_PERIOD_MS`，默认 40 ms。每次 START 递增 SESSION，模块丢弃旧会话、错误 CRC 和模式不匹配的数据。
 - 数据边界：仅缓存最新结果，`detect_get_targets()` 与 `detect_get_disk_center()` 成功读取未消费的新数据时返回 1；最多缓存 8 个目标。目标包含模型 `class_id`、像素中心、置信度、`measured` 与 `support_count`；盘中心包含状态、坐标、支持点数和 `measured_count`。
 - 二维码：`detect_qr_read_blocking()` 启动一次 QR 会话并等待固定 15 字节 ASCII 任务码；等待由 `CommJetson_Update()` 在 TIM6 中推进，超时为本地 2000 ms，不在 Blocking 循环中主动轮询 UART。
+- 比赛启动：Jetson 使用 `0x10`、session `0`、空 Payload 发送启动请求。`CommJetson_TakeCompetitionStart()` 消费该请求，`main.c` 每次上电仅调用一次 `App_RunTask()`；该命令不参与视觉 session 校验。
 - 安全规则：盘中心零支持点固定为无目标和 `(0, 0)`，业务层不得仅凭预测结果判定到达。
 - 回调与调度接口：`CommJetson_Init()`、`CommJetson_Update()`、`CommJetson_OnUartRxEvent()`、`CommJetson_OnUartError()` 和 `CommJetson_OnUartTxComplete()` 仅供 `main.c` 的 USART6 初始化、TIM6 调度和 HAL 回调分发使用。
 
@@ -219,20 +220,7 @@ TIM6 以 1 ms 为唯一周期入口：每 1 ms 推进 Jetson 通信状态，每 
 - `docs/坐标系与GotoPose使用说明.md`
 - `docs/底盘运动控制说明.md`
 
-## 10. 开发约束（重要）
-
-- **仅允许阅读和修改三个文件夹下的代码内容，`Core`、`jetson`、`MDK-ARM`**
-- 代码应写在 CubeMX 预留的 `USER CODE` 区域，避免再次生成代码时丢失。
-- 不得直接修改硬件配置；如需调整引脚、DMA、NVIC 或串口参数，应先说明需要用户在 CubeMX 中修改。
-- 外设驱动和业务流程必须分层，不要把流程动作直接写入底层协议模块。
-- 新增模块必须优先判断归属前缀：传感器用 `sensor_`，控制驱动用 `drive_`，高级方法用 `advance_`，通信用 `comm_`，车辆自身属性用 `car_`。
-- 每个目录下的说明文档需要随着模块演进同步更新。
-- 本工程通常不在 Codex 环境内编译，下位机运行由用户手动上板测试。
-- 代码编写保持简洁，优先实现用户指定的最小例程，不额外加入复杂验证链路。
-- Git 仓库根目录位于 `..\4-29\.git`。
-- 撰写代码的时候增加相关注释以说明相关方法、结构体的用途，方便后续维护。
-
-## 11. 比赛事项
+## 10. 比赛事项
  - 物料颜色：初赛物料颜色包括红色、黄色、蓝色、绿色、黑色、浅蓝等，每种颜色两个（现场比赛的物料可能会有一定色差，在一定范围内变化，参赛队应适应这种变化），编号如下：红色 1、黄色 2、蓝色 3、绿色 4、黑色 5、浅蓝 6
  - 任务码格式为“颜色顺序+放置位置+颜色顺序+放置位置”。其中，第1、3组表示两批物料的颜色及搬运顺序，第2、4组表示对应物料的放置圆环编号。例如“156+123+516+231”表示：第一批按红、黑、浅蓝顺序搬运，放到1、2、3号位；第二批按黑、红、浅蓝顺序搬运，放到2、3、1号位。
  - 任务流程（要求小车一键启动，中途不得干预）

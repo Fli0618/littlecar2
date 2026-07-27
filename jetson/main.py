@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 
 import cv2
 import numpy as np
@@ -14,6 +15,7 @@ from protocol.commands import (
     ACK_OK,
     CMD_ACK,
     CMD_CIRCLE_RESULT,
+    CMD_COMPETITION_START,
     CMD_COLOR_RESULT,
     CMD_DISK_CENTER_RESULT,
     CMD_QR_RESULT,
@@ -28,6 +30,7 @@ from protocol.commands import (
     TASK_CODE_LENGTH,
 )
 from protocol.frame import pack_frame, parse_frames
+from ui import CompetitionGUI
 from vision import (
     advance_detect_circle,
     advance_detect_color,
@@ -47,12 +50,20 @@ CAMERA_VISION_DEVICE = "/dev/video1"
 MODEL_BACKEND = "pt"  # "pt" or "engine"
 DEFAULT_PERIOD_MS = 40
 MAX_TARGETS = 8
-IDLE_SLEEP_SECONDS = 0.001
 MODEL_WARMUP_FRAME_SIZE = 640
+SERVICE_POLL_INTERVAL_MS = 1
+ELAPSED_UPDATE_INTERVAL_MS = 200
 
 
 def make_service_state() -> dict[str, object]:
-    return {"mode": 0, "session": 0, "period_ms": DEFAULT_PERIOD_MS, "last_run": float("-inf"), "rx": bytearray()}
+    return {
+        "mode": 0,
+        "session": 0,
+        "period_ms": DEFAULT_PERIOD_MS,
+        "last_run": float("-inf"),
+        "last_task_code": "",
+        "rx": bytearray(),
+    }
 
 
 def warmup_vision_models() -> None:
@@ -145,7 +156,13 @@ def _qr_payload(code: object) -> bytes | None:
     return payload if len(payload) == TASK_CODE_LENGTH else None
 
 
-def run_detection(port: object, cameras: dict[str, object], state: dict[str, object], now: float) -> None:
+def run_detection(
+    port: object,
+    cameras: dict[str, object],
+    state: dict[str, object],
+    now: float,
+    task_code_callback: Callable[[str], None] | None = None,
+) -> None:
     mode = int(state["mode"])
     if not mode or now - float(state["last_run"]) < int(state["period_ms"]) / 1000.0:
         return
@@ -176,7 +193,8 @@ def run_detection(port: object, cameras: dict[str, object], state: dict[str, obj
     if int(state["mode"]) != mode or int(state["session"]) != session:
         return
     if response == CMD_QR_RESULT:
-        payload = _qr_payload(result.get("code"))
+        code = result.get("code")
+        payload = _qr_payload(code)
         if payload is None:
             return
     elif response == CMD_DISK_CENTER_RESULT:
@@ -184,10 +202,30 @@ def run_detection(port: object, cameras: dict[str, object], state: dict[str, obj
     else:
         payload = _target_payload(result)
     port.write(pack_frame(response, session, payload))
+    if response == CMD_QR_RESULT and task_code_callback is not None and code != state["last_task_code"]:
+        task_code_callback(str(code))
+        state["last_task_code"] = code
+
+
+def start_competition(port: object, state: dict[str, object], gui: CompetitionGUI, now: float) -> bool:
+    """发送启动帧；串口写入成功后才切换比赛显示页面。"""
+    if bool(state.get("competition_started", False)):
+        return True
+    try:
+        port.write(pack_frame(CMD_COMPETITION_START, 0, b""))
+    except Exception as error:
+        print(f"competition start send failed: {error}", flush=True)
+        return False
+    state["competition_started"] = True
+    state["competition_started_at"] = now
+    gui.show_running_page()
+    gui.set_elapsed(0)
+    return True
 
 
 def main() -> None:
     import serial
+    import tkinter as tk
 
     configure_model_backend(MODEL_BACKEND)
     warmup_vision_models()
@@ -201,11 +239,34 @@ def main() -> None:
         port.close()
         raise RuntimeError(f"cannot open cameras qr={CAMERA_QR_DEVICE}, vision={CAMERA_VISION_DEVICE}")
     cameras = {"qr": qr_camera, "vision": vision_camera}
-    try:
-        while True:
+    root = tk.Tk()
+    gui = CompetitionGUI(root)
+
+    def update_elapsed() -> None:
+        started_at = state.get("competition_started_at")
+        if isinstance(started_at, float):
+            gui.set_elapsed(int(time.monotonic() - started_at))
+            root.after(ELAPSED_UPDATE_INTERVAL_MS, update_elapsed)
+
+    def on_start() -> bool:
+        started = start_competition(port, state, gui, time.monotonic())
+        if started:
+            update_elapsed()
+        return started
+
+    def service_tick() -> None:
+        try:
             poll_commands(port, state)
-            run_detection(port, cameras, state, time.monotonic())
-            time.sleep(IDLE_SLEEP_SECONDS)
+            run_detection(port, cameras, state, time.monotonic(), gui.set_task_code)
+        except Exception:
+            gui.close()
+            raise
+        root.after(SERVICE_POLL_INTERVAL_MS, service_tick)
+
+    gui.set_start_callback(on_start)
+    root.after(SERVICE_POLL_INTERVAL_MS, service_tick)
+    try:
+        gui.run()
     finally:
         reset_advance_tracking()
         reset_qr_tracking()

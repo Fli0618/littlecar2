@@ -85,6 +85,8 @@ uint8_t detect_is_fresh(uint32_t timeout_ms);
 
 /** 初始化 Jetson 通信模块并绑定 UART。 */
 void CommJetson_Init(UART_HandleTypeDef *huart);
+/** 获取并清除一次 Jetson 发起的比赛启动请求。 */
+uint8_t CommJetson_TakeCompetitionStart(void);
 /** @brief 由 TIM6 每 1 ms 调用，推进二维码等待和通信超时状态。 */
 void CommJetson_Update(void);
 /** 处理 UART 接收事件，并解析收到的数据。 */

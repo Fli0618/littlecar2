@@ -376,19 +376,26 @@ int main(void)
     HAL_Delay(100);
   }
 
-  App_RunTask();
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    /* USER CODE END WHILE */
 
-    /* USER CODE BEGIN 3 */
+  //比赛尚未开始时只等待 Jetson 的有效启动请求
+  while (CommJetson_TakeCompetitionStart() == 0U)
+  {
     __WFI();
   }
+  // 主流程
+  App_RunTask();
+  while (1)
+  {
+    __WFI();
+  }
+
+  /* USER CODE END WHILE */
+
+  /* USER CODE BEGIN 3 */
   /* USER CODE END 3 */
 }
 
