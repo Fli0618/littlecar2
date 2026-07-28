@@ -165,13 +165,23 @@ def detect_yolo(
     conf_thres: float = _CONFIDENCE_THRESHOLD,
     iou_thres: float = _IOU_THRESHOLD,
     device: str | None = None,
+    image_size: int = _IMAGE_SIZE,
 ) -> list[dict[str, Any]]:
     """低层 YOLO 推理兼容接口，供历史研究脚本使用。"""
     _validate_frame(frame_bgr)
     if not 0.0 <= conf_thres <= 1.0 or not 0.0 <= iou_thres <= 1.0:
         raise ValueError("conf_thres and iou_thres must be in [0, 1]")
+    if image_size <= 0:
+        raise ValueError("image_size must be greater than 0")
 
-    result = model.predict(source=frame_bgr, conf=conf_thres, iou=iou_thres, device=device, verbose=False)[0]
+    result = model.predict(
+        source=frame_bgr,
+        imgsz=image_size,
+        conf=conf_thres,
+        iou=iou_thres,
+        device=device,
+        verbose=False,
+    )[0]
     if result.boxes is None:
         return []
 
