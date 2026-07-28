@@ -344,16 +344,19 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
   {
     return ADVANCE_MOTION_STATUS_INVALID_PARAM;
   }
-  if ((AdvanceControl_GetMode() != ADVANCE_CONTROL_NONE) &&
-      (AdvanceControl_GetMode() != ADVANCE_CONTROL_WORLD))
+  if (g_motion_state == ADVANCE_MOTION_STATE_RUNNING)
   {
-    return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+    return ADVANCE_MOTION_STATUS_BUSY;
   }
 
   pose_status = AdvanceMotion_GetFreshPose(&pose);
   if (pose_status != ADVANCE_MOTION_STATUS_OK)
   {
     return pose_status;
+  }
+  if (AdvanceControl_SetMode(ADVANCE_CONTROL_WORLD) == 0U)
+  {
+    return ADVANCE_MOTION_STATUS_BUSY;
   }
 
   g_motion.goal = *goal;
@@ -368,14 +371,13 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
   g_motion.position_error_mm = 0.0f;
   g_motion.yaw_error_deg = 0.0f;
   g_motion_control.acc = acc;
-  AdvanceControl_SetMode(ADVANCE_CONTROL_WORLD);
   AdvanceMotion_SavePidPose(&g_motion.pose, g_motion.started_tick);
   g_motion_state = ADVANCE_MOTION_STATE_RUNNING;
   return ADVANCE_MOTION_STATUS_OK;
 }
 
 /* 启动目标后仅等待 TIM6 将运动状态推进到终态。 */
-AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(const WorldGoalPose2D_t *goal, uint8_t acc)
+AdvanceMotion_RunState_t AdvanceMotion_GotoGoalBlocking(const WorldGoalPose2D_t *goal, uint8_t acc)
 {
   AdvanceMotion_Status_t status;
 
@@ -391,6 +393,21 @@ AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(const WorldGoalPose2D_t 
   }
 
   return g_motion_state;
+}
+
+AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(float x_mm, float y_mm,
+                                                         float yaw_deg, uint8_t acc)
+{
+  WorldGoalPose2D_t goal = {
+      .x_mm = x_mm,
+      .y_mm = y_mm,
+      .yaw_deg = yaw_deg,
+      .vmax_mm_s = ADVANCE_MOTION_DEFAULT_VMAX_MM_S,
+      .wmax_deg_s = ADVANCE_MOTION_DEFAULT_WMAX_DEG_S,
+      .timeout_ms = ADVANCE_MOTION_DEFAULT_TIMEOUT_MS,
+      .goal_flags = ADVANCE_MOTION_GOAL_USE_YAW};
+
+  return AdvanceMotion_GotoGoalBlocking(&goal, acc);
 }
 
 /* 周期性读取世界位姿，计算误差并驱动到点控制状态机。 */

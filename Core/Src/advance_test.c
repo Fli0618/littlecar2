@@ -515,7 +515,6 @@ void Test_Motion_SetWorldVelocityEx(void)
 
   printf("[TEST] motion SetWorldVelocityEx test\r\n");
   AdvanceMotion_Init();
-  AdvanceControl_SetMode(ADVANCE_CONTROL_NONE);
   Chassis_Enable(true);
   HAL_Delay(1000);
 
@@ -546,7 +545,6 @@ void Test_Motion_GotoPoseBlocking(void)
 
   printf("[TEST] motion GotoPoseBlocking test\r\n");
   AdvanceMotion_Init();
-  AdvanceControl_SetMode(ADVANCE_CONTROL_NONE);
   Chassis_Enable(true);
   HAL_Delay(1000);
 
@@ -566,7 +564,7 @@ void Test_Motion_GotoPoseBlocking(void)
   goal.wmax_deg_s = 0.0f;
   goal.timeout_ms = 10000U;
   goal.goal_flags = 0U;
-  state = AdvanceMotion_GotoPoseBlocking(&goal, 50);
+  state = AdvanceMotion_GotoGoalBlocking(&goal, 50);
   printf("[TEST] motion goto position state=%d\r\n", (int)state);
   Chassis_Stop();
   Chassis_Enable(false);
@@ -585,7 +583,6 @@ void Test_Motion_GotoPoseYawAndCancel(void)
 
   printf("[TEST] motion GotoPoseYawAndCancel test\r\n");
   AdvanceMotion_Init();
-  AdvanceControl_SetMode(ADVANCE_CONTROL_NONE);
   Chassis_Enable(true);
   HAL_Delay(1000);
 

@@ -228,6 +228,13 @@ AdvanceVisual_State_t AdvanceVisual_AlignBlocking(AdvanceVisual_Mode_t mode, uin
     return g_visual_state;
   }
 
+  if (AdvanceControl_SetMode(ADVANCE_CONTROL_VISUAL) == 0U)
+  {
+    (void)detect_stop();
+    g_visual_state = ADVANCE_VISUAL_STATE_START_ERROR;
+    return g_visual_state;
+  }
+
   now_tick = HAL_GetTick();
   g_visual_mode = mode;
   g_target_type = target_type;
@@ -235,7 +242,6 @@ AdvanceVisual_State_t AdvanceVisual_AlignBlocking(AdvanceVisual_Mode_t mode, uin
   g_started_tick = now_tick;
   g_last_frame_tick = now_tick;
   g_last_target_tick = now_tick;
-  AdvanceControl_SetMode(ADVANCE_CONTROL_VISUAL);
   g_visual_state = ADVANCE_VISUAL_STATE_RUNNING;
 
   while (g_visual_state == ADVANCE_VISUAL_STATE_RUNNING)

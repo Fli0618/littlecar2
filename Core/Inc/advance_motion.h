@@ -34,6 +34,8 @@ extern "C"
 #define ADVANCE_MOTION_NO_PROGRESS_MIN_REDUCTION_MM (15.0f) /*!< 观察窗口内要求的最小误差下降量，单位为 mm。 */
 #define ADVANCE_MOTION_NO_PROGRESS_MIN_COMMAND_MM_S (30.0f) /*!< 启用无进展判定的最小线速度指令，单位为 mm/s。 */
 
+#define ADVANCE_MOTION_DEFAULT_TIMEOUT_MS ((uint32_t)10000U) /*!< default goal timeout in ms. */
+
 /*
  * GotoPose 输入边界。它们是软件安全限值，不替代现场的机械限位。
  * 修改前应确认场地尺寸、OPS 坐标单位和底盘的可制动距离。
@@ -54,7 +56,8 @@ extern "C"
     ADVANCE_MOTION_STATUS_INVALID_PARAM,
     ADVANCE_MOTION_STATUS_NO_ORIGIN,
     ADVANCE_MOTION_STATUS_NO_POSE,
-    ADVANCE_MOTION_STATUS_POSE_TIMEOUT
+    ADVANCE_MOTION_STATUS_POSE_TIMEOUT,
+    ADVANCE_MOTION_STATUS_BUSY
   } AdvanceMotion_Status_t;
 
   typedef enum
@@ -94,7 +97,10 @@ extern "C"
    * 外部通信控制应使用异步 AdvanceMotion_GotoPoseEx；本接口用于本地测试和固定顺序业务流程。
    * @return 最终 AdvanceMotion_RunState_t，不得从中断上下文调用。
    */
-  AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(const WorldGoalPose2D_t *goal, uint8_t acc);
+  AdvanceMotion_RunState_t AdvanceMotion_GotoGoalBlocking(const WorldGoalPose2D_t *goal, uint8_t acc);
+  /** @brief 使用默认速度、超时和航向约束阻塞执行到点运动。*/
+  AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(float x_mm, float y_mm,
+                                                           float yaw_deg, uint8_t acc);
   /** @brief 由 TIM6 按控制周期推进一次位姿导航控制器。 */
   void AdvanceMotion_Update(void);
   /** @brief 仅在存在活动目标时取消、释放控制权并停车。 */
