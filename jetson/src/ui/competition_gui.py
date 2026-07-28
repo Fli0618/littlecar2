@@ -6,6 +6,8 @@ import tkinter as tk
 import tkinter.font as tkfont
 from collections.abc import Callable
 
+from protocol.commands import START_AREA_1, START_AREA_2, VALID_START_AREAS
+
 WINDOW_WIDTH = 1600
 WINDOW_HEIGHT = 900
 TASK_CODE_FONT_SIZE = 150
@@ -28,7 +30,8 @@ class CompetitionGUI:
 
     def __init__(self, root: tk.Tk | None = None) -> None:
         self.root = root or tk.Tk()
-        self._start_callback: Callable[[], bool | None] | None = None
+        self._start_callback: Callable[[int], bool | None] | None = None
+        self._selected_start_area: int | None = None
         self._start_clicked = False
         self._closed = False
         self._font_family = self._pick_font("Noto Sans CJK SC", "Noto Sans CJK", "Microsoft YaHei")
@@ -48,7 +51,14 @@ class CompetitionGUI:
         self.show_start_page()
 
     def _build_start_page(self) -> None:
-        button = tk.Button(
+        self._start_selection = tk.Label(
+            self._start_frame,
+            bg=BACKGROUND_COLOR,
+            fg=LABEL_COLOR,
+            font=(self._font_family, FIELD_BUTTON_FONT_SIZE),
+        )
+        self._start_selection.place(relx=0.5, rely=0.25, anchor="center")
+        self._start_button = tk.Button(
             self._start_frame,
             text="开始比赛",
             command=self._on_start,
@@ -59,10 +69,10 @@ class CompetitionGUI:
             borderwidth=0,
             font=(self._font_family, START_BUTTON_FONT_SIZE, "bold"),
         )
-        button.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.475, relheight=0.267)
+        self._start_button.place(relx=0.5, rely=0.54, anchor="center", relwidth=0.475, relheight=0.245)
         field_button = tk.Button(
             self._start_frame,
-            text="场地标注",
+            text="选择启停区",
             command=self.show_field_page,
             bg="#252525",
             fg=TEXT_COLOR,
@@ -72,6 +82,7 @@ class CompetitionGUI:
             font=(self._font_family, FIELD_BUTTON_FONT_SIZE, "bold"),
         )
         field_button.place(relx=0.04, rely=0.92, anchor="sw", relwidth=0.16, relheight=0.09)
+        self._update_start_selection()
 
     def _build_running_page(self) -> None:
         self._running_frame.grid_rowconfigure(0, weight=3)
@@ -173,8 +184,30 @@ class CompetitionGUI:
 
         line(1200, 0, 1200, 2400, fill="#5B5B5B", width=2, dash=(18, 12))
         line(0, 1200, 2400, 1200, fill="#5B5B5B", width=2, dash=(18, 12))
-        for x, y in ((2250, 150), (2250, 2250)):
-            rectangle(x - 150, y - 150, x + 150, y + 150, fill=START_ZONE_COLOR, outline="")
+        for start_area, x, y in (
+            (START_AREA_1, 2250, 150),
+            (START_AREA_2, 2250, 2250),
+        ):
+            tag = f"start_area_{start_area}"
+            selected = self._selected_start_area == start_area
+            rectangle(
+                x - 150,
+                y - 150,
+                x + 150,
+                y + 150,
+                fill=START_ZONE_COLOR,
+                outline="#FFD23F" if selected else "",
+                width=8 if selected else 1,
+                tags=(tag,),
+            )
+            text(
+                2100,
+                420 if start_area == START_AREA_1 else 1980,
+                f"启停区{start_area}",
+                20,
+                tags=(tag,),
+            )
+            canvas.tag_bind(tag, "<Button-1>", lambda _event, area=start_area: self._select_start_area(area))
 
         # 白色底板使暂存区和粗加工区的同心圆与场地底色清晰区分。
         rectangle(0, 950, 155, 1450, fill=TEXT_COLOR, outline="")
@@ -197,8 +230,6 @@ class CompetitionGUI:
         text(210, 1200, "暂存区", 20, angle=90)
         text(1380, 2200, "粗加工区", 22)
         text(2300, 1200, "二次编码区", 20, angle=90)
-        text(2100, 420, "启停区1", 20)
-        text(2100, 1980, "启停区2", 20)
 
         horizontal_dimension(0, 2400, 2400, 2525, "2400")
         horizontal_dimension(1000, 1400, 500, 420, "400")
@@ -211,20 +242,43 @@ class CompetitionGUI:
         available = set(tkfont.families(self.root))
         return next((font for font in preferred_fonts if font in available), preferred_fonts[-1])
 
+    def _select_start_area(self, start_area: int) -> None:
+        """保存地图选择，并刷新启动页提示和场地高亮。"""
+        if start_area not in VALID_START_AREAS:
+            return
+        self._selected_start_area = start_area
+        self._update_start_selection()
+        self._draw_field_annotation()
+
+    def _update_start_selection(self) -> None:
+        if self._selected_start_area in VALID_START_AREAS:
+            self._start_selection.configure(text=f"已选择：启停区 {self._selected_start_area}")
+            self._start_button.configure(state="normal")
+        else:
+            self._start_selection.configure(text="未选择启停区")
+            self._start_button.configure(state="disabled")
+
     def _on_start(self) -> None:
-        if self._start_clicked or self._start_callback is None:
+        if (
+            self._start_clicked
+            or self._start_callback is None
+            or self._selected_start_area not in VALID_START_AREAS
+        ):
             return
         self._start_clicked = True
+        self._start_button.configure(state="disabled")
         try:
-            started = self._start_callback()
+            started = self._start_callback(self._selected_start_area)
         except Exception:
             self._start_clicked = False
+            self._update_start_selection()
             raise
         if started is False:
             self._start_clicked = False
+            self._update_start_selection()
 
     def show_start_page(self) -> None:
-        """显示只含开始按钮的初始页面。"""
+        """显示启停区选择结果和开始按钮。"""
         self._running_frame.pack_forget()
         self._field_frame.pack_forget()
         self._start_frame.pack(fill="both", expand=True)
@@ -236,7 +290,7 @@ class CompetitionGUI:
         self._running_frame.pack(fill="both", expand=True)
 
     def show_field_page(self) -> None:
-        """显示静态场地标注页，不改变比赛或硬件状态。"""
+        """显示启停区选择页，不改变比赛或硬件状态。"""
         self._start_frame.pack_forget()
         self._running_frame.pack_forget()
         self._field_frame.pack(fill="both", expand=True)
@@ -258,8 +312,8 @@ class CompetitionGUI:
         minutes, remaining_seconds = divmod(elapsed, 60)
         self._count_values[2].configure(text=f"{minutes:02d}:{remaining_seconds:02d}")
 
-    def set_start_callback(self, callback: Callable[[], bool | None]) -> None:
-        """设置开始按钮回调；返回 False 表示本次启动失败。"""
+    def set_start_callback(self, callback: Callable[[int], bool | None]) -> None:
+        """设置接收启停区编号的开始回调；返回 False 表示本次启动失败。"""
         self._start_callback = callback
 
     def run(self) -> None:
