@@ -29,8 +29,7 @@ extern "C"
     drive_bus_servo_STATUS_OK = 0,
     drive_bus_servo_STATUS_INVALID_PARAM,
     drive_bus_servo_STATUS_NOT_READY,
-    drive_bus_servo_STATUS_TX_ERROR,
-    drive_bus_servo_STATUS_RX_ERROR
+    drive_bus_servo_STATUS_TX_ERROR
   } BusServo_Status_t;
 
   /** @brief 舵机位置控制命令。 */
@@ -42,45 +41,12 @@ extern "C"
     uint16_t speed; /*!< 目标速度。 */
   } BusServo_Command_t;
 
-  /* 首版仅提供缓存接口；待接入实际回读协议后由接收层填充。 */
-  /** @brief 舵机反馈位置及有效性信息。 */
-  typedef struct
-  {
-    int32_t actual_position; /*!< 实际位置。 */
-    uint8_t valid; /*!< 反馈有效标志：1-有效，0-无效。 */
-    uint32_t updated_tick; /*!< 反馈更新时间，单位为 ms。 */
-  } BusServo_Feedback_t;
-
   /**
    * @brief  初始化总线舵机设备层并绑定当前工程使用的串口句柄。
    * @param  huart: 用于舵机通信的串口句柄，当前规划固定传入 `&huart4`。
    * @retval 初始化结果状态。
    */
   BusServo_Status_t BusServo_Init(UART_HandleTypeDef *huart);
-
-  /**
-   * @brief  启动 UART 单字节中断接收，用于兼容当前工程的统一串口回调链路。
-   * @retval 启动接收结果状态。
-   */
-  BusServo_Status_t BusServo_StartReceive(void);
-
-  /**
-   * @brief  处理 UART 单字节接收完成事件，并在模块内部重启下一次接收。
-   * @retval None
-   */
-  void BusServo_OnByteReceived(void);
-
-  /**
-   * @brief  处理串口错误并重启单字节接收。
-   * @retval None
-   */
-  void BusServo_OnUartError(void);
-
-  /**
-   * @brief  轮询舵机模块内部状态。
-   * @note   当前首版为纯发送设备层，该接口保留为空实现，方便后续扩展回读协议。
-   * @retval None
-   */
 
   /**
    * @brief  使用默认加速度和速度发送位置控制命令。
@@ -120,11 +86,6 @@ extern "C"
    * @retval 最近一次状态码。
    */
   BusServo_Status_t BusServo_GetLastStatus(void);
-  /** @brief 获取指定舵机反馈。 @param id 舵机 ID。 @param feedback 输出反馈结构体。 @return 获取结果状态。 */
-  BusServo_Status_t BusServo_GetFeedback(uint8_t id, BusServo_Feedback_t *feedback);
-  /** @brief 判断舵机是否在容差和超时时间内到达目标。 @param id 舵机 ID。 @param target_position 目标位置。 @param tolerance 位置容差。 @param timeout_ms 超时时间，单位为 ms。 @return 1-已到达，0-未到达。 */
-  uint8_t BusServo_IsReached(uint8_t id, int32_t target_position, int32_t tolerance,
-                             uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }

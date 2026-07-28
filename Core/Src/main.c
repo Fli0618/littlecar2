@@ -755,11 +755,6 @@ static void MX_GPIO_Init(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == UART4)
-  {
-    BusServo_OnByteReceived();
-  }
-
   if (huart->Instance == UART5)
   {
     OPS_OnByteReceived();
@@ -810,11 +805,6 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   if (huart->Instance == USART3)
   {
     drive_emm_OnUartError(huart);
-  }
-
-  if (huart->Instance == UART4)
-  {
-    BusServo_OnUartError();
   }
 
   if (huart->Instance == UART5)

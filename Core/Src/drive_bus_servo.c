@@ -11,11 +11,7 @@
 #define drive_bus_servo_UART_TIMEOUT_MS ((uint32_t)100U)
 
 static UART_HandleTypeDef *g_drive_bus_servo_uart = NULL;
-static volatile uint8_t g_drive_bus_servo_rx_byte = 0U;
-static volatile uint32_t g_drive_bus_servo_rx_count = 0U;
 static BusServo_Status_t g_drive_bus_servo_last_status = drive_bus_servo_STATUS_NOT_READY;
-static uint8_t g_drive_bus_servo_last_frame[drive_bus_servo_FRAME_TOTAL_LENGTH] = {0};
-static BusServo_Feedback_t g_drive_bus_servo_feedback[drive_bus_servo_MAX_ID] = {{0}};
 
 /**
  * @brief  判断舵机 ID 是否落在当前协议允许的地址范围内。
@@ -137,7 +133,6 @@ static BusServo_Status_t BusServo_TransmitFrame(const uint8_t *frame)
     return drive_bus_servo_STATUS_TX_ERROR;
   }
 
-  memcpy(g_drive_bus_servo_last_frame, frame, drive_bus_servo_FRAME_TOTAL_LENGTH);
   return drive_bus_servo_STATUS_OK;
 }
 
@@ -150,43 +145,8 @@ BusServo_Status_t BusServo_Init(UART_HandleTypeDef *huart)
   }
 
   g_drive_bus_servo_uart = huart;
-  g_drive_bus_servo_rx_byte = 0U;
-  g_drive_bus_servo_rx_count = 0U;
-  memset(g_drive_bus_servo_last_frame, 0, sizeof(g_drive_bus_servo_last_frame));
-  memset(g_drive_bus_servo_feedback, 0, sizeof(g_drive_bus_servo_feedback));
-
-  g_drive_bus_servo_last_status = BusServo_StartReceive();
-  return g_drive_bus_servo_last_status;
-}
-
-BusServo_Status_t BusServo_StartReceive(void)
-{
-  if (g_drive_bus_servo_uart == NULL)
-  {
-    g_drive_bus_servo_last_status = drive_bus_servo_STATUS_NOT_READY;
-    return g_drive_bus_servo_last_status;
-  }
-
-  if (HAL_UART_Receive_IT(g_drive_bus_servo_uart, (uint8_t *)&g_drive_bus_servo_rx_byte, 1U) != HAL_OK)
-  {
-    g_drive_bus_servo_last_status = drive_bus_servo_STATUS_RX_ERROR;
-    return g_drive_bus_servo_last_status;
-  }
-
   g_drive_bus_servo_last_status = drive_bus_servo_STATUS_OK;
   return g_drive_bus_servo_last_status;
-}
-
-void BusServo_OnByteReceived(void)
-{
-  ++g_drive_bus_servo_rx_count;
-  (void)BusServo_StartReceive();
-}
-
-void BusServo_OnUartError(void)
-{
-  g_drive_bus_servo_last_status = drive_bus_servo_STATUS_RX_ERROR;
-  (void)BusServo_StartReceive();
 }
 
 BusServo_Status_t BusServo_SetPosition(uint8_t id, int32_t position)
@@ -249,34 +209,4 @@ BusServo_Status_t BusServo_SendGroup(const BusServo_Command_t *commands, uint8_t
 BusServo_Status_t BusServo_GetLastStatus(void)
 {
   return g_drive_bus_servo_last_status;
-}
-
-BusServo_Status_t BusServo_GetFeedback(uint8_t id, BusServo_Feedback_t *feedback)
-{
-  if ((!BusServo_IsValidId(id)) || (feedback == NULL))
-  {
-    return drive_bus_servo_STATUS_INVALID_PARAM;
-  }
-  *feedback = g_drive_bus_servo_feedback[id];
-  return drive_bus_servo_STATUS_OK;
-}
-
-uint8_t BusServo_IsReached(uint8_t id, int32_t target_position, int32_t tolerance,
-                           uint32_t timeout_ms)
-{
-  BusServo_Feedback_t feedback;
-  int32_t error;
-
-  if ((tolerance < 0) || (timeout_ms == 0U) ||
-      (BusServo_GetFeedback(id, &feedback) != drive_bus_servo_STATUS_OK) ||
-      (feedback.valid == 0U) || ((HAL_GetTick() - feedback.updated_tick) > timeout_ms))
-  {
-    return 0U;
-  }
-  error = feedback.actual_position - target_position;
-  if (error < 0)
-  {
-    error = -error;
-  }
-  return (error <= tolerance) ? 1U : 0U;
 }

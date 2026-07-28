@@ -86,7 +86,7 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 - 文件：`Core/Inc/drive_bus_servo.h`、`Core/Src/drive_bus_servo.c`
 - 用途：总线舵机设备层控制。
 - 串口：`UART4`
-- 当前边界：提供位置发送、统一回调入口和预留反馈查询接口；`advance_arm` 忽略夹爪发送结果并固定等待 1000 ms，不查询实际舵机位置。
+- 当前边界：仅提供总线舵机位置命令的组帧与发送接口，不接收或解析舵机回包，不提供实际位置反馈与到位判断；`advance_arm` 忽略夹爪发送结果并固定等待 1000 ms。
 - 典型接口：`BusServo_Init()`、`BusServo_SetPosition()`、`BusServo_SetPositionEx()`、`BusServo_SendGroup()`。
 
 ### 4.3 WIT IMU 传感器
@@ -154,8 +154,8 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 
 - `main.c` 负责初始化、顺序业务入口、TIM6 周期入口和 HAL 回调分发；最外层循环只执行 `__WFI()`。
 - `HAL_UARTEx_RxEventCallback()` 中只分发 DMA / IDLE 接收事件，不直接执行业务动作。
-- `HAL_UART_RxCpltCallback()` 中分发单字节中断接收，例如 OPS 和总线舵机。
-- `HAL_UART_ErrorCallback()` 中按串口来源调用对应模块错误处理函数并重启接收。
+- `HAL_UART_RxCpltCallback()` 仅分发仍使用单字节中断接收的模块，目前为 OPS。
+- `HAL_UART_ErrorCallback()` 按串口来源调用对应接收模块的错误处理函数并重启接收；UART4 总线舵机当前为纯发送，不参与该回调链路。
 - `HAL_UART_AbortTransmitCpltCallback()` 仅分发 USART3 电机 DMA 发送中止完成事件；USART6 发送完成仍由 `CommJetson_OnUartTxComplete()`处理。
 
 ## 6. 调试边界
