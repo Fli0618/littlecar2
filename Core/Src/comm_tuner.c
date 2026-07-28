@@ -12,6 +12,7 @@
 #define COMM_TUNER_FRAME_OVERHEAD ((uint16_t)9U)
 #define COMM_TUNER_FRAME_MAX_SIZE (COMM_TUNER_FRAME_OVERHEAD + COMM_TUNER_MAX_PAYLOAD_SIZE)
 #define COMM_TUNER_HEARTBEAT_TIMEOUT_MS ((uint32_t)1500U)
+#define COMM_TUNER_TELEMETRY_PERIOD_MS ((uint32_t)40U)
 #define COMM_TUNER_GOTO_VMAX_MM_S (200.0f)
 #define COMM_TUNER_GOTO_WMAX_DEG_S (90.0f)
 #define COMM_TUNER_GOTO_TIMEOUT_MS ((uint32_t)15000U)
@@ -27,6 +28,7 @@
 #define COMM_TUNER_CMD_HEARTBEAT ((uint8_t)0x12U)
 #define COMM_TUNER_CMD_ACK ((uint8_t)0x80U)
 #define COMM_TUNER_CMD_PID ((uint8_t)0x81U)
+#define COMM_TUNER_CMD_TELEMETRY ((uint8_t)0x82U)
 #define COMM_TUNER_CMD_ERROR ((uint8_t)0xE0U)
 
 #define COMM_TUNER_ERROR_BAD_CRC ((uint8_t)0x01U)
@@ -43,6 +45,7 @@
 #define COMM_TUNER_SET_PID_PAYLOAD_SIZE ((uint16_t)24U)
 #define COMM_TUNER_PID_PAYLOAD_SIZE ((uint16_t)28U)
 #define COMM_TUNER_GOTO_PAYLOAD_SIZE ((uint16_t)25U)
+#define COMM_TUNER_TELEMETRY_PAYLOAD_SIZE ((uint16_t)88U)
 
 typedef struct
 {
@@ -75,8 +78,13 @@ static uint8_t g_response_cache_valid;
 static uint8_t g_response_cache_command;
 static uint8_t g_response_cache_sequence;
 static CommTuner_TxFrame_t g_response_cache;
+static CommTuner_TxFrame_t g_telemetry_frame;
+static volatile uint8_t g_telemetry_pending;
+static uint8_t g_telemetry_sequence;
+static volatile uint32_t g_telemetry_dropped_count;
 static volatile uint8_t g_remote_goal_active;
 static volatile uint32_t g_last_heartbeat_tick;
+static volatile uint32_t g_last_telemetry_tick;
 static volatile uint32_t g_rx_dropped_count;
 
 static uint8_t CommTuner_NextQueueIndex(uint8_t index)
@@ -157,6 +165,12 @@ static void CommTuner_ClearTransmitState(void)
   g_tx_queue_tail = 0U;
   g_tx_queue_count = 0U;
   g_tx_busy = 0U;
+  g_telemetry_pending = 0U;
+}
+
+static void CommTuner_ClearTelemetry(void)
+{
+  g_telemetry_pending = 0U;
 }
 
 static uint8_t CommTuner_QueueTransmit(const uint8_t *data, uint16_t length)
@@ -273,6 +287,54 @@ static void CommTuner_SendPid(uint8_t request_command, uint8_t request_sequence)
                          payload, sizeof(payload), 1U);
 }
 
+static void CommTuner_QueueTelemetry(void)
+{
+  AdvanceMotion_DebugSnapshot_t snapshot;
+  uint8_t payload[COMM_TUNER_TELEMETRY_PAYLOAD_SIZE];
+  uint16_t frame_length;
+
+  if (AdvanceMotion_GetDebugSnapshot(&snapshot) != ADVANCE_MOTION_STATUS_OK)
+  {
+    return;
+  }
+
+  CommTuner_WriteU32(&payload[0], snapshot.tick);
+  CommTuner_WriteU32(&payload[4], snapshot.pid_revision);
+  CommTuner_WriteU32(&payload[8], g_telemetry_dropped_count);
+  payload[12] = (uint8_t)snapshot.state;
+  payload[13] = snapshot.flags;
+  payload[14] = 0U;
+  payload[15] = 0U;
+  CommTuner_WriteFloat(&payload[16], snapshot.goal.x_mm);
+  CommTuner_WriteFloat(&payload[20], snapshot.goal.y_mm);
+  CommTuner_WriteFloat(&payload[24], snapshot.goal.yaw_deg);
+  CommTuner_WriteFloat(&payload[28], snapshot.pose.x_mm);
+  CommTuner_WriteFloat(&payload[32], snapshot.pose.y_mm);
+  CommTuner_WriteFloat(&payload[36], snapshot.pose.yaw_deg);
+  CommTuner_WriteFloat(&payload[40], snapshot.error_x_mm);
+  CommTuner_WriteFloat(&payload[44], snapshot.error_y_mm);
+  CommTuner_WriteFloat(&payload[48], snapshot.error_yaw_deg);
+  CommTuner_WriteFloat(&payload[52], snapshot.command_vx_world_mm_s);
+  CommTuner_WriteFloat(&payload[56], snapshot.command_vy_world_mm_s);
+  CommTuner_WriteFloat(&payload[60], snapshot.command_wz_ccw_deg_s);
+  CommTuner_WriteFloat(&payload[64], snapshot.measured_vx_world_mm_s);
+  CommTuner_WriteFloat(&payload[68], snapshot.measured_vy_world_mm_s);
+  CommTuner_WriteFloat(&payload[72], snapshot.measured_wz_deg_s);
+  CommTuner_WriteFloat(&payload[76], snapshot.integral_x_mm_s);
+  CommTuner_WriteFloat(&payload[80], snapshot.integral_y_mm_s);
+  CommTuner_WriteFloat(&payload[84], snapshot.integral_yaw_deg_s);
+
+  frame_length = CommTuner_BuildFrame(COMM_TUNER_CMD_TELEMETRY,
+                                      g_telemetry_sequence++, payload, sizeof(payload),
+                                      g_telemetry_frame.data);
+  g_telemetry_frame.length = frame_length;
+  if (g_telemetry_pending != 0U)
+  {
+    ++g_telemetry_dropped_count;
+  }
+  g_telemetry_pending = 1U;
+}
+
 static uint8_t CommTuner_MapMotionError(AdvanceMotion_Status_t status)
 {
   switch (status)
@@ -321,6 +383,7 @@ static void CommTuner_HandleGoto(uint8_t sequence, const uint8_t *payload)
 
   g_remote_goal_active = 1U;
   g_last_heartbeat_tick = HAL_GetTick();
+  g_last_telemetry_tick = g_last_heartbeat_tick;
   CommTuner_SendAck(COMM_TUNER_CMD_GOTO_POSE, sequence, 0U, 0U);
 }
 
@@ -426,6 +489,7 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
     }
     AdvanceMotion_Cancel();
     g_remote_goal_active = 0U;
+    CommTuner_ClearTelemetry();
     CommTuner_SendAck(command, sequence, 0U, 0U);
     break;
 
@@ -510,22 +574,60 @@ static void CommTuner_StartTransmit(void)
 {
   CommTuner_TxFrame_t *frame;
   uint16_t frame_length;
+  uint32_t primask;
+  uint8_t telemetry_selected = 0U;
 
-  if ((g_uart == NULL) || (g_tx_busy != 0U) || (g_tx_queue_count == 0U))
+  if ((g_uart == NULL) || (g_tx_busy != 0U) ||
+      ((g_tx_queue_count == 0U) && (g_telemetry_pending == 0U)))
   {
     return;
   }
 
-  frame = &g_tx_queue[g_tx_queue_tail];
-  frame_length = frame->length;
-  memcpy(g_tx_dma, frame->data, frame_length);
-  g_tx_queue_tail = CommTuner_NextQueueIndex(g_tx_queue_tail);
-  --g_tx_queue_count;
+  if (g_tx_queue_count > 0U)
+  {
+    frame = &g_tx_queue[g_tx_queue_tail];
+    g_tx_queue_tail = CommTuner_NextQueueIndex(g_tx_queue_tail);
+    --g_tx_queue_count;
+  }
+  else
+  {
+    primask = __get_PRIMASK();
+    __disable_irq();
+    if (g_telemetry_pending == 0U)
+    {
+      if (primask == 0U)
+      {
+        __enable_irq();
+      }
+      return;
+    }
+    frame = &g_telemetry_frame;
+    frame_length = frame->length;
+    memcpy(g_tx_dma, frame->data, frame_length);
+    g_telemetry_pending = 0U;
+    if (primask == 0U)
+    {
+      __enable_irq();
+    }
+    telemetry_selected = 1U;
+  }
+  if (telemetry_selected == 0U)
+  {
+    frame_length = frame->length;
+    memcpy(g_tx_dma, frame->data, frame_length);
+  }
   g_tx_busy = 1U;
   if (HAL_UART_Transmit_DMA(g_uart, g_tx_dma, frame_length) != HAL_OK)
   {
     g_tx_busy = 0U;
-    ++g_rx_dropped_count;
+    if (telemetry_selected != 0U)
+    {
+      ++g_telemetry_dropped_count;
+    }
+    else
+    {
+      ++g_rx_dropped_count;
+    }
     return;
   }
 }
@@ -581,8 +683,11 @@ HAL_StatusTypeDef CommTuner_Init(UART_HandleTypeDef *huart)
   g_uart = huart;
   g_rx_dropped_count = 0U;
   g_response_cache_valid = 0U;
+  g_telemetry_sequence = 0U;
+  g_telemetry_dropped_count = 0U;
   g_remote_goal_active = 0U;
   g_last_heartbeat_tick = 0U;
+  g_last_telemetry_tick = 0U;
   CommTuner_ClearReceiveState();
   CommTuner_ClearTransmitState();
   return CommTuner_StartRx();
@@ -605,6 +710,7 @@ void CommTuner_Process(void)
 void CommTuner_Update(void)
 {
   AdvanceMotion_RuntimeStatus_t status;
+  uint32_t now_tick;
 
   if (g_remote_goal_active == 0U)
   {
@@ -614,12 +720,21 @@ void CommTuner_Update(void)
       (status.state != ADVANCE_MOTION_STATE_RUNNING))
   {
     g_remote_goal_active = 0U;
+    CommTuner_ClearTelemetry();
     return;
   }
-  if ((HAL_GetTick() - g_last_heartbeat_tick) >= COMM_TUNER_HEARTBEAT_TIMEOUT_MS)
+  now_tick = HAL_GetTick();
+  if ((now_tick - g_last_heartbeat_tick) >= COMM_TUNER_HEARTBEAT_TIMEOUT_MS)
   {
     AdvanceMotion_Cancel();
     g_remote_goal_active = 0U;
+    CommTuner_ClearTelemetry();
+    return;
+  }
+  if ((now_tick - g_last_telemetry_tick) >= COMM_TUNER_TELEMETRY_PERIOD_MS)
+  {
+    g_last_telemetry_tick = now_tick;
+    CommTuner_QueueTelemetry();
   }
 }
 
