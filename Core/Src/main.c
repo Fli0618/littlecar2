@@ -34,6 +34,7 @@
 #include "advance_arm.h"
 #include "car_pose.h"
 #include "comm_jetson.h"
+#include "comm_tuner.h"
 
 /* USER CODE END Includes */
 
@@ -45,12 +46,15 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 /* 发布固件保持 0，避免 printf 的逐字节阻塞影响控制周期。 */
-#define DEBUG_UART_ENABLE (1U)
+#define DEBUG_UART_ENABLE (0U)
+
+/* 设为 1 时进入 USART1 在线调参/回显模式，不运行比赛主流程。 */
+#define TUNER_ENABLE (1U)
 
 /* TIM6 提供 1 ms 调度节拍，所有业务周期统一在这里配置。 */
 #define APP_WORLD_PERIOD_MS ((uint32_t)10U)
 #define APP_ORIGIN_PERIOD_MS ((uint32_t)1000U)
-#define APP_LED_PERIOD_MS ((uint32_t)500U)
+#define APP_LED_PERIOD_MS ((uint32_t)1500U)
 
 /* TIM6 是全部周期 Update 的唯一执行入口。 */
 
@@ -71,6 +75,7 @@ UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
 UART_HandleTypeDef huart6;
 DMA_HandleTypeDef hdma_usart1_rx;
+DMA_HandleTypeDef hdma_usart1_tx;
 DMA_HandleTypeDef hdma_usart2_rx;
 DMA_HandleTypeDef hdma_usart3_rx;
 DMA_HandleTypeDef hdma_usart3_tx;
@@ -130,7 +135,6 @@ static void App_RunTask(Competition_StartArea_t start_area)
   /* 后续比赛流程将根据 start_area 选择对应启停区的业务路径。 */
 
   printf("[START] area=%u\r\n", (unsigned int)start_area);
-
 
   char code[DETECT_QR_CODE_LENGTH + 1U] = {0};
   Detect_TargetList_t targets = {0};
@@ -209,8 +213,6 @@ static void App_RunTask(Competition_StartArea_t start_area)
   }
   (void)detect_stop();
   printf("[TEST] finished\r\n");
-
-  
 }
 
 static void App_TimerUpdate(void)
@@ -222,6 +224,9 @@ static void App_TimerUpdate(void)
   static uint16_t led_elapsed_ms = 0U;
 
   CommJetson_Update();
+#if (TUNER_ENABLE != 0U)
+  CommTuner_Update();
+#endif
 
   if (++world_elapsed_ms >= APP_WORLD_PERIOD_MS)
   {
@@ -241,12 +246,11 @@ static void App_TimerUpdate(void)
   {
     control_elapsed_ms = 0U;
 
+    /* PID pending 配置必须在每个 20 ms 周期边界检查一次。 */
+    AdvanceMotion_Update();
+
     switch (AdvanceControl_GetMode())
     {
-    case ADVANCE_CONTROL_WORLD:
-      AdvanceMotion_Update();
-      break;
-
     case ADVANCE_CONTROL_VISUAL:
       AdvanceVisual_Update();
       break;
@@ -309,7 +313,7 @@ int main(void)
   HAL_GPIO_Init(GPIOC, &GPIO_InitStructInit);
 
   // 全量闪烁测试
-  for (int i = 0; i < 20; i++)
+  for (int i = 0; i < 10; i++)
   {
     HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
     HAL_GPIO_TogglePin(GPIOF, GPIO_PIN_9 | GPIO_PIN_10);
@@ -337,6 +341,13 @@ int main(void)
   MX_USART6_UART_Init();
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
+
+#if (TUNER_ENABLE != 0U)
+  if (CommTuner_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+#endif
 
   CommJetson_Init(&huart6);
 
@@ -370,6 +381,7 @@ int main(void)
     Error_Handler();
   }
 
+  printf("STM32 init finish\r\n");
   // 1. 初始化电机驱动底层 (开启 DMA 接收等)
   // 2. 启动后立即闪烁 3 次作为“板子活了”的信号
   for (int i = 0; i < 6; i++)
@@ -383,9 +395,17 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
+#if (TUNER_ENABLE != 0U)
+  printf("TUNER_ENABLE\r\n");
+  while (1)
+  {
+    CommTuner_Process();
+    __WFI();
+  }
+#else
   Competition_StartArea_t start_area;
 
-  //比赛尚未开始时只等待 Jetson 的有效启动请求
+  // 比赛尚未开始时只等待 Jetson 的有效启动请求
   while (CommJetson_TakeCompetitionStart(&start_area) == 0U)
   {
     __WFI();
@@ -396,6 +416,7 @@ int main(void)
   {
     __WFI();
   }
+#endif
 
   /* USER CODE END WHILE */
 
@@ -705,6 +726,9 @@ static void MX_DMA_Init(void)
   /* DMA2_Stream6_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA2_Stream6_IRQn, 4, 0);
   HAL_NVIC_EnableIRQ(DMA2_Stream6_IRQn);
+  /* DMA2_Stream7_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream7_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream7_IRQn);
 }
 
 /**
@@ -781,6 +805,11 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
   {
     CommJetson_OnUartRxEvent(huart, Size);
   }
+
+  if (huart->Instance == USART1)
+  {
+    CommTuner_OnUartRxEvent(huart, Size);
+  }
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
@@ -793,6 +822,11 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
   if (huart->Instance == USART6)
   {
     CommJetson_OnUartTxComplete(huart);
+  }
+
+  if (huart->Instance == USART1)
+  {
+    CommTuner_OnUartTxComplete(huart);
   }
 }
 
@@ -824,6 +858,11 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   if (huart->Instance == USART6)
   {
     CommJetson_OnUartError(huart);
+  }
+
+  if (huart->Instance == USART1)
+  {
+    CommTuner_OnUartError(huart);
   }
 }
 

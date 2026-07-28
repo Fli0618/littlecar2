@@ -406,6 +406,11 @@
               <FilePath>../Core/Src/comm_jetson.c</FilePath>
             </File>
             <File>
+              <FileName>comm_tuner.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/comm_tuner.c</FilePath>
+            </File>
+            <File>
               <FileName>advance_chassis.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/advance_chassis.c</FilePath>

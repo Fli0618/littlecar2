@@ -1,18 +1,20 @@
 {
     "folders": [
         {
-            "name": "MDK-ARM",
             "path": "."
         },
         {
-            "name": "Core",
             "path": "../Core"
         },
         {
-            "name": "jetson",
             "path": "../jetson"
+        },
+        {
+            "path": "../tools"
         }
     ],
-    "settings": {},
+    "settings": {
+        "cortex-debug.variableUseNaturalFormat": true
+    },
     "extensions": {}
 }
