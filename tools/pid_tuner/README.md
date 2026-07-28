@@ -45,10 +45,10 @@ conda run -n low_numpy pid-tuner goto --port COM4 --x 200 --y 0 --yaw 0 --vmax 5
 
 ```powershell
 conda run -n low_numpy pip install -e .
-conda run -n low_numpy pid-tuner-gui --port COM4
+conda run -n low_numpy python launch_gui.py
 ```
 
-GUI 使用现有世界位姿遥测：X/Y 是经坐标修正后的 OPS 实际位置，yaw 在 WIT 有效时优先使用 WIT，否则使用 OPS。默认显示最近 30 秒，窗口可调 5-120 秒，缓存只保留最近 120 秒。
+启动后使用界面左上方的串口下拉框选择 COM 口并点击“连接”，不需要在启动命令中填写端口。GUI 使用现有世界位姿遥测：X/Y 是经坐标修正后的 OPS 实际位置，yaw 在 WIT 有效时优先使用 WIT，否则使用 OPS。默认显示最近 30 秒，窗口可调 5-120 秒，缓存只保留最近 120 秒。
 
 运动控制必须在现场具备机械急停与人员监护时使用。断开、通信错误和窗口关闭会尝试发送 STOP；这不能替代物理急停。
 

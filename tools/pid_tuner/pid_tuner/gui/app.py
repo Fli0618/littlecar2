@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 import sys
 
@@ -30,8 +29,8 @@ class MainWindow(QMainWindow):
 
     def _build(self) -> None:
         root = QSplitter(); controls = QWidget(); left = QVBoxLayout(controls); left.setContentsMargins(12, 12, 12, 12)
-        self.port = QComboBox(); self.baud = QComboBox(); self.baud.addItems(["115200", "230400"]); self.connect_button = QPushButton("连接")
-        connection = QFormLayout(); connection.addRow("串口", self.port); connection.addRow("波特率", self.baud); connection.addRow(self.connect_button); left.addLayout(connection)
+        self.port = QComboBox(); self.refresh_ports_button = QPushButton("刷新 COM"); self.baud = QComboBox(); self.baud.addItems(["115200", "230400"]); self.connect_button = QPushButton("连接")
+        connection = QFormLayout(); connection.addRow("串口", self.port); connection.addRow(self.refresh_ports_button); connection.addRow("波特率", self.baud); connection.addRow(self.connect_button); left.addLayout(connection)
         self.status = QLabel("未连接"); left.addWidget(self.status)
         self.pid = [number(value) for value in (1, .03, .1, 2, .05, .08)]
         pid_form = QFormLayout(); [pid_form.addRow(name, widget) for name, widget in zip(("Kp 位置", "Ki 位置", "Kd 位置", "Kp 航向", "Ki 航向", "Kd 航向"), self.pid)]
@@ -47,7 +46,7 @@ class MainWindow(QMainWindow):
         self.plots = TelemetryPlots(); root.addWidget(controls); root.addWidget(self.plots); root.setSizes([330, 1110]); self.setCentralWidget(root); self.refresh_ports(); self.reload_profiles()
 
     def _wire(self) -> None:
-        self.connect_button.clicked.connect(self.toggle_connection); self.read_pid.clicked.connect(self.session.read_pid); self.apply_pid.clicked.connect(self.apply_current_pid); self.restore_pid.clicked.connect(self.session.restore_pid)
+        self.connect_button.clicked.connect(self.toggle_connection); self.refresh_ports_button.clicked.connect(self.refresh_ports); self.read_pid.clicked.connect(self.session.read_pid); self.apply_pid.clicked.connect(self.apply_current_pid); self.restore_pid.clicked.connect(self.session.restore_pid)
         self.goto.clicked.connect(self.start_motion); self.stop.clicked.connect(self.session.stop); self.new_experiment.clicked.connect(self.new_experiment_clicked); self.record.clicked.connect(self.toggle_record)
         self.load_profile.clicked.connect(self.load_selected_profile); self.save_profile.clicked.connect(self.save_current_profile); self.export_c.clicked.connect(self.export_current_c)
         self.window.valueChanged.connect(lambda value: self.plots.set_window(float(value))); self.session.telemetry.connect(self.on_telemetry); self.session.status.connect(self.status.setText); self.session.failure.connect(self.on_failure); self.session.pid_read.connect(self.on_pid); self.session.pid_applied.connect(lambda revision: self.buffer.add_event(f"PID r{revision}")); self.session.motion_changed.connect(lambda _: self.buffer.add_event("运动状态改变"))
@@ -96,9 +95,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: object) -> None: self.session.shutdown(); event.accept()  # type: ignore[attr-defined]
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(); parser.add_argument("--port"); args = parser.parse_args(argv)
+def main() -> int:
     app = QApplication(sys.argv); app.setStyleSheet("QWidget{background:#161b22;color:#d8dee9;} QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox{background:#222b36;padding:4px;} QPushButton{background:#2b3a4b;padding:6px;} QPushButton#stopButton{background:#d1495b;color:white;font-weight:bold;}")
-    window = MainWindow()
-    if args.port: window.port.setCurrentText(args.port)
-    window.show(); return app.exec()
+    window = MainWindow(); window.show(); return app.exec()
