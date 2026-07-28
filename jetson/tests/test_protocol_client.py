@@ -65,6 +65,14 @@ def test_only_color_and_circle_modes_require_fill_light():
     assert not main._requires_fill_light(CMD_STOP)
 
 
+def test_visual_detection_waits_for_fill_light_settlement():
+    assert not main._visual_detection_ready(CMD_START_COLOR, True, 10.3, 10.0)
+    assert main._visual_detection_ready(CMD_START_COLOR, True, 10.3, 10.3)
+    assert main._visual_detection_ready(CMD_START_CIRCLE, False, None, 10.0)
+    assert main._visual_detection_ready(CMD_START_QR, True, 10.3, 10.0)
+    assert main._visual_detection_ready(CMD_START_DISK_CENTER, True, 10.3, 10.0)
+
+
 def test_start_period_stop_and_session_replacement(monkeypatch):
     port, state = Port(), main.make_service_state()
     calls = []

@@ -20,9 +20,11 @@ def main() -> None:
         raise ValueError("PWM_DUTY_CYCLE_PERCENT 必须在 0 到 100 之间")
 
     pwm = None
+    gpio_configured = False
     try:
         GPIO.setmode(GPIO.BOARD)
         GPIO.setup(PWM_PIN, GPIO.OUT, initial=GPIO.LOW)
+        gpio_configured = True
         # 补光灯独立供电时，控制地必须与 Jetson GND 共地。
         pwm = GPIO.PWM(PWM_PIN, PWM_FREQUENCY_HZ)
         pwm.start(PWM_DUTY_CYCLE_PERCENT)
@@ -49,10 +51,11 @@ def main() -> None:
                 pwm.stop()
             except Exception as exc:
                 print(f"停止 PWM 时发生错误: {exc}")
-        try:
-            GPIO.output(PWM_PIN, GPIO.LOW)
-        finally:
-            GPIO.cleanup(PWM_PIN)
+        if gpio_configured:
+            try:
+                GPIO.output(PWM_PIN, GPIO.LOW)
+            finally:
+                GPIO.cleanup(PWM_PIN)
 
 
 if __name__ == "__main__":

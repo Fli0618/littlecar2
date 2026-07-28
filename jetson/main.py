@@ -65,6 +65,16 @@ def _requires_fill_light(mode: int) -> bool:
     return mode in _FILL_LIGHT_MODES
 
 
+def _visual_detection_ready(mode: int, fill_light_active: bool, ready_at: float | None, now: float) -> bool:
+    """补光灯稳定前继续轮询命令，但暂不执行对应的视觉推理。"""
+    return not (
+        _requires_fill_light(mode)
+        and fill_light_active
+        and ready_at is not None
+        and now < ready_at
+    )
+
+
 def make_service_state() -> dict[str, object]:
     return {
         "mode": 0,
@@ -242,9 +252,12 @@ def main() -> None:
     gpio_configured = False
     fill_light_active = False
     fill_light_unavailable = False
+    fill_light_ready_at: float | None = None
 
     def stop_fill_light() -> None:
-        nonlocal pwm, fill_light_active
+        nonlocal pwm, fill_light_active, fill_light_ready_at
+        if not fill_light_active and pwm is None:
+            return
         if pwm is not None:
             try:
                 pwm.ChangeDutyCycle(0)
@@ -259,21 +272,22 @@ def main() -> None:
             except Exception as error:
                 print(f"fill light pin reset failed: {error}", flush=True)
         fill_light_active = False
+        fill_light_ready_at = None
 
-    def enable_fill_light() -> None:
-        nonlocal pwm, fill_light_active, fill_light_unavailable
+    def enable_fill_light(now: float) -> None:
+        nonlocal pwm, fill_light_active, fill_light_unavailable, fill_light_ready_at
         if fill_light_active or fill_light_unavailable:
             return
         try:
             pwm = gpio.PWM(PWM_PIN, PWM_FREQUENCY_HZ)
             pwm.start(PWM_DUTY_CYCLE_PERCENT)
             fill_light_active = True
+            fill_light_ready_at = now + LIGHT_SETTLE_SECONDS
             print(
                 f"fill light enabled pin={PWM_PIN} frequency_hz={PWM_FREQUENCY_HZ} "
                 f"duty_cycle_percent={PWM_DUTY_CYCLE_PERCENT:.1f}",
                 flush=True,
             )
-            time.sleep(LIGHT_SETTLE_SECONDS)
         except Exception as error:
             print(
                 "fill light start failed; continuing visual detection without light. "
@@ -284,9 +298,9 @@ def main() -> None:
             fill_light_unavailable = True
             stop_fill_light()
 
-    def sync_fill_light() -> None:
+    def sync_fill_light(now: float) -> None:
         if _requires_fill_light(int(state["mode"])):
-            enable_fill_light()
+            enable_fill_light(now)
         else:
             stop_fill_light()
 
@@ -339,9 +353,11 @@ def main() -> None:
         # 场地标注页只改变 GUI 视图；服务轮询始终持续运行。
         try:
             poll_commands(port, state)
-            sync_fill_light()
-            run_detection(port, cameras, state, time.monotonic(), gui.set_task_code)
-            sync_fill_light()
+            now = time.monotonic()
+            sync_fill_light(now)
+            if _visual_detection_ready(int(state["mode"]), fill_light_active, fill_light_ready_at, now):
+                run_detection(port, cameras, state, now, gui.set_task_code)
+            sync_fill_light(time.monotonic())
         except Exception:
             gui.close()
             raise

@@ -13,7 +13,7 @@ import Jetson.GPIO as GPIO
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from vision import detect_yolo, load_yolo_model
+from vision.yolo import detect_yolo, load_yolo_model
 
 
 # 用户直接修改本区常量即可调整补光灯与视觉测试配置。
