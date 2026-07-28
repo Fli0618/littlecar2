@@ -71,6 +71,7 @@ UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
 UART_HandleTypeDef huart6;
 DMA_HandleTypeDef hdma_usart1_rx;
+DMA_HandleTypeDef hdma_usart1_tx;
 DMA_HandleTypeDef hdma_usart2_rx;
 DMA_HandleTypeDef hdma_usart3_rx;
 DMA_HandleTypeDef hdma_usart3_tx;
@@ -130,7 +131,6 @@ static void App_RunTask(Competition_StartArea_t start_area)
   /* 后续比赛流程将根据 start_area 选择对应启停区的业务路径。 */
 
   printf("[START] area=%u\r\n", (unsigned int)start_area);
-
 
   char code[DETECT_QR_CODE_LENGTH + 1U] = {0};
   Detect_TargetList_t targets = {0};
@@ -209,8 +209,6 @@ static void App_RunTask(Competition_StartArea_t start_area)
   }
   (void)detect_stop();
   printf("[TEST] finished\r\n");
-
-  
 }
 
 static void App_TimerUpdate(void)
@@ -385,7 +383,7 @@ int main(void)
 
   Competition_StartArea_t start_area;
 
-  //比赛尚未开始时只等待 Jetson 的有效启动请求
+  // 比赛尚未开始时只等待 Jetson 的有效启动请求
   while (CommJetson_TakeCompetitionStart(&start_area) == 0U)
   {
     __WFI();
@@ -705,6 +703,9 @@ static void MX_DMA_Init(void)
   /* DMA2_Stream6_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA2_Stream6_IRQn, 4, 0);
   HAL_NVIC_EnableIRQ(DMA2_Stream6_IRQn);
+  /* DMA2_Stream7_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream7_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream7_IRQn);
 }
 
 /**
