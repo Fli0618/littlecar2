@@ -27,6 +27,7 @@ from protocol.commands import (
     DISK_CENTER_NO_TARGET,
     DISK_CENTER_OK,
     START_COMMANDS,
+    VALID_START_AREAS,
     TASK_CODE_LENGTH,
 )
 from protocol.frame import pack_frame, parse_frames
@@ -227,17 +228,26 @@ def run_detection(
         state["last_task_code"] = code
 
 
-def start_competition(port: object, state: dict[str, object], gui: CompetitionGUI, now: float) -> bool:
+def start_competition(
+    port: object,
+    state: dict[str, object],
+    gui: CompetitionGUI,
+    start_area: int,
+    now: float,
+) -> bool:
     """发送启动帧；串口写入成功后才切换比赛显示页面。"""
+    if start_area not in VALID_START_AREAS:
+        return False
     if bool(state.get("competition_started", False)):
         return True
     try:
-        port.write(pack_frame(CMD_COMPETITION_START, 0, b""))
+        port.write(pack_frame(CMD_COMPETITION_START, 0, bytes((start_area,))))
     except Exception as error:
         print(f"competition start send failed: {error}", flush=True)
         return False
     state["competition_started"] = True
     state["competition_started_at"] = now
+    state["start_area"] = start_area
     gui.show_running_page()
     gui.set_elapsed(0)
     return True
@@ -343,8 +353,8 @@ def main() -> None:
             gui.set_elapsed(int(time.monotonic() - started_at))
             root.after(ELAPSED_UPDATE_INTERVAL_MS, update_elapsed)
 
-    def on_start() -> bool:
-        started = start_competition(port, state, gui, time.monotonic())
+    def on_start(start_area: int) -> bool:
+        started = start_competition(port, state, gui, start_area, time.monotonic())
         if started:
             update_elapsed()
         return started

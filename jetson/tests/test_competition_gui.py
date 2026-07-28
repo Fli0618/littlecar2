@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from ui import CompetitionGUI
+from protocol.commands import START_AREA_1, START_AREA_2
 
 
 class Widget:
@@ -33,9 +34,13 @@ def make_gui():
     gui._field_canvas = Widget()
     gui._task_code = Widget()
     gui._count_values = [Widget(), Widget(), Widget()]
+    gui._start_button = Widget()
+    gui._start_selection = Widget()
     gui._start_clicked = False
     gui._start_callback = None
+    gui._selected_start_area = None
     gui._draw_field_annotation = lambda: None
+    gui._update_start_selection()
     return gui
 
 
@@ -58,7 +63,7 @@ def test_pages_switch_and_running_values_update():
 def test_field_page_returns_without_starting_competition():
     gui = make_gui()
     calls = []
-    gui.set_start_callback(lambda: calls.append("started") or True)
+    gui.set_start_callback(lambda start_area: calls.append(start_area) or True)
     gui.show_field_page()
     gui.show_start_page()
 
@@ -70,12 +75,33 @@ def test_field_page_returns_without_starting_competition():
 def test_start_callback_locks_after_success_and_allows_retry_after_failure():
     gui = make_gui()
     calls = []
-    gui.set_start_callback(lambda: calls.append("failed") or False)
+    gui._select_start_area(START_AREA_1)
+    gui.set_start_callback(lambda start_area: calls.append(("failed", start_area)) or False)
     gui._on_start()
     gui._on_start()
-    assert calls == ["failed", "failed"]
+    assert calls == [("failed", START_AREA_1), ("failed", START_AREA_1)]
+    assert gui._start_button.options["state"] == "normal"
 
-    gui.set_start_callback(lambda: calls.append("started") or True)
+    gui.set_start_callback(lambda start_area: calls.append(("started", start_area)) or True)
     gui._on_start()
     gui._on_start()
-    assert calls == ["failed", "failed", "started"]
+    assert calls == [("failed", START_AREA_1), ("failed", START_AREA_1), ("started", START_AREA_1)]
+
+
+def test_start_area_selection_updates_hint_enables_start_and_replaces_previous_choice():
+    gui = make_gui()
+    calls = []
+    gui.set_start_callback(lambda start_area: calls.append(start_area) or True)
+
+    assert gui._start_button.options["state"] == "disabled"
+    assert gui._start_selection.options["text"] == "未选择启停区"
+
+    gui._select_start_area(START_AREA_1)
+    assert gui._selected_start_area == START_AREA_1
+    assert gui._start_selection.options["text"] == "已选择：启停区 1"
+    assert gui._start_button.options["state"] == "normal"
+
+    gui._select_start_area(START_AREA_2)
+    gui._on_start()
+    assert gui._selected_start_area == START_AREA_2
+    assert calls == [START_AREA_2]

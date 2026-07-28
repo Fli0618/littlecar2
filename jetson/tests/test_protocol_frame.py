@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from protocol.commands import CMD_COMPETITION_START, CMD_START_COLOR, CMD_STOP
+from protocol.commands import CMD_COMPETITION_START, CMD_START_COLOR, CMD_STOP, START_AREA_1, START_AREA_2
 from protocol.frame import crc16_modbus, pack_frame, parse_frames
 
 
@@ -28,6 +28,8 @@ def test_parser_discards_bad_crc_and_recovers_next_frame():
 
 
 def test_competition_start_frame_uses_existing_crc_and_parser():
-    frame = pack_frame(CMD_COMPETITION_START, 0)
-    assert frame == bytes.fromhex("5A A5 10 00 00 70 05")
-    assert parse_frames(bytearray(), frame) == [(CMD_COMPETITION_START, 0, b"")]
+    area_1_frame = pack_frame(CMD_COMPETITION_START, 0, bytes((START_AREA_1,)))
+    area_2_frame = pack_frame(CMD_COMPETITION_START, 0, bytes((START_AREA_2,)))
+    assert area_1_frame == bytes.fromhex("5A A5 10 00 01 01 C4 B4")
+    assert parse_frames(bytearray(), area_1_frame) == [(CMD_COMPETITION_START, 0, b"\x01")]
+    assert parse_frames(bytearray(), area_2_frame) == [(CMD_COMPETITION_START, 0, b"\x02")]
