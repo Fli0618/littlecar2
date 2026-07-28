@@ -23,6 +23,7 @@ virtualFolder:
                 - path: ../Core/Src/drive_bus_servo.c
                 - path: ../Core/Src/drive_emm.c
                 - path: ../Core/Src/comm_jetson.c
+                - path: ../Core/Src/comm_tuner.c
                 - path: ../Core/Src/advance_chassis.c
                 - path: ../Core/Src/advance_control.c
                 - path: ../Core/Src/advance_visual.c
@@ -46,6 +47,7 @@ virtualFolder:
                 - path: ../Core/Inc/advance_world.h
                 - path: ../Core/Inc/car_pose.h
                 - path: ../Core/Inc/comm_jetson.h
+                - path: ../Core/Inc/comm_tuner.h
                 - path: ../Core/Inc/drive_bus_servo.h
                 - path: ../Core/Inc/drive_emm.h
                 - path: ../Core/Inc/main.h

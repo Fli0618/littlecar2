@@ -34,6 +34,7 @@
 #include "advance_arm.h"
 #include "car_pose.h"
 #include "comm_jetson.h"
+#include "comm_tuner.h"
 
 /* USER CODE END Includes */
 
@@ -46,6 +47,9 @@
 /* USER CODE BEGIN PD */
 /* 发布固件保持 0，避免 printf 的逐字节阻塞影响控制周期。 */
 #define DEBUG_UART_ENABLE (1U)
+
+/* 设为 1 时进入 USART1 在线调参/回显模式，不运行比赛主流程。 */
+#define TUNER_ENABLE (1U)
 
 /* TIM6 提供 1 ms 调度节拍，所有业务周期统一在这里配置。 */
 #define APP_WORLD_PERIOD_MS ((uint32_t)10U)
@@ -336,6 +340,13 @@ int main(void)
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
 
+#if (TUNER_ENABLE != 0U)
+  if (CommTuner_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+#endif
+
   CommJetson_Init(&huart6);
 
   // 传感器初始化
@@ -381,6 +392,13 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
+#if (TUNER_ENABLE != 0U)
+  while (1)
+  {
+    CommTuner_Process();
+    __WFI();
+  }
+#else
   Competition_StartArea_t start_area;
 
   // 比赛尚未开始时只等待 Jetson 的有效启动请求
@@ -394,6 +412,7 @@ int main(void)
   {
     __WFI();
   }
+#endif
 
   /* USER CODE END WHILE */
 
@@ -782,6 +801,11 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
   {
     CommJetson_OnUartRxEvent(huart, Size);
   }
+
+  if (huart->Instance == USART1)
+  {
+    CommTuner_OnUartRxEvent(huart, Size);
+  }
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
@@ -794,6 +818,11 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
   if (huart->Instance == USART6)
   {
     CommJetson_OnUartTxComplete(huart);
+  }
+
+  if (huart->Instance == USART1)
+  {
+    CommTuner_OnUartTxComplete(huart);
   }
 }
 
@@ -825,6 +854,11 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   if (huart->Instance == USART6)
   {
     CommJetson_OnUartError(huart);
+  }
+
+  if (huart->Instance == USART1)
+  {
+    CommTuner_OnUartError(huart);
   }
 }
 
