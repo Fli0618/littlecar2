@@ -18,7 +18,7 @@ def main() -> None:
             gui.set_elapsed(int(time.monotonic() - started_at))
             root.after(200, update_elapsed)
 
-    def start_preview() -> bool:
+    def start_preview(_start_area: int) -> bool:
         nonlocal started_at
         gui.show_running_page()
         started_at = time.monotonic()

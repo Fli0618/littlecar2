@@ -22,7 +22,7 @@ void AdvanceControl_Init(void);
  * @brief 设置底盘控制权。
  * @details 切换到 NONE 时立即发送停止命令；两个活动模式之间不能直接切换。
  */
-void AdvanceControl_SetMode(AdvanceControl_Mode_t mode);
+uint8_t AdvanceControl_SetMode(AdvanceControl_Mode_t mode);
 /** @brief 获取当前唯一的底盘控制权模式。 */
 AdvanceControl_Mode_t AdvanceControl_GetMode(void);
 

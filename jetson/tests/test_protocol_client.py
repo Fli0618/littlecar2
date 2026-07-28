@@ -18,6 +18,8 @@ from protocol.commands import (
     CMD_START_COLOR,
     CMD_START_QR,
     CMD_STOP,
+    START_AREA_1,
+    START_AREA_2,
     TASK_CODE_LENGTH,
 )
 from protocol.frame import pack_frame, parse_frames
@@ -63,6 +65,14 @@ def test_only_color_and_circle_modes_require_fill_light():
     assert not main._requires_fill_light(CMD_START_QR)
     assert not main._requires_fill_light(CMD_START_DISK_CENTER)
     assert not main._requires_fill_light(CMD_STOP)
+
+
+def test_visual_detection_waits_for_fill_light_settlement():
+    assert not main._visual_detection_ready(CMD_START_COLOR, True, 10.3, 10.0)
+    assert main._visual_detection_ready(CMD_START_COLOR, True, 10.3, 10.3)
+    assert main._visual_detection_ready(CMD_START_CIRCLE, False, None, 10.0)
+    assert main._visual_detection_ready(CMD_START_QR, True, 10.3, 10.0)
+    assert main._visual_detection_ready(CMD_START_DISK_CENTER, True, 10.3, 10.0)
 
 
 def test_start_period_stop_and_session_replacement(monkeypatch):
@@ -181,14 +191,29 @@ def test_start_competition_sends_once_and_allows_retry_after_write_failure():
             raise OSError("serial unavailable")
 
     gui, state = Gui(), main.make_service_state()
-    assert not main.start_competition(FailingPort(), state, gui, 1.0)
+    assert not main.start_competition(FailingPort(), state, gui, START_AREA_1, 1.0)
     assert not state.get("competition_started", False)
 
     port = Port()
-    assert main.start_competition(port, state, gui, 2.0)
-    assert main.start_competition(port, state, gui, 3.0)
-    assert frames(port) == [(CMD_COMPETITION_START, 0, b"")]
+    assert not main.start_competition(port, state, gui, 0, 1.5)
+    assert main.start_competition(port, state, gui, START_AREA_1, 2.0)
+    assert main.start_competition(port, state, gui, START_AREA_1, 3.0)
+    assert frames(port) == [(CMD_COMPETITION_START, 0, b"\x01")]
+    assert state["start_area"] == START_AREA_1
     assert gui.running == 1 and gui.elapsed == [0]
+
+
+def test_start_competition_sends_selected_area_2():
+    class Gui:
+        def show_running_page(self):
+            pass
+
+        def set_elapsed(self, seconds):
+            assert seconds == 0
+
+    port, state = Port(), main.make_service_state()
+    assert main.start_competition(port, state, Gui(), START_AREA_2, 1.0)
+    assert frames(port) == [(CMD_COMPETITION_START, 0, b"\x02")]
 
 
 def test_qr_result_updates_gui_once_and_keeps_previous_value_after_missing(monkeypatch):

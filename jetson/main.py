@@ -27,6 +27,7 @@ from protocol.commands import (
     DISK_CENTER_NO_TARGET,
     DISK_CENTER_OK,
     START_COMMANDS,
+    VALID_START_AREAS,
     TASK_CODE_LENGTH,
 )
 from protocol.frame import pack_frame, parse_frames
@@ -63,6 +64,16 @@ _FILL_LIGHT_MODES = frozenset((CMD_START_COLOR, CMD_START_CIRCLE))
 def _requires_fill_light(mode: int) -> bool:
     """仅颜色物料和同心圆检测会话需要补光灯。"""
     return mode in _FILL_LIGHT_MODES
+
+
+def _visual_detection_ready(mode: int, fill_light_active: bool, ready_at: float | None, now: float) -> bool:
+    """补光灯稳定前继续轮询命令，但暂不执行对应的视觉推理。"""
+    return not (
+        _requires_fill_light(mode)
+        and fill_light_active
+        and ready_at is not None
+        and now < ready_at
+    )
 
 
 def make_service_state() -> dict[str, object]:
@@ -217,17 +228,26 @@ def run_detection(
         state["last_task_code"] = code
 
 
-def start_competition(port: object, state: dict[str, object], gui: CompetitionGUI, now: float) -> bool:
+def start_competition(
+    port: object,
+    state: dict[str, object],
+    gui: CompetitionGUI,
+    start_area: int,
+    now: float,
+) -> bool:
     """发送启动帧；串口写入成功后才切换比赛显示页面。"""
+    if start_area not in VALID_START_AREAS:
+        return False
     if bool(state.get("competition_started", False)):
         return True
     try:
-        port.write(pack_frame(CMD_COMPETITION_START, 0, b""))
+        port.write(pack_frame(CMD_COMPETITION_START, 0, bytes((start_area,))))
     except Exception as error:
         print(f"competition start send failed: {error}", flush=True)
         return False
     state["competition_started"] = True
     state["competition_started_at"] = now
+    state["start_area"] = start_area
     gui.show_running_page()
     gui.set_elapsed(0)
     return True
@@ -242,9 +262,12 @@ def main() -> None:
     gpio_configured = False
     fill_light_active = False
     fill_light_unavailable = False
+    fill_light_ready_at: float | None = None
 
     def stop_fill_light() -> None:
-        nonlocal pwm, fill_light_active
+        nonlocal pwm, fill_light_active, fill_light_ready_at
+        if not fill_light_active and pwm is None:
+            return
         if pwm is not None:
             try:
                 pwm.ChangeDutyCycle(0)
@@ -259,21 +282,22 @@ def main() -> None:
             except Exception as error:
                 print(f"fill light pin reset failed: {error}", flush=True)
         fill_light_active = False
+        fill_light_ready_at = None
 
-    def enable_fill_light() -> None:
-        nonlocal pwm, fill_light_active, fill_light_unavailable
+    def enable_fill_light(now: float) -> None:
+        nonlocal pwm, fill_light_active, fill_light_unavailable, fill_light_ready_at
         if fill_light_active or fill_light_unavailable:
             return
         try:
             pwm = gpio.PWM(PWM_PIN, PWM_FREQUENCY_HZ)
             pwm.start(PWM_DUTY_CYCLE_PERCENT)
             fill_light_active = True
+            fill_light_ready_at = now + LIGHT_SETTLE_SECONDS
             print(
                 f"fill light enabled pin={PWM_PIN} frequency_hz={PWM_FREQUENCY_HZ} "
                 f"duty_cycle_percent={PWM_DUTY_CYCLE_PERCENT:.1f}",
                 flush=True,
             )
-            time.sleep(LIGHT_SETTLE_SECONDS)
         except Exception as error:
             print(
                 "fill light start failed; continuing visual detection without light. "
@@ -284,9 +308,9 @@ def main() -> None:
             fill_light_unavailable = True
             stop_fill_light()
 
-    def sync_fill_light() -> None:
+    def sync_fill_light(now: float) -> None:
         if _requires_fill_light(int(state["mode"])):
-            enable_fill_light()
+            enable_fill_light(now)
         else:
             stop_fill_light()
 
@@ -329,8 +353,8 @@ def main() -> None:
             gui.set_elapsed(int(time.monotonic() - started_at))
             root.after(ELAPSED_UPDATE_INTERVAL_MS, update_elapsed)
 
-    def on_start() -> bool:
-        started = start_competition(port, state, gui, time.monotonic())
+    def on_start(start_area: int) -> bool:
+        started = start_competition(port, state, gui, start_area, time.monotonic())
         if started:
             update_elapsed()
         return started
@@ -339,9 +363,11 @@ def main() -> None:
         # 场地标注页只改变 GUI 视图；服务轮询始终持续运行。
         try:
             poll_commands(port, state)
-            sync_fill_light()
-            run_detection(port, cameras, state, time.monotonic(), gui.set_task_code)
-            sync_fill_light()
+            now = time.monotonic()
+            sync_fill_light(now)
+            if _visual_detection_ready(int(state["mode"]), fill_light_active, fill_light_ready_at, now):
+                run_detection(port, cameras, state, now, gui.set_task_code)
+            sync_fill_light(time.monotonic())
         except Exception:
             gui.close()
             raise

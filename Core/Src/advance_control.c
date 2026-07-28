@@ -9,13 +9,13 @@ void AdvanceControl_Init(void)
   g_control_mode = ADVANCE_CONTROL_NONE;
 }
 
-void AdvanceControl_SetMode(AdvanceControl_Mode_t mode)
+uint8_t AdvanceControl_SetMode(AdvanceControl_Mode_t mode)
 {
   if ((mode != ADVANCE_CONTROL_NONE) &&
       (mode != ADVANCE_CONTROL_WORLD) &&
       (mode != ADVANCE_CONTROL_VISUAL))
   {
-    return;
+    return 0U;
   }
 
   /* 活动控制器必须先释放到 NONE，防止两个控制源同时向底盘发命令。 */
@@ -23,7 +23,7 @@ void AdvanceControl_SetMode(AdvanceControl_Mode_t mode)
       (g_control_mode != ADVANCE_CONTROL_NONE) &&
       (g_control_mode != mode))
   {
-    return;
+    return 0U;
   }
 
   if ((mode == ADVANCE_CONTROL_NONE) &&
@@ -34,6 +34,7 @@ void AdvanceControl_SetMode(AdvanceControl_Mode_t mode)
   }
 
   g_control_mode = mode;
+  return 1U;
 }
 
 AdvanceControl_Mode_t AdvanceControl_GetMode(void)

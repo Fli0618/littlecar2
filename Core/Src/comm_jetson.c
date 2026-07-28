@@ -43,6 +43,7 @@ static volatile uint32_t g_last_result_tick;
 static volatile uint8_t g_qr_waiting;
 static volatile Detect_Status_t g_qr_wait_status;
 static volatile uint8_t g_competition_start_pending;
+static volatile Competition_StartArea_t g_competition_start_area;
 static uint32_t g_qr_wait_started_tick;
 
 static uint16_t CommJetson_Crc16(const uint8_t *data, uint16_t size)
@@ -258,8 +259,15 @@ static void CommJetson_HandleFrame(const uint8_t *frame, uint16_t frame_size)
   {
     return;
   }
-  if ((command == COMM_JETSON_CMD_COMPETITION_START) && (length == 0U))
+  if (command == COMM_JETSON_CMD_COMPETITION_START)
   {
+    if ((length != 1U) ||
+        ((payload[0] != COMPETITION_START_AREA_1) &&
+         (payload[0] != COMPETITION_START_AREA_2)))
+    {
+      return;
+    }
+    g_competition_start_area = (Competition_StartArea_t)payload[0];
     g_competition_start_pending = 1U;
     return;
   }
@@ -338,17 +346,19 @@ void CommJetson_Init(UART_HandleTypeDef *huart)
   g_qr_wait_status = DETECT_STATUS_OK;
   g_qr_wait_started_tick = 0U;
   g_competition_start_pending = 0U;
+  g_competition_start_area = (Competition_StartArea_t)0U;
   CommJetson_ClearResults();
   CommJetson_ClearAck();
   CommJetson_StartRx();
 }
 
-uint8_t CommJetson_TakeCompetitionStart(void)
+uint8_t CommJetson_TakeCompetitionStart(Competition_StartArea_t *start_area)
 {
-  if (g_competition_start_pending == 0U)
+  if ((start_area == NULL) || (g_competition_start_pending == 0U))
   {
     return 0U;
   }
+  *start_area = g_competition_start_area;
   g_competition_start_pending = 0U;
   return 1U;
 }

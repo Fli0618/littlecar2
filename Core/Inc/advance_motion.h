@@ -13,39 +13,54 @@ extern "C"
 #include "main.h"
 #include <math.h>
 
+/* 控制周期与传感器数据新鲜度。 */
+#define ADVANCE_MOTION_CONTROL_PERIOD_MS ((uint32_t)20U) /*!< 闭环控制周期，单位为 ms。 */
 #define ADVANCE_MOTION_POSE_TIMEOUT_MS ((uint32_t)100U) /*!< 位姿数据超时时间，单位为 ms。 */
 #define ADVANCE_MOTION_YAW_TIMEOUT_MS ((uint32_t)100U) /*!< 航向角数据超时时间，单位为 ms。 */
-#define ADVANCE_MOTION_CONTROL_PERIOD_MS ((uint32_t)20U) /*!< 闭环控制周期，单位为 ms。 */
 #define ADVANCE_MOTION_ARRIVE_HOLD_MS ((uint32_t)150U) /*!< 到达判定保持时间，单位为 ms。 */
+
+/* PID 公共限制。 */
+#define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
+
+/* 位置 PID 参数。 */
 #define ADVANCE_MOTION_KP_POS (1.0f) /*!< 位置误差比例增益。 */
-#define ADVANCE_MOTION_KP_YAW (2.0f) /*!< 航向角误差比例增益。 */
 #define ADVANCE_MOTION_KI_POS (0.03f) /*!< 位置误差积分增益。 */
 #define ADVANCE_MOTION_KD_POS (0.10f) /*!< 基于实测速度的位置微分增益。 */
+#define ADVANCE_MOTION_PID_POS_INTEGRAL_LIMIT_MM_S (1000.0f) /*!< 位置误差积分限幅，单位为 mm*s。 */
+
+/* 航向 PID 参数。 */
+#define ADVANCE_MOTION_KP_YAW (2.0f) /*!< 航向角误差比例增益。 */
 #define ADVANCE_MOTION_KI_YAW (0.05f) /*!< 航向角误差积分增益。 */
 #define ADVANCE_MOTION_KD_YAW (0.08f) /*!< 基于实测角速度的航向微分增益。 */
-#define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
-#define ADVANCE_MOTION_PID_POS_INTEGRAL_LIMIT_MM_S (1000.0f) /*!< 位置误差积分限幅，单位为 mm*s。 */
 #define ADVANCE_MOTION_PID_YAW_INTEGRAL_LIMIT_DEG_S (180.0f) /*!< 航向角误差积分限幅，单位为 deg*s。 */
+
+/* 到达判定与无进展保护。 */
 #define ADVANCE_MOTION_POS_TOLERANCE_MM (20.0f) /*!< 位置到达容差，单位为 mm。 */
 #define ADVANCE_MOTION_YAW_TOLERANCE_DEG (2.0f) /*!< 航向角到达容差，单位为度。 */
-#define ADVANCE_MOTION_DEFAULT_VMAX_MM_S (200.0f) /*!< 默认最大线速度，单位为 mm/s。 */
-#define ADVANCE_MOTION_DEFAULT_WMAX_DEG_S (90.0f) /*!< 默认最大角速度，单位为度/s。 */
 #define ADVANCE_MOTION_NO_PROGRESS_WINDOW_MS ((uint32_t)1000U) /*!< 无进展判定观察窗口，单位为 ms。 */
 #define ADVANCE_MOTION_NO_PROGRESS_MIN_REDUCTION_MM (15.0f) /*!< 观察窗口内要求的最小误差下降量，单位为 mm。 */
 #define ADVANCE_MOTION_NO_PROGRESS_MIN_COMMAND_MM_S (30.0f) /*!< 启用无进展判定的最小线速度指令，单位为 mm/s。 */
 
+/* 简化到点接口的默认目标参数。 */
+#define ADVANCE_MOTION_DEFAULT_VMAX_MM_S (200.0f) /*!< 默认最大线速度，单位为 mm/s。 */
+#define ADVANCE_MOTION_DEFAULT_WMAX_DEG_S (90.0f) /*!< 默认最大角速度，单位为度/s。 */
+#define ADVANCE_MOTION_DEFAULT_TIMEOUT_MS ((uint32_t)10000U) /*!< 默认目标超时时间，单位为 ms。 */
+
 /*
- * GotoPose 输入边界。它们是软件安全限值，不替代现场的机械限位。
+ * GotoPose 场地边界。它们是软件安全限值，不替代现场的机械限位。
  * 修改前应确认场地尺寸、OPS 坐标单位和底盘的可制动距离。
  */
 #define ADVANCE_MOTION_WORLD_X_MIN_MM (-5000.0f) /*!< 世界坐标 X 最小边界，单位为 mm。 */
 #define ADVANCE_MOTION_WORLD_X_MAX_MM (5000.0f) /*!< 世界坐标 X 最大边界，单位为 mm。 */
 #define ADVANCE_MOTION_WORLD_Y_MIN_MM (-5000.0f) /*!< 世界坐标 Y 最小边界，单位为 mm。 */
 #define ADVANCE_MOTION_WORLD_Y_MAX_MM (5000.0f) /*!< 世界坐标 Y 最大边界，单位为 mm。 */
+
+/* 目标速度与超时时间的输入上限。 */
 #define ADVANCE_MOTION_MAX_VMAX_MM_S (500.0f) /*!< 允许的最大线速度，单位为 mm/s。 */
 #define ADVANCE_MOTION_MAX_WMAX_DEG_S (180.0f) /*!< 允许的最大角速度，单位为度/s。 */
 #define ADVANCE_MOTION_MAX_TIMEOUT_MS ((uint32_t)60000U) /*!< 允许的最大目标超时时间，单位为 ms。 */
 
+/* 目标可选约束标志。 */
 #define ADVANCE_MOTION_GOAL_USE_YAW ((uint8_t)0x01U) /*!< 目标标志：使用航向角约束。 */
 
   typedef enum
@@ -54,7 +69,8 @@ extern "C"
     ADVANCE_MOTION_STATUS_INVALID_PARAM,
     ADVANCE_MOTION_STATUS_NO_ORIGIN,
     ADVANCE_MOTION_STATUS_NO_POSE,
-    ADVANCE_MOTION_STATUS_POSE_TIMEOUT
+    ADVANCE_MOTION_STATUS_POSE_TIMEOUT,
+    ADVANCE_MOTION_STATUS_BUSY
   } AdvanceMotion_Status_t;
 
   typedef enum
@@ -94,7 +110,10 @@ extern "C"
    * 外部通信控制应使用异步 AdvanceMotion_GotoPoseEx；本接口用于本地测试和固定顺序业务流程。
    * @return 最终 AdvanceMotion_RunState_t，不得从中断上下文调用。
    */
-  AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(const WorldGoalPose2D_t *goal, uint8_t acc);
+  AdvanceMotion_RunState_t AdvanceMotion_GotoGoalBlocking(const WorldGoalPose2D_t *goal, uint8_t acc);
+  /** @brief 使用默认速度、超时和航向约束阻塞执行到点运动。*/
+  AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(float x_mm, float y_mm,
+                                                           float yaw_deg, uint8_t acc);
   /** @brief 由 TIM6 按控制周期推进一次位姿导航控制器。 */
   void AdvanceMotion_Update(void);
   /** @brief 仅在存在活动目标时取消、释放控制权并停车。 */
