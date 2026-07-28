@@ -39,6 +39,19 @@ conda run -n low_numpy pid-tuner goto --port COM4 --x 200 --y 0 --yaw 0 --vmax 5
 
 `profile save|list|show|export-c` 管理本地 PID JSON 方案；方案默认保存在 `profiles/`，遥测 CSV 默认建议保存至 `logs/`。两类运行数据都被 Git 忽略。
 
+## 实时 GUI
+
+安装依赖后运行：
+
+```powershell
+conda run -n low_numpy pip install -e .
+conda run -n low_numpy pid-tuner-gui --port COM4
+```
+
+GUI 使用现有世界位姿遥测：X/Y 是经坐标修正后的 OPS 实际位置，yaw 在 WIT 有效时优先使用 WIT，否则使用 OPS。默认显示最近 30 秒，窗口可调 5-120 秒，缓存只保留最近 120 秒。
+
+运动控制必须在现场具备机械急停与人员监护时使用。断开、通信错误和窗口关闭会尝试发送 STOP；这不能替代物理急停。
+
 ## 只读验证
 
 默认只验证 `GET_PID` 和坏 CRC 恢复，不会改写 PID，也不会驱动车辆：
