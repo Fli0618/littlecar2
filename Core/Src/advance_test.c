@@ -541,7 +541,6 @@ void Test_Motion_GotoPoseBlocking(void)
   AdvanceWorld_Status_t world_status;
   AdvanceMotion_RunState_t state;
   WorldPose2D_t pose;
-  WorldGoalPose2D_t goal;
 
   printf("[TEST] motion GotoPoseBlocking test\r\n");
   AdvanceMotion_Init();
@@ -557,14 +556,8 @@ void Test_Motion_GotoPoseBlocking(void)
   }
 
   // 预期：车体保持当前航向，移动至世界坐标系 X 轴正方向 300mm 处
-  goal.x_mm = pose.x_mm + 300.0f;
-  goal.y_mm = pose.y_mm;
-  goal.yaw_deg = pose.yaw_deg;
-  goal.vmax_mm_s = 150.0f;
-  goal.wmax_deg_s = 0.0f;
-  goal.timeout_ms = 10000U;
-  goal.goal_flags = 0U;
-  state = AdvanceMotion_GotoGoalBlocking(&goal, 50);
+  state = AdvanceMotion_GotoPoseBlocking(pose.x_mm + 300.0f, pose.y_mm,
+                                          pose.yaw_deg, 50);
   printf("[TEST] motion goto position state=%d\r\n", (int)state);
   Chassis_Stop();
   Chassis_Enable(false);
