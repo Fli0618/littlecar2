@@ -54,7 +54,7 @@
 /* TIM6 提供 1 ms 调度节拍，所有业务周期统一在这里配置。 */
 #define APP_WORLD_PERIOD_MS ((uint32_t)10U)
 #define APP_ORIGIN_PERIOD_MS ((uint32_t)1000U)
-#define APP_LED_PERIOD_MS ((uint32_t)500U)
+#define APP_LED_PERIOD_MS ((uint32_t)1500U)
 
 /* TIM6 是全部周期 Update 的唯一执行入口。 */
 
@@ -311,7 +311,7 @@ int main(void)
   HAL_GPIO_Init(GPIOC, &GPIO_InitStructInit);
 
   // 全量闪烁测试
-  for (int i = 0; i < 20; i++)
+  for (int i = 0; i < 10; i++)
   {
     HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
     HAL_GPIO_TogglePin(GPIOF, GPIO_PIN_9 | GPIO_PIN_10);
@@ -379,6 +379,7 @@ int main(void)
     Error_Handler();
   }
 
+  printf("STM32 init finish\r\n");
   // 1. 初始化电机驱动底层 (开启 DMA 接收等)
   // 2. 启动后立即闪烁 3 次作为“板子活了”的信号
   for (int i = 0; i < 6; i++)
@@ -393,6 +394,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
 
 #if (TUNER_ENABLE != 0U)
+  printf("TUNER_ENABLE\r\n");
   while (1)
   {
     CommTuner_Process();

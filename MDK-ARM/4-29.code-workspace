@@ -13,6 +13,8 @@
             "path": "../tools"
         }
     ],
-    "settings": {},
+    "settings": {
+        "cortex-debug.variableUseNaturalFormat": true
+    },
     "extensions": {}
 }
