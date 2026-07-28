@@ -243,12 +243,11 @@ static void App_TimerUpdate(void)
   {
     control_elapsed_ms = 0U;
 
+    /* PID pending 配置必须在每个 20 ms 周期边界检查一次。 */
+    AdvanceMotion_Update();
+
     switch (AdvanceControl_GetMode())
     {
-    case ADVANCE_CONTROL_WORLD:
-      AdvanceMotion_Update();
-      break;
-
     case ADVANCE_CONTROL_VISUAL:
       AdvanceVisual_Update();
       break;

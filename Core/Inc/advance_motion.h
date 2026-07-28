@@ -22,16 +22,22 @@ extern "C"
 /* PID 公共限制。 */
 #define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
 
-/* 位置 PID 参数。 */
-#define ADVANCE_MOTION_KP_POS (1.0f) /*!< 位置误差比例增益。 */
-#define ADVANCE_MOTION_KI_POS (0.03f) /*!< 位置误差积分增益。 */
-#define ADVANCE_MOTION_KD_POS (0.10f) /*!< 基于实测速度的位置微分增益。 */
+/* 位置 PID 默认参数与在线调参上限。 */
+#define ADVANCE_MOTION_DEFAULT_KP_POS (1.0f) /*!< 位置误差比例默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KI_POS (0.03f) /*!< 位置误差积分默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KD_POS (0.10f) /*!< 基于实测速度的位置微分默认增益。 */
+#define ADVANCE_MOTION_MAX_KP_POS (10.0f) /*!< 位置误差比例增益上限。 */
+#define ADVANCE_MOTION_MAX_KI_POS (0.30f) /*!< 位置误差积分增益上限。 */
+#define ADVANCE_MOTION_MAX_KD_POS (1.0f) /*!< 基于实测速度的位置微分增益上限。 */
 #define ADVANCE_MOTION_PID_POS_INTEGRAL_LIMIT_MM_S (1000.0f) /*!< 位置误差积分限幅，单位为 mm*s。 */
 
-/* 航向 PID 参数。 */
-#define ADVANCE_MOTION_KP_YAW (2.0f) /*!< 航向角误差比例增益。 */
-#define ADVANCE_MOTION_KI_YAW (0.05f) /*!< 航向角误差积分增益。 */
-#define ADVANCE_MOTION_KD_YAW (0.08f) /*!< 基于实测角速度的航向微分增益。 */
+/* 航向 PID 默认参数与在线调参上限。 */
+#define ADVANCE_MOTION_DEFAULT_KP_YAW (2.0f) /*!< 航向角误差比例默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KI_YAW (0.05f) /*!< 航向角误差积分默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KD_YAW (0.08f) /*!< 基于实测角速度的航向微分默认增益。 */
+#define ADVANCE_MOTION_MAX_KP_YAW (20.0f) /*!< 航向角误差比例增益上限。 */
+#define ADVANCE_MOTION_MAX_KI_YAW (0.50f) /*!< 航向角误差积分增益上限。 */
+#define ADVANCE_MOTION_MAX_KD_YAW (0.80f) /*!< 基于实测角速度的航向微分增益上限。 */
 #define ADVANCE_MOTION_PID_YAW_INTEGRAL_LIMIT_DEG_S (180.0f) /*!< 航向角误差积分限幅，单位为 deg*s。 */
 
 /* 到达判定与无进展保护。 */
@@ -84,6 +90,17 @@ extern "C"
     ADVANCE_MOTION_STATE_CANCELED
   } AdvanceMotion_RunState_t;
 
+  /** @brief 位姿外环 PID 的完整运行时参数组。 */
+  typedef struct
+  {
+    float kp_pos; /*!< X/Y 位置误差比例增益。 */
+    float ki_pos; /*!< X/Y 位置误差积分增益。 */
+    float kd_pos; /*!< X/Y 基于实测速度的微分增益。 */
+    float kp_yaw; /*!< 航向角误差比例增益。 */
+    float ki_yaw; /*!< 航向角误差积分增益。 */
+    float kd_yaw; /*!< 航向角基于实测角速度的微分增益。 */
+  } AdvanceMotion_PidConfig_t;
+
   /** @brief 运动控制的对外状态快照，用于上位机与调试查询。 */
   typedef struct
   {
@@ -122,6 +139,14 @@ extern "C"
   void AdvanceMotion_Cancel(void);
   /** @brief 获取运动控制运行状态。 @param status 输出状态结构体。 @return 获取结果状态。 */
   AdvanceMotion_Status_t AdvanceMotion_GetStatus(AdvanceMotion_RuntimeStatus_t *status);
+  /** @brief 获取当前生效的 PID 配置与版本号。 */
+  AdvanceMotion_Status_t AdvanceMotion_GetPidConfig(AdvanceMotion_PidConfig_t *config,
+                                                      uint32_t *revision);
+  /** @brief 校验并提交完整 PID 配置，在下一次 20 ms 周期边界整体生效。 */
+  AdvanceMotion_Status_t AdvanceMotion_RequestPidConfig(const AdvanceMotion_PidConfig_t *config,
+                                                          uint32_t *revision);
+  /** @brief 提交固件默认 PID 配置，在下一次 20 ms 周期边界整体生效。 */
+  AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultPid(uint32_t *revision);
 
 #ifdef __cplusplus
 }
