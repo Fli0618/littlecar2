@@ -46,7 +46,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 /* 发布固件保持 0，避免 printf 的逐字节阻塞影响控制周期。 */
-#define DEBUG_UART_ENABLE (1U)
+#define DEBUG_UART_ENABLE (0U)
 
 /* 设为 1 时进入 USART1 在线调参/回显模式，不运行比赛主流程。 */
 #define TUNER_ENABLE (1U)
@@ -224,6 +224,9 @@ static void App_TimerUpdate(void)
   static uint16_t led_elapsed_ms = 0U;
 
   CommJetson_Update();
+#if (TUNER_ENABLE != 0U)
+  CommTuner_Update();
+#endif
 
   if (++world_elapsed_ms >= APP_WORLD_PERIOD_MS)
   {

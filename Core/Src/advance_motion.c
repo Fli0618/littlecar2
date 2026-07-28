@@ -16,6 +16,9 @@ typedef struct
   float measured_vx_world_mm_s;
   float measured_vy_world_mm_s;
   float measured_wz_deg_s;
+  float command_vx_world_mm_s;
+  float command_vy_world_mm_s;
+  float command_wz_ccw_deg_s;
   float no_progress_reference_error_mm;
   uint8_t arrival_stop_sent;
   uint8_t pid_history_valid;
@@ -23,6 +26,7 @@ typedef struct
 } AdvanceMotion_Control_t;
 
 static AdvanceMotion_RuntimeStatus_t g_motion = {ADVANCE_MOTION_STATE_IDLE};
+static AdvanceMotion_DebugSnapshot_t g_motion_debug = {0};
 static AdvanceMotion_Control_t g_motion_control = {0};
 static volatile AdvanceMotion_RunState_t g_motion_state = ADVANCE_MOTION_STATE_IDLE;
 static AdvanceMotion_PidConfig_t g_pid_active;
@@ -62,8 +66,33 @@ static void AdvanceMotion_ResetPidAndProgress(void)
   g_motion_control.measured_vx_world_mm_s = 0.0f;
   g_motion_control.measured_vy_world_mm_s = 0.0f;
   g_motion_control.measured_wz_deg_s = 0.0f;
+  g_motion_control.command_vx_world_mm_s = 0.0f;
+  g_motion_control.command_vy_world_mm_s = 0.0f;
+  g_motion_control.command_wz_ccw_deg_s = 0.0f;
   g_motion_control.no_progress_reference_error_mm = 0.0f;
   g_motion_control.pid_history_valid = 0U;
+}
+
+static void AdvanceMotion_UpdateDebugSnapshot(uint32_t now_tick, uint8_t flags)
+{
+  g_motion_debug.tick = now_tick;
+  g_motion_debug.pid_revision = g_pid_active_revision;
+  g_motion_debug.state = g_motion_state;
+  g_motion_debug.flags = flags;
+  g_motion_debug.goal = g_motion.goal;
+  g_motion_debug.pose = g_motion.pose;
+  g_motion_debug.error_x_mm = g_motion.error_x_mm;
+  g_motion_debug.error_y_mm = g_motion.error_y_mm;
+  g_motion_debug.error_yaw_deg = g_motion.yaw_error_deg;
+  g_motion_debug.command_vx_world_mm_s = g_motion_control.command_vx_world_mm_s;
+  g_motion_debug.command_vy_world_mm_s = g_motion_control.command_vy_world_mm_s;
+  g_motion_debug.command_wz_ccw_deg_s = g_motion_control.command_wz_ccw_deg_s;
+  g_motion_debug.measured_vx_world_mm_s = g_motion_control.measured_vx_world_mm_s;
+  g_motion_debug.measured_vy_world_mm_s = g_motion_control.measured_vy_world_mm_s;
+  g_motion_debug.measured_wz_deg_s = g_motion_control.measured_wz_deg_s;
+  g_motion_debug.integral_x_mm_s = g_motion_control.pid_integral_x_mm_s;
+  g_motion_debug.integral_y_mm_s = g_motion_control.pid_integral_y_mm_s;
+  g_motion_debug.integral_yaw_deg_s = g_motion_control.pid_integral_yaw_deg_s;
 }
 
 static uint8_t AdvanceMotion_IsPidConfigValid(const AdvanceMotion_PidConfig_t *config)
@@ -386,6 +415,7 @@ void AdvanceMotion_Init(void)
   g_pid_active_revision = 0U;
   g_pid_pending_revision = 0U;
   g_pid_next_revision = 0U;
+  AdvanceMotion_UpdateDebugSnapshot(HAL_GetTick(), 0U);
 }
 
 /* 设置世界坐标系速度，并取消正在执行的到点任务。 */
@@ -501,6 +531,7 @@ void AdvanceMotion_Update(void)
 
   if (g_motion_state != ADVANCE_MOTION_STATE_RUNNING)
   {
+    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
     return;
   }
 
@@ -508,6 +539,7 @@ void AdvanceMotion_Update(void)
       ((now_tick - g_motion.started_tick) >= g_motion.goal.timeout_ms))
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_TIMEOUT);
+    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
     return;
   }
 
@@ -515,11 +547,13 @@ void AdvanceMotion_Update(void)
   if (pose_status == ADVANCE_MOTION_STATUS_NO_ORIGIN)
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_ORIGIN);
+    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
     return;
   }
   if (pose_status != ADVANCE_MOTION_STATUS_OK)
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_POSE);
+    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
     return;
   }
 
@@ -532,6 +566,7 @@ void AdvanceMotion_Update(void)
       ((now_tick - g_motion.pose.yaw_updated_tick) > ADVANCE_MOTION_YAW_TIMEOUT_MS))
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_POSE);
+    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
     return;
   }
   g_motion.yaw_error_deg = yaw_required ? AdvanceWorld_WrapAngleDeg(g_motion.goal.yaw_deg - g_motion.pose.yaw_deg) : 0.0f;
@@ -554,6 +589,10 @@ void AdvanceMotion_Update(void)
     {
       AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_ARRIVED);
     }
+    AdvanceMotion_UpdateDebugSnapshot(now_tick,
+                                      ADVANCE_MOTION_DEBUG_FLAG_VALID |
+                                          ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH |
+                                          ((yaw_required != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH : 0U));
     return;
   }
   g_motion_control.arrive_hold_start_tick = 0U;
@@ -600,16 +639,27 @@ void AdvanceMotion_Update(void)
   if (AdvanceMotion_HasNoProgress(now_tick, command_magnitude) != 0U)
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED);
+    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
     return;
   }
 
   (void)AdvanceMotion_ApplyWorldVelocityEx(vx_world_mm_s, vy_world_mm_s, wz_ccw_deg_s, g_motion_control.acc, &g_motion.pose);
   g_motion.updated_tick = now_tick;
+  g_motion_control.command_vx_world_mm_s = vx_world_mm_s;
+  g_motion_control.command_vy_world_mm_s = vy_world_mm_s;
+  g_motion_control.command_wz_ccw_deg_s = wz_ccw_deg_s;
+  AdvanceMotion_UpdateDebugSnapshot(now_tick,
+                                    ADVANCE_MOTION_DEBUG_FLAG_VALID |
+                                        ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH |
+                                        ((yaw_required != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH : 0U) |
+                                        ((linear_saturated != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_LINEAR_SATURATED : 0U) |
+                                        ((yaw_saturated != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_SATURATED : 0U));
 }
 
 /* 取消当前运动任务、释放控制权并停止底盘。 */
 void AdvanceMotion_Cancel(void)
 {
+  Chassis_SmoothStop(CHASSIS_DEFAULT_ACC);
   AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED);
 }
 
@@ -636,6 +686,25 @@ AdvanceMotion_Status_t AdvanceMotion_GetStatus(AdvanceMotion_RuntimeStatus_t *st
   __disable_irq();
   *status = g_motion;
   status->state = g_motion_state;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+  return ADVANCE_MOTION_STATUS_OK;
+}
+
+AdvanceMotion_Status_t AdvanceMotion_GetDebugSnapshot(AdvanceMotion_DebugSnapshot_t *snapshot)
+{
+  uint32_t primask;
+
+  if (snapshot == NULL)
+  {
+    return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+  }
+
+  primask = __get_PRIMASK();
+  __disable_irq();
+  *snapshot = g_motion_debug;
   if (primask == 0U)
   {
     __enable_irq();

@@ -115,6 +115,35 @@ extern "C"
     uint32_t updated_tick; /*!< 状态更新时间，单位为 ms。 */
   } AdvanceMotion_RuntimeStatus_t;
 
+  /* Debug snapshot refreshed once per motion-control period. */
+  typedef struct
+  {
+    uint32_t tick;
+    uint32_t pid_revision;
+    AdvanceMotion_RunState_t state;
+    uint8_t flags;
+    WorldGoalPose2D_t goal;
+    WorldPose2D_t pose;
+    float error_x_mm;
+    float error_y_mm;
+    float error_yaw_deg;
+    float command_vx_world_mm_s;
+    float command_vy_world_mm_s;
+    float command_wz_ccw_deg_s;
+    float measured_vx_world_mm_s;
+    float measured_vy_world_mm_s;
+    float measured_wz_deg_s;
+    float integral_x_mm_s;
+    float integral_y_mm_s;
+    float integral_yaw_deg_s;
+  } AdvanceMotion_DebugSnapshot_t;
+
+#define ADVANCE_MOTION_DEBUG_FLAG_VALID ((uint8_t)0x01U)
+#define ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH ((uint8_t)0x02U)
+#define ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH ((uint8_t)0x04U)
+#define ADVANCE_MOTION_DEBUG_FLAG_LINEAR_SATURATED ((uint8_t)0x08U)
+#define ADVANCE_MOTION_DEBUG_FLAG_YAW_SATURATED ((uint8_t)0x10U)
+
   /** @brief 初始化运动控制模块。 */
   void AdvanceMotion_Init(void);
   /** @brief 设置世界坐标系速度及加速度。 @return 设置结果状态。 */
@@ -139,6 +168,8 @@ extern "C"
   void AdvanceMotion_Cancel(void);
   /** @brief 获取运动控制运行状态。 @param status 输出状态结构体。 @return 获取结果状态。 */
   AdvanceMotion_Status_t AdvanceMotion_GetStatus(AdvanceMotion_RuntimeStatus_t *status);
+  /** @brief Get one consistent PID debug snapshot without performing I/O. */
+  AdvanceMotion_Status_t AdvanceMotion_GetDebugSnapshot(AdvanceMotion_DebugSnapshot_t *snapshot);
   /** @brief 获取当前生效的 PID 配置与版本号。 */
   AdvanceMotion_Status_t AdvanceMotion_GetPidConfig(AdvanceMotion_PidConfig_t *config,
                                                       uint32_t *revision);
