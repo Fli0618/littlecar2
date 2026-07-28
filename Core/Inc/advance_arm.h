@@ -9,29 +9,29 @@ extern "C"
 #include <stdbool.h>
 #include <stdint.h>
 
-#define ARM_LIFT_MOTOR_ID ((uint8_t)5U)
-#define ARM_SLIDE_MOTOR_ID ((uint8_t)6U)
-#define ARM_GRIPPER_SERVO_ID ((uint8_t)2U)
+#define ARM_LIFT_MOTOR_ID ((uint8_t)5U) /*!< 升降轴电机 ID。 */
+#define ARM_SLIDE_MOTOR_ID ((uint8_t)6U) /*!< 滑台轴电机 ID。 */
+#define ARM_GRIPPER_SERVO_ID ((uint8_t)2U) /*!< 夹爪舵机 ID。 */
 
-#define ARM_LIFT_DOWN_DIRECTION ((uint8_t)0U)
-#define ARM_LIFT_UP_DIRECTION ((uint8_t)1U)
-#define ARM_SLIDE_EXTEND_DIRECTION ((uint8_t)0U)
-#define ARM_SLIDE_RETRACT_DIRECTION ((uint8_t)1U)
+#define ARM_LIFT_DOWN_DIRECTION ((uint8_t)0U) /*!< 升降轴下降方向。 */
+#define ARM_LIFT_UP_DIRECTION ((uint8_t)1U) /*!< 升降轴上升方向。 */
+#define ARM_SLIDE_EXTEND_DIRECTION ((uint8_t)0U) /*!< 滑台轴伸出方向。 */
+#define ARM_SLIDE_RETRACT_DIRECTION ((uint8_t)1U) /*!< 滑台轴收回方向。 */
 
-#define ARM_LIFT_SPEED ((uint16_t)300U)
-#define ARM_SLIDE_SPEED ((uint16_t)300U)
-#define ARM_LIFT_ACC ((uint8_t)10U)
-#define ARM_SLIDE_ACC ((uint8_t)10U)
+#define ARM_LIFT_SPEED ((uint16_t)300U) /*!< 升降轴运动速度。 */
+#define ARM_SLIDE_SPEED ((uint16_t)300U) /*!< 滑台轴运动速度。 */
+#define ARM_LIFT_ACC ((uint8_t)10U) /*!< 升降轴加速度。 */
+#define ARM_SLIDE_ACC ((uint8_t)10U) /*!< 滑台轴加速度。 */
 
-#define ARM_SLIDE_EXTEND_PULSE ((uint32_t)28000U)
-#define ARM_SLIDE_RETRACT_PULSE ((uint32_t)28000U)
-#define ARM_LIFT_LOWER_PULSE ((uint32_t)18000U)
-#define ARM_LIFT_RAISE_PULSE ((uint32_t)18000U)
+#define ARM_SLIDE_EXTEND_PULSE ((uint32_t)28000U) /*!< 滑台伸出相对脉冲数。 */
+#define ARM_SLIDE_RETRACT_PULSE ((uint32_t)28000U) /*!< 滑台收回相对脉冲数。 */
+#define ARM_LIFT_LOWER_PULSE ((uint32_t)18000U) /*!< 升降轴下降相对脉冲数。 */
+#define ARM_LIFT_RAISE_PULSE ((uint32_t)18000U) /*!< 升降轴上升相对脉冲数。 */
 
-#define ARM_GRIPPER_OPEN_POS ((int32_t)800)
-#define ARM_GRIPPER_CLOSE_POS ((int32_t)1800)
-#define ARM_GRIPPER_SPEED ((uint16_t)500U)
-#define ARM_GRIPPER_ACC ((uint16_t)20U)
+#define ARM_GRIPPER_OPEN_POS ((int32_t)800) /*!< 夹爪张开目标位置。 */
+#define ARM_GRIPPER_CLOSE_POS ((int32_t)1800) /*!< 夹爪闭合目标位置。 */
+#define ARM_GRIPPER_SPEED ((uint16_t)500U) /*!< 夹爪运动速度。 */
+#define ARM_GRIPPER_ACC ((uint16_t)20U) /*!< 夹爪加速度。 */
 
 /** @brief 初始化完全开环的机械臂高层模块。 */
 void AdvanceArm_Init(void);
