@@ -42,6 +42,7 @@ from vision import (
     detect_color,
     reset_advance_tracking,
     reset_qr_tracking,
+    render_camera_preview,
 )
 
 SERIAL_PORT = "/dev/ttyTHS1"
@@ -58,6 +59,12 @@ PWM_PIN = 33
 PWM_FREQUENCY_HZ = 10000
 PWM_DUTY_CYCLE_PERCENT = 50.0
 LIGHT_SETTLE_SECONDS = 0.3
+ENABLE_CAMERA_PREVIEW_UI = True
+CAMERA_PREVIEW_PERIOD_MS = 100
+QR_AIM_OFFSET_X_PX = 0
+QR_AIM_OFFSET_Y_PX = 0
+VISION_AIM_OFFSET_X_PX = 0
+VISION_AIM_OFFSET_Y_PX = 0
 _FILL_LIGHT_MODES = frozenset((CMD_START_COLOR, CMD_START_CIRCLE))
 
 
@@ -85,6 +92,45 @@ def make_service_state() -> dict[str, object]:
         "last_task_code": "",
         "rx": bytearray(),
     }
+
+
+def _visual_key(state: dict[str, object]) -> tuple[int, int]:
+    return int(state["mode"]), int(state["session"])
+
+
+def visual_page_action(previous_key: tuple[int, int], current_key: tuple[int, int]) -> str | None:
+    """根据有效视觉会话变化返回需要执行的 GUI 页面操作。"""
+    if previous_key == current_key:
+        return None
+    if current_key[0] in START_COMMANDS:
+        return "show_camera"
+    if current_key[0] == 0:
+        return "show_running"
+    return None
+
+
+def _should_update_idle_preview(
+    enabled: bool,
+    mode: int,
+    camera_page_visible: bool,
+    now: float,
+    last_preview_at: float,
+) -> bool:
+    return (
+        enabled
+        and mode == 0
+        and camera_page_visible
+        and (now - last_preview_at) * 1000.0 >= CAMERA_PREVIEW_PERIOD_MS
+    )
+
+
+def _preview_mode_text(mode: int) -> str:
+    return {
+        CMD_START_QR: "二维码检测",
+        CMD_START_COLOR: "颜色检测",
+        CMD_START_CIRCLE: "同心圆检测",
+        CMD_START_DISK_CENTER: "物料盘中心检测",
+    }.get(mode, "手动相机预览")
 
 
 def warmup_vision_models() -> None:
@@ -183,6 +229,7 @@ def run_detection(
     state: dict[str, object],
     now: float,
     task_code_callback: Callable[[str], None] | None = None,
+    preview_callback: Callable[[np.ndarray, int, dict[str, object]], None] | None = None,
 ) -> None:
     mode = int(state["mode"])
     if not mode or now - float(state["last_run"]) < int(state["period_ms"]) / 1000.0:
@@ -216,16 +263,22 @@ def run_detection(
     if response == CMD_QR_RESULT:
         code = result.get("code")
         payload = _qr_payload(code)
-        if payload is None:
-            return
+        if payload is not None:
+            port.write(pack_frame(response, session, payload))
+            if task_code_callback is not None and code != state["last_task_code"]:
+                task_code_callback(str(code))
+                state["last_task_code"] = code
     elif response == CMD_DISK_CENTER_RESULT:
         payload = _disk_payload(result)
+        port.write(pack_frame(response, session, payload))
     else:
         payload = _target_payload(result)
-    port.write(pack_frame(response, session, payload))
-    if response == CMD_QR_RESULT and task_code_callback is not None and code != state["last_task_code"]:
-        task_code_callback(str(code))
-        state["last_task_code"] = code
+        port.write(pack_frame(response, session, payload))
+    if preview_callback is not None:
+        try:
+            preview_callback(frame, mode, result)
+        except Exception as error:
+            print(f"camera preview update failed: {error}", flush=True)
 
 
 def start_competition(
@@ -345,7 +398,60 @@ def main() -> None:
         )
 
     root = tk.Tk()
-    gui = CompetitionGUI(root)
+    gui = CompetitionGUI(root, camera_preview_enabled=ENABLE_CAMERA_PREVIEW_UI)
+    last_manual_preview_at = float("-inf")
+
+    def apply_visual_page_action(previous_key: tuple[int, int], current_key: tuple[int, int]) -> None:
+        if not ENABLE_CAMERA_PREVIEW_UI:
+            return
+        action = visual_page_action(previous_key, current_key)
+        if action == "show_camera":
+            gui.show_camera_page()
+        elif action == "show_running":
+            gui.show_running_page()
+
+    def update_detection_preview(frame_bgr: np.ndarray, mode: int, result: dict[str, object]) -> None:
+        if not ENABLE_CAMERA_PREVIEW_UI or not gui.is_camera_page_visible():
+            return
+        aim_offset = (
+            (QR_AIM_OFFSET_X_PX, QR_AIM_OFFSET_Y_PX)
+            if mode == CMD_START_QR
+            else (VISION_AIM_OFFSET_X_PX, VISION_AIM_OFFSET_Y_PX)
+        )
+        try:
+            gui.set_camera_frame(
+                render_camera_preview(frame_bgr, mode, result, aim_offset=aim_offset),
+                status_text=_preview_mode_text(mode),
+            )
+        except Exception as error:
+            print(f"camera preview rendering failed: {error}", flush=True)
+
+    def update_idle_preview(now: float) -> None:
+        nonlocal last_manual_preview_at
+        if not _should_update_idle_preview(
+            ENABLE_CAMERA_PREVIEW_UI,
+            int(state["mode"]),
+            gui.is_camera_page_visible(),
+            now,
+            last_manual_preview_at,
+        ):
+            return
+        last_manual_preview_at = now
+        try:
+            ok, frame = vision_camera.read()
+            if not ok:
+                return
+            gui.set_camera_frame(
+                render_camera_preview(
+                    frame,
+                    0,
+                    aim_offset=(VISION_AIM_OFFSET_X_PX, VISION_AIM_OFFSET_Y_PX),
+                    status_text="手动相机预览",
+                ),
+                status_text="手动相机预览",
+            )
+        except Exception as error:
+            print(f"idle camera preview failed: {error}", flush=True)
 
     def update_elapsed() -> None:
         started_at = state.get("competition_started_at")
@@ -362,12 +468,20 @@ def main() -> None:
     def service_tick() -> None:
         # 场地标注页只改变 GUI 视图；服务轮询始终持续运行。
         try:
+            previous_visual_key = _visual_key(state)
             poll_commands(port, state)
+            current_visual_key = _visual_key(state)
+            apply_visual_page_action(previous_visual_key, current_visual_key)
             now = time.monotonic()
             sync_fill_light(now)
             if _visual_detection_ready(int(state["mode"]), fill_light_active, fill_light_ready_at, now):
-                run_detection(port, cameras, state, now, gui.set_task_code)
+                preview_callback = update_detection_preview if (
+                    ENABLE_CAMERA_PREVIEW_UI and gui.is_camera_page_visible()
+                ) else None
+                run_detection(port, cameras, state, now, gui.set_task_code, preview_callback)
+            apply_visual_page_action(current_visual_key, _visual_key(state))
             sync_fill_light(time.monotonic())
+            update_idle_preview(time.monotonic())
         except Exception:
             gui.close()
             raise

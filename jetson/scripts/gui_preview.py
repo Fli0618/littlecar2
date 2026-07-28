@@ -15,8 +15,8 @@ from protocol.commands import CMD_START_CIRCLE, CMD_START_COLOR, CMD_START_DISK_
 from ui import CompetitionGUI
 from vision import render_camera_preview
 
-FRAME_WIDTH = 960
-FRAME_HEIGHT = 540
+FRAME_WIDTH = 1280
+FRAME_HEIGHT = 720
 REFRESH_INTERVAL_MS = 50
 
 MODE_LABELS = {
@@ -28,7 +28,7 @@ MODE_LABELS = {
 }
 
 
-def compose_preview_frame(frame_index: int, session: int) -> np.ndarray:
+def compose_preview_frame(frame_index: int, session: int = 1) -> np.ndarray:
     """生成带有轻微运动效果的 BGR 合成相机画面。"""
     y, x = np.ogrid[:FRAME_HEIGHT, :FRAME_WIDTH]
     frame = np.empty((FRAME_HEIGHT, FRAME_WIDTH, 3), dtype=np.uint8)
@@ -49,7 +49,7 @@ def compose_preview_frame(frame_index: int, session: int) -> np.ndarray:
     return frame
 
 
-def simulate_visual_result(mode: int, frame_index: int, session: int) -> dict[str, object] | None:
+def simulate_visual_result(mode: int, frame_index: int, session: int = 1) -> dict[str, object] | None:
     """为每种视觉任务提供可重复的模拟结果，便于观察标注刷新。"""
     offset = int(8 * np.sin((frame_index + session) / 12))
     if mode == CMD_START_QR:
@@ -118,6 +118,13 @@ class PreviewController:
         self.session += 1
         self.gui.show_running_page()
 
+    # 保留简短别名，兼容早期预览脚本调用方。
+    def activate(self, mode: int) -> None:
+        self.activate_camera_mode(mode)
+
+    def stop(self) -> None:
+        self.stop_camera_mode()
+
     def refresh_camera(self, refresh_session: int | None = None) -> None:
         """合成 BGR 帧并经统一视觉渲染函数转换为 RGB 后交给 GUI。"""
         refresh_session = self.session if refresh_session is None else refresh_session
@@ -131,6 +138,11 @@ class PreviewController:
         self.frame_index += 1
         if self.gui.is_camera_page_visible():
             self.root.after(REFRESH_INTERVAL_MS, lambda: self.refresh_camera(refresh_session))
+
+
+def simulate_result(mode: int, frame_index: int, session: int = 1) -> dict[str, object] | None:
+    """兼容旧名称，统一转发到带会话编号的模拟结果生成器。"""
+    return simulate_visual_result(mode, frame_index, session)
 
 
 def main() -> None:

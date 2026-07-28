@@ -52,6 +52,23 @@ PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python main.py
 PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python scripts/gui_preview.py
 ```
 
+## 相机预览页面
+
+`main.py` 顶部的 `ENABLE_CAMERA_PREVIEW_UI` 是相机预览页面的唯一总开关。设为 `True` 时，比赛运行页会显示“查看相机”按钮；STM32 发出有效的视觉启动命令后，GUI 会根据 `(mode, session)` 的变化自动进入相机页面，收到停止命令后返回任务码页面。同一模式的新 session 也会重新自动进入相机页面；用户在检测期间手动返回任务码页面后，未收到新会话命令时不会被下一帧强制切回。
+
+相机页的“返回任务码”按钮只切换 GUI 页面，不停止检测或串口通信。页面隐藏后，服务继续使用原有相机帧完成检测与结果发送，但不进行 Pillow 图像转换或 GUI 刷新。空闲状态下通过“查看相机”进入预览页时，服务每 `CAMERA_PREVIEW_PERIOD_MS` 读取一次默认视觉相机，仅显示准星和“手动相机预览”；不会加载模型、执行推理、发送结果或启用补光灯。
+
+二维码和视觉相机的预览准星偏移分别由 `QR_AIM_OFFSET_X_PX`、`QR_AIM_OFFSET_Y_PX` 与 `VISION_AIM_OFFSET_X_PX`、`VISION_AIM_OFFSET_Y_PX` 配置。这些偏移只影响显示，不会修改发送给 STM32 的坐标。
+
+`scripts/gui_preview.py` 使用合成动态画面，因此在 PC 上运行时不需要真实相机、串口、模型或 Jetson GPIO。终端快捷键如下：
+
+- `F2`：显示场地页
+- `F3`：模拟二维码检测
+- `F4`：模拟颜色检测
+- `F5`：模拟同心圆检测
+- `F6`：模拟物料盘中心检测
+- `F7`：模拟停止视觉检测并返回任务码页
+
 安装后，视觉代码以顶层包 `vision` 导入，协议代码以顶层包 `protocol` 导入。
 `src` 是源码目录，不应作为包名使用；不要运行 `python -m src.vision.advance_yolo`。
 

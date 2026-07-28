@@ -233,3 +233,80 @@ def test_qr_result_updates_gui_once_and_keeps_previous_value_after_missing(monke
 
     assert updates == [code]
     assert frames(port) == [(CMD_QR_RESULT, 4, code.encode("ascii"))]
+
+
+def test_visual_page_action_uses_mode_and_session_changes():
+    assert main.visual_page_action((0, 0), (CMD_START_QR, 1)) == "show_camera"
+    assert main.visual_page_action((0, 0), (CMD_START_COLOR, 1)) == "show_camera"
+    assert main.visual_page_action((CMD_START_COLOR, 1), (0, 2)) == "show_running"
+    assert main.visual_page_action((CMD_START_COLOR, 1), (CMD_START_COLOR, 2)) == "show_camera"
+    assert main.visual_page_action((CMD_START_COLOR, 1), (CMD_START_COLOR, 1)) is None
+    assert main.visual_page_action((0, 0), (99, 1)) is None
+
+
+def test_preview_callback_receives_detection_frame_after_result_send(monkeypatch):
+    port, state = Port(), main.make_service_state()
+    state.update(mode=CMD_START_COLOR, session=4, period_ms=1, last_run=-1.0)
+    frame = object()
+    seen = []
+    monkeypatch.setattr(main, "advance_detect_color", lambda detected_frame: {
+        "detections": [{"type": 1, "center": [0, 0], "confidence": 1.0, "measured": True, "support_count": 1}]
+    })
+
+    main.run_detection(
+        port,
+        {"qr": Camera(), "vision": Camera(reads=[frame])},
+        state,
+        0.0,
+        preview_callback=lambda preview_frame, mode, result: seen.append((preview_frame, mode, result, bytes(port.output))),
+    )
+
+    assert seen[0][0] is frame
+    assert seen[0][1] == CMD_START_COLOR
+    assert seen[0][2]["detections"][0]["type"] == 1
+    assert frames(port)[0][0] == CMD_COLOR_RESULT
+    assert seen[0][3] == bytes(port.output)
+
+
+def test_preview_callback_error_does_not_block_result_send(monkeypatch):
+    port, state = Port(), main.make_service_state()
+    state.update(mode=CMD_START_COLOR, session=4, period_ms=1, last_run=-1.0)
+    monkeypatch.setattr(main, "advance_detect_color", lambda frame: {"detections": []})
+
+    main.run_detection(
+        port,
+        {"qr": Camera(), "vision": Camera()},
+        state,
+        0.0,
+        preview_callback=lambda *_args: (_ for _ in ()).throw(RuntimeError("preview failed")),
+    )
+
+    assert frames(port) == [(CMD_COLOR_RESULT, 4, b"\x00")]
+
+
+def test_qr_preview_updates_before_task_code_is_confirmed(monkeypatch):
+    port, state = Port(), main.make_service_state()
+    state.update(mode=CMD_START_QR, session=4, period_ms=1, last_run=-1.0)
+    frame = object()
+    result = {"raw_code": "156+123+516+231", "code": None, "status": "CONFIRMING"}
+    seen = []
+    monkeypatch.setattr(main, "advance_detect_qr", lambda detected_frame: result)
+
+    main.run_detection(
+        port,
+        {"qr": Camera(reads=[frame]), "vision": Camera()},
+        state,
+        0.0,
+        preview_callback=lambda preview_frame, mode, preview_result: seen.append((preview_frame, mode, preview_result)),
+    )
+
+    assert port.output == b""
+    assert seen == [(frame, CMD_START_QR, result)]
+
+
+def test_idle_preview_conditions_are_period_limited_without_hardware_side_effects():
+    assert not main._should_update_idle_preview(False, 0, True, 1.0, 0.0)
+    assert not main._should_update_idle_preview(True, CMD_START_COLOR, True, 1.0, 0.0)
+    assert not main._should_update_idle_preview(True, 0, False, 1.0, 0.0)
+    assert not main._should_update_idle_preview(True, 0, True, 1.099, 1.0)
+    assert main._should_update_idle_preview(True, 0, True, 1.1, 1.0)

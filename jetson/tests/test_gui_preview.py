@@ -143,3 +143,10 @@ def test_simulate_visual_result_covers_each_camera_mode():
     assert "detections" in preview.simulate_visual_result(preview.CMD_START_CIRCLE, 0, 1)
     assert "center" in preview.simulate_visual_result(preview.CMD_START_DISK_CENTER, 0, 1)
     assert preview.simulate_visual_result(preview.CMD_START_QR, 0, 1)["code"] == "156+123+516+231"
+
+
+def test_legacy_preview_aliases_remain_usable():
+    preview = load_preview_module()
+
+    assert preview.compose_preview_frame(0).shape == (preview.FRAME_HEIGHT, preview.FRAME_WIDTH, 3)
+    assert preview.simulate_result(preview.CMD_START_QR, 0)["code"] == "156+123+516+231"
