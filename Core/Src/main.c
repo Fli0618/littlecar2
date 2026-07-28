@@ -125,9 +125,11 @@ static void App_TryResetWorldOrigin(void)
   }
 }
 
-static void App_RunTask(void)
+static void App_RunTask(Competition_StartArea_t start_area)
 {
-  /* 后续比赛流程在此按顺序调用 Blocking 高级接口。 */
+  /* 后续比赛流程将根据 start_area 选择对应启停区的业务路径。 */
+
+  printf("[START] area=%u\r\n", (unsigned int)start_area);
 
 
   char code[DETECT_QR_CODE_LENGTH + 1U] = {0};
@@ -381,13 +383,15 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
+  Competition_StartArea_t start_area;
+
   //比赛尚未开始时只等待 Jetson 的有效启动请求
-  while (CommJetson_TakeCompetitionStart() == 0U)
+  while (CommJetson_TakeCompetitionStart(&start_area) == 0U)
   {
     __WFI();
   }
   // 主流程
-  App_RunTask();
+  App_RunTask(start_area);
   while (1)
   {
     __WFI();

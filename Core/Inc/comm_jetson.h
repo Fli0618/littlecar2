@@ -31,6 +31,13 @@ typedef enum
   DETECT_STATUS_BAD_PARAMETER /**< 调用参数不合法。 */
 } Detect_Status_t;
 
+/** 比赛启动时由 Jetson 选择的启停区域。 */
+typedef enum
+{
+  COMPETITION_START_AREA_1 = 1U,
+  COMPETITION_START_AREA_2 = 2U
+} Competition_StartArea_t;
+
 /** 单个视觉检测目标的结果。 */
 typedef struct
 {
@@ -85,8 +92,8 @@ uint8_t detect_is_fresh(uint32_t timeout_ms);
 
 /** 初始化 Jetson 通信模块并绑定 UART。 */
 void CommJetson_Init(UART_HandleTypeDef *huart);
-/** 获取并清除一次 Jetson 发起的比赛启动请求。 */
-uint8_t CommJetson_TakeCompetitionStart(void);
+/** 获取并清除一次 Jetson 发起的比赛启动请求及其启停区域。 */
+uint8_t CommJetson_TakeCompetitionStart(Competition_StartArea_t *start_area);
 /** @brief 由 TIM6 每 1 ms 调用，推进二维码等待和通信超时状态。 */
 void CommJetson_Update(void);
 /** 处理 UART 接收事件，并解析收到的数据。 */
