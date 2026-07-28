@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pid-tuner"
+version = "0.1.0"
+description = "STM32 PID tuner protocol verification tools"
+requires-python = ">=3.9"
+dependencies = ["pyserial>=3.5"]
+
+[tool.setuptools.packages.find]
+include = ["pid_tuner*"]
