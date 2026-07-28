@@ -21,6 +21,24 @@ USART1 参数为 `115200 8N1`。调参固件已关闭 USART1 上的文本 `print
 conda run -n low_numpy python scripts/list_ports.py
 ```
 
+## 正式 CLI
+
+安装或更新本工具后，可使用 `pid-tuner` 子命令：
+
+```powershell
+conda run -n low_numpy pip install -e .
+conda run -n low_numpy pid-tuner get-pid --port COM4
+conda run -n low_numpy pid-tuner set-pid --port COM4 --kp-pos 1 --ki-pos 0.03 --kd-pos 0.1 --kp-yaw 2 --ki-yaw 0.05 --kd-yaw 0.08 --apply
+```
+
+`set-pid` 和 `restore-pid` 未给出 `--apply` 时只进行参数预览。运动命令要求完整的目标、速度和超时参数，并在进程存活期间自动心跳：
+
+```powershell
+conda run -n low_numpy pid-tuner goto --port COM4 --x 200 --y 0 --yaw 0 --vmax 50 --wmax 30 --timeout 5000 --csv logs/run.csv
+```
+
+`profile save|list|show|export-c` 管理本地 PID JSON 方案；方案默认保存在 `profiles/`，遥测 CSV 默认建议保存至 `logs/`。两类运行数据都被 Git 忽略。
+
 ## 只读验证
 
 默认只验证 `GET_PID` 和坏 CRC 恢复，不会改写 PID，也不会驱动车辆：

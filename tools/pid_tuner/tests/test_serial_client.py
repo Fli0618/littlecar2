@@ -2,8 +2,8 @@ import struct
 import time
 import unittest
 
-from pid_tuner.models import MotionGoal, PidConfig
-from pid_tuner.protocol import CMD_ACK, CMD_GET_PID, CMD_PID, CMD_TELEMETRY, StreamDecoder, encode_frame
+from pid_tuner.models import BoardError, MotionGoal, PidConfig
+from pid_tuner.protocol import CMD_ACK, CMD_ERROR, CMD_GET_PID, CMD_PID, CMD_TELEMETRY, StreamDecoder, encode_frame
 from pid_tuner.serial_client import SerialClient
 
 from fake_transport import FakeTransport
@@ -71,6 +71,16 @@ class SerialClientTests(unittest.TestCase):
         with SerialClient(FakeTransport(on_write)) as client:
             client.goto(goal)
         self.assertEqual(struct.unpack("<5fIB", captured[0].payload), (1, 2, 3, 4, 5, 6000, 1))
+
+    def test_board_error_is_exposed(self) -> None:
+        def on_write(raw, _attempt):
+            request = StreamDecoder().feed(raw)[0]
+            return [encode_frame(CMD_ERROR, request.sequence, bytes([request.command, 5]))]
+
+        with SerialClient(FakeTransport(on_write)) as client:
+            with self.assertRaises(BoardError) as raised:
+                client.heartbeat()
+        self.assertEqual(raised.exception.code, 5)
 
 
 if __name__ == "__main__":

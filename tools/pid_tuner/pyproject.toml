@@ -9,5 +9,8 @@ description = "STM32 PID tuner protocol verification tools"
 requires-python = ">=3.9"
 dependencies = ["pyserial>=3.5"]
 
+[project.scripts]
+pid-tuner = "pid_tuner.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["pid_tuner*"]
