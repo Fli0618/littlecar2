@@ -10,8 +10,10 @@ extern "C" {
 
 /** 初始化 USART1 调参通信的 DMA + IDLE 接收。 */
 HAL_StatusTypeDef CommTuner_Init(UART_HandleTypeDef *huart);
-/** 在前台处理已接收的数据并启动 DMA 原样回显。 */
+/** 在前台解析协议、执行业务动作并启动 DMA 响应发送。 */
 void CommTuner_Process(void);
+/** 由 TIM6 每 1 ms 调用，推进远程控制心跳超时保护。 */
+void CommTuner_Update(void);
 /** 转发 USART1 DMA + IDLE 接收事件；回调中仅搬运字节。 */
 void CommTuner_OnUartRxEvent(UART_HandleTypeDef *huart, uint16_t size);
 /** 转发 USART1 DMA 发送完成事件。 */

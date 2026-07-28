@@ -610,6 +610,7 @@ void AdvanceMotion_Update(void)
 /* 取消当前运动任务、释放控制权并停止底盘。 */
 void AdvanceMotion_Cancel(void)
 {
+  Chassis_SmoothStop(CHASSIS_DEFAULT_ACC);
   AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED);
 }
 

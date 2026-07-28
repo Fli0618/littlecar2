@@ -224,6 +224,9 @@ static void App_TimerUpdate(void)
   static uint16_t led_elapsed_ms = 0U;
 
   CommJetson_Update();
+#if (TUNER_ENABLE != 0U)
+  CommTuner_Update();
+#endif
 
   if (++world_elapsed_ms >= APP_WORLD_PERIOD_MS)
   {
