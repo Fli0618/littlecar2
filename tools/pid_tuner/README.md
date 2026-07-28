@@ -13,6 +13,14 @@ conda run -n low_numpy python -m unittest discover -s tests
 
 USART1 参数为 `115200 8N1`。调参固件已关闭 USART1 上的文本 `printf`，该串口仅可使用二进制协议客户端连接。
 
+## 查询 COM 口
+
+连接 USB 转串口模块后执行以下命令，输出中例如 `COM5` 的端口名可直接传给验证脚本：
+
+```powershell
+conda run -n low_numpy python scripts/list_ports.py
+```
+
 ## 只读验证
 
 默认只验证 `GET_PID` 和坏 CRC 恢复，不会改写 PID，也不会驱动车辆：
