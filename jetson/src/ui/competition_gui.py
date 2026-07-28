@@ -6,6 +6,9 @@ import tkinter as tk
 import tkinter.font as tkfont
 from collections.abc import Callable
 
+import numpy as np
+from PIL import Image, ImageTk
+
 from protocol.commands import START_AREA_1, START_AREA_2, VALID_START_AREAS
 
 WINDOW_WIDTH = 1600
@@ -28,12 +31,20 @@ START_ZONE_COLOR = "#1239D6"
 class CompetitionGUI:
     """提供比赛启动、任务码和基础统计显示的轻量窗口。"""
 
-    def __init__(self, root: tk.Tk | None = None) -> None:
+    def __init__(self, root: tk.Tk | None = None, camera_preview_enabled: bool = True) -> None:
         self.root = root or tk.Tk()
         self._start_callback: Callable[[int], bool | None] | None = None
         self._selected_start_area: int | None = None
         self._start_clicked = False
         self._closed = False
+        self._camera_preview_enabled = camera_preview_enabled
+        self._camera_frame: tk.Frame | None = None
+        self._camera_label: tk.Label | None = None
+        self._camera_status: tk.Label | None = None
+        self._camera_back_button: tk.Button | None = None
+        self._camera_photo: ImageTk.PhotoImage | None = None
+        self._camera_image: Image.Image | None = None
+        self._current_page = "start"
         self._font_family = self._pick_font("Noto Sans CJK SC", "Noto Sans CJK", "Microsoft YaHei")
 
         self.root.title("LittleCar2 比赛")
@@ -48,6 +59,8 @@ class CompetitionGUI:
         self._build_start_page()
         self._build_running_page()
         self._build_field_page()
+        if self._camera_preview_enabled:
+            self._build_camera_page()
         self.show_start_page()
 
     def _build_start_page(self) -> None:
@@ -99,6 +112,19 @@ class CompetitionGUI:
             font=("DejaVu Sans Mono", TASK_CODE_FONT_SIZE, "bold"),
         )
         self._task_code.place(relx=0.5, rely=0.5, anchor="center")
+        if self._camera_preview_enabled:
+            camera_button = tk.Button(
+                task_area,
+                text="查看相机",
+                command=self.show_camera_page,
+                bg="#252525",
+                fg=TEXT_COLOR,
+                activebackground="#454545",
+                activeforeground=TEXT_COLOR,
+                borderwidth=0,
+                font=(self._font_family, FIELD_BUTTON_FONT_SIZE, "bold"),
+            )
+            camera_button.place(relx=0.04, rely=0.92, anchor="sw", relwidth=0.16, relheight=0.18)
 
         stats_area = tk.Frame(self._running_frame, bg=BACKGROUND_COLOR, highlightbackground=DIVIDER_COLOR, highlightthickness=1)
         stats_area.grid(row=1, column=0, sticky="nsew")
@@ -117,6 +143,64 @@ class CompetitionGUI:
             self._count_values.append(value)
         self.set_counts(0, 0)
         self.set_elapsed(0)
+
+    def _build_camera_page(self) -> None:
+        """构建仅展示主服务提供帧数据的相机预览页。"""
+        self._camera_frame = tk.Frame(self.root, bg=BACKGROUND_COLOR)
+        self._camera_frame.grid_rowconfigure(0, weight=1)
+        self._camera_frame.grid_rowconfigure(1, weight=0)
+        self._camera_frame.grid_columnconfigure(0, weight=1)
+
+        self._camera_label = tk.Label(self._camera_frame, bg=BACKGROUND_COLOR, borderwidth=0)
+        self._camera_label.grid(row=0, column=0, sticky="nsew", padx=24, pady=(24, 8))
+        self._camera_label.bind("<Configure>", self._on_camera_resize)
+
+        footer = tk.Frame(self._camera_frame, bg=BACKGROUND_COLOR)
+        footer.grid(row=1, column=0, sticky="ew", padx=24, pady=(8, 24))
+        footer.grid_columnconfigure(0, weight=1)
+        self._camera_status = tk.Label(
+            footer,
+            text="",
+            bg=BACKGROUND_COLOR,
+            fg=LABEL_COLOR,
+            anchor="w",
+            font=(self._font_family, FIELD_BUTTON_FONT_SIZE),
+        )
+        self._camera_status.grid(row=0, column=0, sticky="ew")
+        self._camera_back_button = tk.Button(
+            footer,
+            text="返回任务码",
+            command=self.show_running_page,
+            bg="#252525",
+            fg=TEXT_COLOR,
+            activebackground="#454545",
+            activeforeground=TEXT_COLOR,
+            borderwidth=0,
+            font=(self._font_family, FIELD_BUTTON_FONT_SIZE, "bold"),
+        )
+        self._camera_back_button.grid(row=0, column=1, padx=(16, 0), ipadx=18, ipady=8)
+
+    def _on_camera_resize(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        self._render_camera_frame()
+
+    def _render_camera_frame(self) -> None:
+        """将最新帧等比置于当前预览区域，余下区域保持黑色。"""
+        if self._camera_image is None or self._camera_label is None:
+            return
+        width = self._camera_label.winfo_width()
+        height = self._camera_label.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+
+        image = self._camera_image
+        scale = min(width / image.width, height / image.height)
+        scaled_size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+        resampling = getattr(Image, "Resampling", Image).LANCZOS
+        scaled_image = image.resize(scaled_size, resampling)
+        preview = Image.new("RGB", (width, height), BACKGROUND_COLOR)
+        preview.paste(scaled_image, ((width - scaled_size[0]) // 2, (height - scaled_size[1]) // 2))
+        self._camera_photo = ImageTk.PhotoImage(preview)
+        self._camera_label.configure(image=self._camera_photo)
 
     def _build_field_page(self) -> None:
         self._field_canvas = tk.Canvas(self._field_frame, bg=FIELD_BACKGROUND_COLOR, highlightthickness=0)
@@ -281,21 +365,56 @@ class CompetitionGUI:
         """显示启停区选择结果和开始按钮。"""
         self._running_frame.pack_forget()
         self._field_frame.pack_forget()
+        if self._camera_frame is not None:
+            self._camera_frame.pack_forget()
         self._start_frame.pack(fill="both", expand=True)
+        self._current_page = "start"
 
     def show_running_page(self) -> None:
         """显示任务码、统计和计时区域。"""
         self._start_frame.pack_forget()
         self._field_frame.pack_forget()
+        if self._camera_frame is not None:
+            self._camera_frame.pack_forget()
         self._running_frame.pack(fill="both", expand=True)
+        self._current_page = "running"
 
     def show_field_page(self) -> None:
         """显示启停区选择页，不改变比赛或硬件状态。"""
         self._start_frame.pack_forget()
         self._running_frame.pack_forget()
+        if self._camera_frame is not None:
+            self._camera_frame.pack_forget()
         self._field_frame.pack(fill="both", expand=True)
+        self._current_page = "field"
         self._field_canvas.focus_set()
         self._draw_field_annotation()
+
+    def show_camera_page(self) -> None:
+        """显示相机预览；预览总开关关闭时保持当前页面。"""
+        if not self._camera_preview_enabled or self._camera_frame is None:
+            return
+        self._start_frame.pack_forget()
+        self._running_frame.pack_forget()
+        self._field_frame.pack_forget()
+        self._camera_frame.pack(fill="both", expand=True)
+        self._current_page = "camera"
+        self._render_camera_frame()
+
+    def is_camera_page_visible(self) -> bool:
+        """返回相机预览页是否为当前显示页面。"""
+        return self._camera_preview_enabled and self._current_page == "camera"
+
+    def set_camera_frame(self, frame_rgb: np.ndarray, status_text: str = "") -> None:
+        """更新 RGB 相机帧和状态文字，不访问相机设备。"""
+        if not self._camera_preview_enabled or self._camera_label is None:
+            return
+        if not isinstance(frame_rgb, np.ndarray) or frame_rgb.ndim != 3 or frame_rgb.shape[2] != 3:
+            raise ValueError("frame_rgb 必须是形状为 (height, width, 3) 的 RGB NumPy 数组")
+        self._camera_image = Image.fromarray(frame_rgb)
+        if self._camera_status is not None:
+            self._camera_status.configure(text=status_text)
+        self._render_camera_frame()
 
     def set_task_code(self, code: str) -> None:
         """更新当前任务码显示。"""
