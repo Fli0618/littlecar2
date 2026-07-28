@@ -53,6 +53,16 @@ MAX_TARGETS = 8
 MODEL_WARMUP_FRAME_SIZE = 640
 SERVICE_POLL_INTERVAL_MS = 1
 ELAPSED_UPDATE_INTERVAL_MS = 200
+PWM_PIN = 33
+PWM_FREQUENCY_HZ = 10000
+PWM_DUTY_CYCLE_PERCENT = 50.0
+LIGHT_SETTLE_SECONDS = 0.3
+_FILL_LIGHT_MODES = frozenset((CMD_START_COLOR, CMD_START_CIRCLE))
+
+
+def _requires_fill_light(mode: int) -> bool:
+    """仅颜色物料和同心圆检测会话需要补光灯。"""
+    return mode in _FILL_LIGHT_MODES
 
 
 def make_service_state() -> dict[str, object]:
@@ -227,6 +237,59 @@ def main() -> None:
     import serial
     import tkinter as tk
 
+    gpio = None
+    pwm = None
+    gpio_configured = False
+    fill_light_active = False
+    fill_light_unavailable = False
+
+    def stop_fill_light() -> None:
+        nonlocal pwm, fill_light_active
+        if pwm is not None:
+            try:
+                pwm.ChangeDutyCycle(0)
+                pwm.stop()
+            except Exception as error:
+                print(f"fill light stop failed: {error}", flush=True)
+            finally:
+                pwm = None
+        if gpio_configured and gpio is not None:
+            try:
+                gpio.output(PWM_PIN, gpio.LOW)
+            except Exception as error:
+                print(f"fill light pin reset failed: {error}", flush=True)
+        fill_light_active = False
+
+    def enable_fill_light() -> None:
+        nonlocal pwm, fill_light_active, fill_light_unavailable
+        if fill_light_active or fill_light_unavailable:
+            return
+        try:
+            pwm = gpio.PWM(PWM_PIN, PWM_FREQUENCY_HZ)
+            pwm.start(PWM_DUTY_CYCLE_PERCENT)
+            fill_light_active = True
+            print(
+                f"fill light enabled pin={PWM_PIN} frequency_hz={PWM_FREQUENCY_HZ} "
+                f"duty_cycle_percent={PWM_DUTY_CYCLE_PERCENT:.1f}",
+                flush=True,
+            )
+            time.sleep(LIGHT_SETTLE_SECONDS)
+        except Exception as error:
+            print(
+                "fill light start failed; continuing visual detection without light. "
+                "Check Jetson-IO PWM configuration for Pin 33 and GPIO permissions: "
+                f"{error}",
+                flush=True,
+            )
+            fill_light_unavailable = True
+            stop_fill_light()
+
+    def sync_fill_light() -> None:
+        if _requires_fill_light(int(state["mode"])):
+            enable_fill_light()
+        else:
+            stop_fill_light()
+
     configure_model_backend(MODEL_BACKEND)
     warmup_vision_models()
     state = make_service_state()
@@ -239,6 +302,24 @@ def main() -> None:
         port.close()
         raise RuntimeError(f"cannot open cameras qr={CAMERA_QR_DEVICE}, vision={CAMERA_VISION_DEVICE}")
     cameras = {"qr": qr_camera, "vision": vision_camera}
+
+    try:
+        import Jetson.GPIO as jetson_gpio
+
+        gpio = jetson_gpio
+        gpio.setmode(gpio.BOARD)
+        gpio.setup(PWM_PIN, gpio.OUT, initial=gpio.LOW)
+        gpio_configured = True
+        # 补光灯独立供电时，控制地必须与 Jetson GND 共地。
+    except Exception as error:
+        fill_light_unavailable = True
+        print(
+            "fill light initialization failed; continuing visual detection without light. "
+            "Check Jetson-IO PWM configuration for Pin 33 and GPIO permissions: "
+            f"{error}",
+            flush=True,
+        )
+
     root = tk.Tk()
     gui = CompetitionGUI(root)
 
@@ -258,7 +339,9 @@ def main() -> None:
         # 场地标注页只改变 GUI 视图；服务轮询始终持续运行。
         try:
             poll_commands(port, state)
+            sync_fill_light()
             run_detection(port, cameras, state, time.monotonic(), gui.set_task_code)
+            sync_fill_light()
         except Exception:
             gui.close()
             raise
@@ -269,6 +352,12 @@ def main() -> None:
     try:
         gui.run()
     finally:
+        stop_fill_light()
+        if gpio_configured and gpio is not None:
+            try:
+                gpio.output(PWM_PIN, gpio.LOW)
+            finally:
+                gpio.cleanup(PWM_PIN)
         reset_advance_tracking()
         reset_qr_tracking()
         qr_camera.release()
