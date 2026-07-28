@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import struct
 from typing import Iterable
+
+from .models import PidConfig, Telemetry
 
 SYNC = b"\xA5\x5A"
 VERSION = 1
@@ -29,37 +30,15 @@ class ProtocolError(ValueError):
     """The peer sent a syntactically valid frame with an invalid meaning."""
 
 
+from dataclasses import dataclass
+
+
 @dataclass(frozen=True)
 class Frame:
     command: int
     sequence: int
     payload: bytes = b""
     version: int = VERSION
-
-
-@dataclass(frozen=True)
-class PidConfig:
-    kp_pos: float
-    ki_pos: float
-    kd_pos: float
-    kp_yaw: float
-    ki_yaw: float
-    kd_yaw: float
-
-
-@dataclass(frozen=True)
-class Telemetry:
-    tick: int
-    pid_revision: int
-    overwritten_count: int
-    state: int
-    flags: int
-    target: tuple[float, float, float]
-    actual: tuple[float, float, float]
-    error: tuple[float, float, float]
-    command_velocity: tuple[float, float, float]
-    measured_velocity: tuple[float, float, float]
-    integrals: tuple[float, float, float]
 
 
 def crc16_ccitt_false(data: bytes) -> int:
@@ -83,6 +62,16 @@ def encode_frame(command: int, sequence: int, payload: bytes = b"", version: int
 def encode_pid(config: PidConfig) -> bytes:
     return struct.pack("<6f", config.kp_pos, config.ki_pos, config.kd_pos,
                        config.kp_yaw, config.ki_yaw, config.kd_yaw)
+
+
+def encode_goal(goal: "MotionGoal") -> bytes:
+    from .models import MotionGoal
+
+    if not isinstance(goal, MotionGoal):
+        raise ProtocolError("goal must be a MotionGoal")
+    return struct.pack("<5fIB", goal.x_mm, goal.y_mm, goal.yaw_deg,
+                       goal.vmax_mm_s, goal.wmax_deg_s, goal.timeout_ms,
+                       0x01 if goal.use_yaw else 0x00)
 
 
 def decode_pid(payload: bytes) -> tuple[int, PidConfig]:

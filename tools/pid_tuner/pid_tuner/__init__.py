@@ -1,5 +1,7 @@
 """STM32 PID tuner protocol helpers."""
 
-from .protocol import Frame, PidConfig, Telemetry, decode_telemetry, encode_frame
+from .models import MotionGoal, PidConfig, Telemetry
+from .protocol import Frame, decode_telemetry, encode_frame
+from .serial_client import SerialClient
 
-__all__ = ["Frame", "PidConfig", "Telemetry", "decode_telemetry", "encode_frame"]
+__all__ = ["Frame", "MotionGoal", "PidConfig", "SerialClient", "Telemetry", "decode_telemetry", "encode_frame"]
