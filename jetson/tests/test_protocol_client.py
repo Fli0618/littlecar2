@@ -12,6 +12,8 @@ from protocol.commands import (
     CMD_ACK,
     CMD_COLOR_RESULT,
     CMD_COMPETITION_START,
+    CMD_START_CIRCLE,
+    CMD_START_DISK_CENTER,
     CMD_QR_RESULT,
     CMD_START_COLOR,
     CMD_START_QR,
@@ -53,6 +55,14 @@ class Camera:
 
 def frames(port):
     return parse_frames(bytearray(), port.output)
+
+
+def test_only_color_and_circle_modes_require_fill_light():
+    assert main._requires_fill_light(CMD_START_COLOR)
+    assert main._requires_fill_light(CMD_START_CIRCLE)
+    assert not main._requires_fill_light(CMD_START_QR)
+    assert not main._requires_fill_light(CMD_START_DISK_CENTER)
+    assert not main._requires_fill_light(CMD_STOP)
 
 
 def test_start_period_stop_and_session_replacement(monkeypatch):
