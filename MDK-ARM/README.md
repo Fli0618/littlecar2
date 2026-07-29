@@ -152,7 +152,7 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 
 - 升降轴使用 ID 5，顶部光电限位为绝对坐标零点，向下为正方向；滑台轴使用 ID 6，后部光电限位为零点，向前为正方向。
 - `AdvanceArm_Init()` 只复位软件归零状态并注册 ID 5、6 的反馈监测。TIM6 启动后持续调用 `drive_emm_Update()`，因此阻塞归零与位置运动只能在 TIM6 已启动后执行。
-- `AdvanceArm_HomeBlocking()` 固定先归零升降轴，再归零滑台轴。轴已经压住零点限位时，先低速反向释放，再向零点方向搜索并进行 10 ms 二次确认；停止并发送当前位置清零命令后，才设置对应轴的归零状态。
+- `AdvanceArm_HomeBlocking()` 固定先归零升降轴，再归零滑台轴。轴已经压住零点限位时，先确认反向运动对应的对侧限位未触发，再低速反向释放；释放过程中对侧限位触发会立即停止并使本轴归零失败。随后向零点方向搜索并进行 10 ms 二次确认；停止并发送当前位置清零命令后，才设置对应轴的归零状态。
 - `AdvanceArm_MoveLiftToBlocking(position_pulse)` 与 `AdvanceArm_MoveSlideToBlocking(position_pulse)` 只接收相对零点的绝对脉冲坐标。调用前必须完成对应轴归零，且目标不得超过各轴 `*_POS_MAX`。
 - 绝对位置命令使用固定正坐标方向；限位保护依据目标坐标和当前位置反馈判断实际运动方向，仅监测该方向对应的一个限位。触发限位时停止对应轴并返回 `ADVANCE_ARM_MOVE_LIMIT_REACHED`。
 - 反馈失效、堵转、故障或运动超时时，停止对应轴并清除该轴归零状态；普通 `AdvanceArm_Stop()` 不清除归零状态，`AdvanceArm_EStop()` 清除两个轴的归零状态。
@@ -218,7 +218,7 @@ TIM6 以 1 ms 为唯一周期入口：每 1 ms 推进 Jetson 通信状态，每 
 - `AdvanceControl_SetMode(NONE)` 会入队底盘停止命令；`WORLD` 与 `VISUAL` 不能同时持有控制权。
 - `AdvanceMotion_Update()` 每个控制周期只消费一次已验证的 world 位姿缓存；不在 TIM6 路径中执行阻塞 UART、`HAL_Delay()` 或等待 DMA。
 - USART3 使用 DMA 发送队列和 DMA/IDLE 接收。`drive_emm_Update()`在 TIM6 中推进反馈查询；发送超时使用异步 abort，不在中断内阻塞。
-- 机械臂使用固定编译期参数：伸出、回收、下降、上升、夹爪打开和夹爪闭合均等待 1000 ms。高层不检查限位、不维护软件零点或任务状态；`ARM_CONFIG`、`ARM_GET_STATUS` 和 `ARM_RESET_ZERO` 返回 `ACK_UNKNOWN_CMD`。
+- 机械臂双步进轴使用固定编译期参数与独立归零状态。归零和绝对位置运动检查限位、反馈、堵转、故障和超时；夹爪仍采用固定等待的总线舵机控制。
 - 驱动器心跳保护默认写为 `500 ms`，配置见 `drive_emm.h`。首次上板必须确认实际 Emm 固件支持该参数，且周期反馈查询会被驱动器视为有效心跳。
 - ACK 与状态数据使用 UART 中断发送队列；UART/DMA 回调仅负责接收、入队或释放发送槽位，不直接执行业务控制。
 

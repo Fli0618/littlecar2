@@ -17,11 +17,23 @@ static bool AdvanceArm_HomeLiftBlocking(void)
   if (SensorLimit_IsActive(SENSOR_LIMIT_LIFT_UP))
   {
     /* 已处于零点时先向下脱离，避免再次寻零立即被判定成功。 */
+    if (SensorLimit_IsActive(SENSOR_LIMIT_LIFT_DOWN))
+    {
+      /* 对侧限位已有效，禁止继续向下释放。 */
+      drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
+      return false;
+    }
     drive_emm_Vel_Control(ARM_LIFT_MOTOR_ID, ARM_LIFT_DOWN_DIRECTION,
                           ARM_HOME_RELEASE_SPEED, ARM_HOME_ACC, false);
     started_tick = HAL_GetTick();
     while (SensorLimit_IsActive(SENSOR_LIMIT_LIFT_UP))
     {
+      if (SensorLimit_IsActive(SENSOR_LIMIT_LIFT_DOWN))
+      {
+        /* 释放过程中触发对侧限位，立即停止以防机构碰撞。 */
+        drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
+        return false;
+      }
       if ((HAL_GetTick() - started_tick) > ARM_HOME_RELEASE_TIMEOUT_MS)
       {
         drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
@@ -99,11 +111,23 @@ static bool AdvanceArm_HomeSlideBlocking(void)
   if (SensorLimit_IsActive(SENSOR_LIMIT_SLIDE_REAR))
   {
     /* 已压住后限位时先向前释放。 */
+    if (SensorLimit_IsActive(SENSOR_LIMIT_SLIDE_FRONT))
+    {
+      /* 对侧限位已有效，禁止继续向前释放。 */
+      drive_emm_Stop_Now(ARM_SLIDE_MOTOR_ID, false);
+      return false;
+    }
     drive_emm_Vel_Control(ARM_SLIDE_MOTOR_ID, ARM_SLIDE_EXTEND_DIRECTION,
                           ARM_HOME_RELEASE_SPEED, ARM_HOME_ACC, false);
     started_tick = HAL_GetTick();
     while (SensorLimit_IsActive(SENSOR_LIMIT_SLIDE_REAR))
     {
+      if (SensorLimit_IsActive(SENSOR_LIMIT_SLIDE_FRONT))
+      {
+        /* 释放过程中触发对侧限位，立即停止以防机构碰撞。 */
+        drive_emm_Stop_Now(ARM_SLIDE_MOTOR_ID, false);
+        return false;
+      }
       if ((HAL_GetTick() - started_tick) > ARM_HOME_RELEASE_TIMEOUT_MS)
       {
         drive_emm_Stop_Now(ARM_SLIDE_MOTOR_ID, false);
