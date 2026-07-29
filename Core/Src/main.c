@@ -45,11 +45,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-/* 发布固件保持 0，避免 printf 的逐字节阻塞影响控制周期。 */
-#define DEBUG_UART_ENABLE (0U)
-
-/* 设为 1 时进入 USART1 在线调参/回显模式，不运行比赛主流程。 */
-#define TUNER_ENABLE (1U)
+/*
+ * 设为 1 时进入 USART1 在线调参模式，并自动禁用 printf；
+ * 设为 0 时关闭在线调参，恢复 USART1 printf 输出并运行比赛主流程。
+ */
+#define ONLINE_DEBUG_MODE (1U)
 
 /* TIM6 提供 1 ms 调度节拍，所有业务周期统一在这里配置。 */
 #define APP_WORLD_PERIOD_MS ((uint32_t)10U)
@@ -105,7 +105,7 @@ static void MX_TIM6_Init(void);
 int fputc(int ch, FILE *f)
 {
   (void)f;
-#if (DEBUG_UART_ENABLE != 0U)
+#if (ONLINE_DEBUG_MODE == 0U)
   uint8_t byte = (uint8_t)ch;
   (void)HAL_UART_Transmit(&huart1, &byte, 1, 20U);
 #else
@@ -224,7 +224,7 @@ static void App_TimerUpdate(void)
   static uint16_t led_elapsed_ms = 0U;
 
   CommJetson_Update();
-#if (TUNER_ENABLE != 0U)
+#if (ONLINE_DEBUG_MODE != 0U)
   CommTuner_Update();
 #endif
 
@@ -342,7 +342,7 @@ int main(void)
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
 
-#if (TUNER_ENABLE != 0U)
+#if (ONLINE_DEBUG_MODE != 0U)
   if (CommTuner_Init(&huart1) != HAL_OK)
   {
     Error_Handler();
@@ -395,8 +395,8 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
-#if (TUNER_ENABLE != 0U)
-  printf("TUNER_ENABLE\r\n");
+#if (ONLINE_DEBUG_MODE != 0U)
+  printf("ONLINE_DEBUG_MODE\r\n");
   while (1)
   {
     CommTuner_Process();

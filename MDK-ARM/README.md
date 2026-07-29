@@ -45,7 +45,7 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 
 | 外设 | 模式 | TX | RX | 当前用途 | 对应模块 |
 | --- | --- | --- | --- | --- | --- |
-| USART1 | Asynchronous | PA9 | PA10 | 调试串口输出 | `main.c` |
+| USART1 | Asynchronous | PA9 | PA10 | `ONLINE_DEBUG_MODE=0` 时为 printf 调试输出，`=1` 时为在线调参 | `main.c` / `comm_tuner.*` |
 | USART2 | Asynchronous | PA2 | PA3 | WIT / HWT905 IMU | `sensor_wit.*` |
 | USART3 | Asynchronous | PB10 | PB11 | 张大头 Emm_V5 步进闭环电机 | `drive_emm.*` |
 | UART4 | Asynchronous | PA0 | PA1 | 总线舵机 | `drive_bus_servo.*` |
@@ -160,7 +160,7 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 
 ## 6. 调试边界
 
-- PC 端调试日志通过 `USART1 printf` 输出。
+- `Core/Src/main.c` 中的 `ONLINE_DEBUG_MODE` 统一控制调试模式：设为 `0` 时通过 USART1 输出 `printf` 并运行比赛主流程；设为 `1` 时禁用 `printf`，初始化 USART1 在线调参并不运行比赛主流程。
 - USART6 由 `comm_jetson` 在初始化时启动 DMA + IDLE 接收；Jetson 视觉协议不使用 USART1 调试串口，也不控制底盘参数。
 
 ## 7. 世界速度与方向配置
