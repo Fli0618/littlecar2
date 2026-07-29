@@ -131,11 +131,19 @@ static void App_TryResetWorldOrigin(void)
   }
 }
 
-static void App_RunTask(Competition_StartArea_t start_area)
+static void App_RunTask(Competition_StartArea_t start_area) // 传入启停区编号，有两个启停区需要弄不同的流程，还没有实现
 {
   /* 后续比赛流程将根据 start_area 选择对应启停区的业务路径。 */
 
   printf("[START] area=%u\r\n", (unsigned int)start_area);
+  // 丝杆回零部分！！！
+  // if (!AdvanceArm_HomeBlocking())
+  // {
+  //   AdvanceArm_EStop();
+  //   printf("[ARM] home failed\r\n");
+  //   return;
+  // }
+  printf("[ARM] home success\r\n");
 
   char code[DETECT_QR_CODE_LENGTH + 1U] = {0};
   Detect_TargetList_t targets = {0};

@@ -47,6 +47,10 @@ void AdvanceTest_BlockingMain(void);
  */
 void AdvanceTest_ScrewMotor(uint8_t id, bool is_x);
 
+void Test_emm_1(void);
+void Test_emm_2(void);
+void Test_emm_3(void);
+
 /**
  * @brief 测试多电机速度控制命令及同步启动流程。
  * @note 测试期间会驱动当前底盘四个电机，仅用于车辆架空后的现场调试。

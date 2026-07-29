@@ -1,11 +1,5 @@
 # 物流小车 STM32F407ZGT6 下位机工程
 
-## Jetson 连续视觉服务
-
-STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `comm_jetson` 发送 START/STOP，Jetson 以 START 的周期持续上报最新检测结果；默认周期为 `DETECT_DEFAULT_PERIOD_MS=40 ms`。USART6 保持既有 DMA + IDLE 配置，不修改 CubeMX。
-
-`main.c` 不再维护通用视觉阶段机。USART6 回调只缓存帧结果，TIM6 推进二维码等待与超时；协议、字段、状态码和 SESSION 过滤见 [通信协议](docs/上下位机通信协议.md)。
-
 ## 1. 项目说明
 
 仓库地址：https://github.com/Tuzfucius/littlecar2
@@ -139,6 +133,10 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 
 ### 4.8 Jetson 连续视觉通信
 
+STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `comm_jetson` 发送 START/STOP，Jetson 以 START 的周期持续上报最新检测结果；默认周期为 `DETECT_DEFAULT_PERIOD_MS=40 ms`。USART6 保持既有 DMA + IDLE 配置，不修改 CubeMX。
+
+`main.c` 不再维护通用视觉阶段机。USART6 回调只缓存帧结果，TIM6 推进二维码等待与超时；协议、字段、状态码和 SESSION 过滤见 [通信协议](docs/上下位机通信协议.md)。
+
 - 文件：`Core/Inc/comm_jetson.h`、`Core/Src/comm_jetson.c`
 - 用途：STM32 通过 USART6 启动或停止 Jetson 视觉任务，并缓存当前会话的最新颜色、数字圆环、盘中心或二维码结果。
 - 链路：`USART6`，DMA Circular + UART IDLE 接收，DMA 发送；帧格式为 `5A A5 CMD SESSION LEN PAYLOAD CRC16_L CRC16_H`，CRC16-Modbus 覆盖 CMD、SESSION、LEN 和 Payload。
@@ -149,6 +147,16 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 - 比赛启动：Jetson 使用 `0x10`、session `0`、空 Payload 发送启动请求。`CommJetson_TakeCompetitionStart()` 消费该请求，`main.c` 每次上电仅调用一次 `App_RunTask()`；该命令不参与视觉 session 校验。
 - 安全规则：盘中心零支持点固定为无目标和 `(0, 0)`，业务层不得仅凭预测结果判定到达。
 - 回调与调度接口：`CommJetson_Init()`、`CommJetson_Update()`、`CommJetson_OnUartRxEvent()`、`CommJetson_OnUartError()` 和 `CommJetson_OnUartTxComplete()` 仅供 `main.c` 的 USART6 初始化、TIM6 调度和 HAL 回调分发使用。
+
+### 4.9 机械臂双轴归零与绝对位置控制
+
+- 升降轴使用 ID 5，顶部光电限位为绝对坐标零点，向下为正方向；滑台轴使用 ID 6，后部光电限位为零点，向前为正方向。
+- `AdvanceArm_Init()` 只复位软件归零状态并注册 ID 5、6 的反馈监测。TIM6 启动后持续调用 `drive_emm_Update()`，因此阻塞归零与位置运动只能在 TIM6 已启动后执行。
+- `AdvanceArm_HomeBlocking()` 固定先归零升降轴，再归零滑台轴。轴已经压住零点限位时，先确认反向运动对应的对侧限位未触发，再低速反向释放；释放过程中对侧限位触发会立即停止并使本轴归零失败。随后向零点方向搜索并进行 10 ms 二次确认；停止并发送当前位置清零命令后，才设置对应轴的归零状态。
+- `AdvanceArm_MoveLiftToBlocking(position_pulse)` 与 `AdvanceArm_MoveSlideToBlocking(position_pulse)` 只接收相对零点的绝对脉冲坐标。调用前必须完成对应轴归零，且目标不得超过各轴 `*_POS_MAX`。
+- 绝对位置命令使用固定正坐标方向；限位保护依据目标坐标和当前位置反馈判断实际运动方向，仅监测该方向对应的一个限位。触发限位时停止对应轴并返回 `ADVANCE_ARM_MOVE_LIMIT_REACHED`。
+- 反馈失效、堵转、故障或运动超时时，停止对应轴并清除该轴归零状态；普通 `AdvanceArm_Stop()` 不清除归零状态，`AdvanceArm_EStop()` 清除两个轴的归零状态。
+- 业务坐标宏保留原有分组与顺序，当前为 `0U` 占位。必须完成实机标定后才能用于取放等组合动作。
 
 ## 5. 主循环与回调边界
 
@@ -210,7 +218,7 @@ TIM6 以 1 ms 为唯一周期入口：每 1 ms 推进 Jetson 通信状态，每 
 - `AdvanceControl_SetMode(NONE)` 会入队底盘停止命令；`WORLD` 与 `VISUAL` 不能同时持有控制权。
 - `AdvanceMotion_Update()` 每个控制周期只消费一次已验证的 world 位姿缓存；不在 TIM6 路径中执行阻塞 UART、`HAL_Delay()` 或等待 DMA。
 - USART3 使用 DMA 发送队列和 DMA/IDLE 接收。`drive_emm_Update()`在 TIM6 中推进反馈查询；发送超时使用异步 abort，不在中断内阻塞。
-- 机械臂使用固定编译期参数：伸出、回收、下降、上升、夹爪打开和夹爪闭合均等待 1000 ms。高层不检查限位、不维护软件零点或任务状态；`ARM_CONFIG`、`ARM_GET_STATUS` 和 `ARM_RESET_ZERO` 返回 `ACK_UNKNOWN_CMD`。
+- 机械臂双步进轴使用固定编译期参数与独立归零状态。归零和绝对位置运动检查限位、反馈、堵转、故障和超时；夹爪仍采用固定等待的总线舵机控制。
 - 驱动器心跳保护默认写为 `500 ms`，配置见 `drive_emm.h`。首次上板必须确认实际 Emm 固件支持该参数，且周期反馈查询会被驱动器视为有效心跳。
 - ACK 与状态数据使用 UART 中断发送队列；UART/DMA 回调仅负责接收、入队或释放发送槽位，不直接执行业务控制。
 

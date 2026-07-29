@@ -389,6 +389,19 @@ void AdvanceTest_ScrewMotor(uint8_t id, bool is_x)
   HAL_Delay(1000U);
 }
 
+void Test_emm_1(void)
+{
+  drive_emm_Pos_Control(1, 1, 200, 60, 1000, 1, 0);
+}
+void Test_emm_2(void)
+{
+  
+}
+void Test_emm_3(void)
+{
+  
+}
+
 /* 发送已装载的多电机命令，再用广播同步启动当前批次。 */
 static void AdvanceTest_MMCL_SendLoaded(void)
 {
