@@ -48,6 +48,12 @@ void AdvanceTest_BlockingMain(void);
 void AdvanceTest_ScrewMotor(uint8_t id, bool is_x);
 
 /**
+ * @brief 测试多电机速度控制命令及同步启动流程。
+ * @note 测试期间会驱动当前底盘四个电机，仅用于车辆架空后的现场调试。
+ */
+void Test_MMCL(void);
+
+/**
  * @brief 测试底盘电机正反转方向是否与底盘约定一致。
  */
 void Test_Chassis_Sign(void);
