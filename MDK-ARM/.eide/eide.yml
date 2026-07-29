@@ -39,6 +39,7 @@ virtualFolder:
                 - path: ../Core/Src/main.c
                 - path: ../Core/Src/stm32f4xx_it.c
                 - path: ../Core/Src/stm32f4xx_hal_msp.c
+                - path: ../Core/Src/system_stm32f4xx.c
                 - path: ../Core/Inc/advance_arm.h
                 - path: ../Core/Inc/advance_chassis.h
                 - path: ../Core/Inc/advance_control.h
@@ -56,7 +57,6 @@ virtualFolder:
                 - path: ../Core/Inc/sensor_wit.h
                 - path: ../Core/Inc/stm32f4xx_hal_conf.h
                 - path: ../Core/Inc/stm32f4xx_it.h
-                - path: ../Core/Src/system_stm32f4xx.c
               folders: []
     - name: Drivers
       files: []
@@ -118,7 +118,8 @@ targets:
         options:
           version: 4
           afterBuildTasks: []
-          asm-compiler: {}
+          asm-compiler:
+            defines: []
           beforeBuildTasks: []
           c/cpp-compiler:
             CXX_FLAGS: --diag_suppress=1 --diag_suppress=1295
@@ -129,11 +130,14 @@ targets:
             warnings: all-warnings
           global:
             output-debug-info: enable
-            use-microLIB: true
+            use-microLIB: false
           linker:
             $outputTaskExcludes:
               - .bin
             output-format: elf
+            ro-base: ""
+            rw-base: ""
+            xo-base: ""
         scatterFilePath: ""
         storageLayout:
           RAM:

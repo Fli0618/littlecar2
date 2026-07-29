@@ -2,19 +2,8 @@
     "folders": [
         {
             "path": "."
-        },
-        {
-            "path": "../Core"
-        },
-        {
-            "path": "../jetson"
-        },
-        {
-            "path": "../tools"
         }
     ],
-    "settings": {
-        "cortex-debug.variableUseNaturalFormat": true
-    },
+    "settings": {},
     "extensions": {}
 }
