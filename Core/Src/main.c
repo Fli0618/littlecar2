@@ -796,14 +796,16 @@ static void MX_GPIO_Init(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == UART5)
-  {
-    OPS_OnByteReceived();
-  }
+  (void)huart;
 }
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
+  if (huart->Instance == UART5)
+  {
+    OPS_OnUartRxEvent(huart, Size);
+  }
+
   if (huart->Instance == USART2)
   {
     WIT_OnUartRxEvent(huart, Size);
@@ -860,7 +862,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 
   if (huart->Instance == UART5)
   {
-    OPS_OnUartError();
+    OPS_OnUartError(huart);
   }
 
   if (huart->Instance == USART2)

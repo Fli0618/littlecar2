@@ -7,6 +7,8 @@
 - `Inc/`：公共头文件、模块接口声明、HAL 配置头文件。
 - `Src/`：主程序入口、外设初始化、中断入口、设备驱动、传感器解析和高级控制实现。
 
+`sensor_ops.c` 使用 UART5 RX 循环 DMA 接收 OPS 数据，通过 `HAL_UARTEx_RxEventCallback()` 增量处理 DMA 缓冲区中的新字节，并沿用原有 28 字节帧解析、合法性校验和 500 ms 超时失效逻辑。不要恢复 `HAL_UART_Receive_IT()`；CubeMX 重新生成后需确认 UART5 RX DMA 仍为 Circular 且 UART5 中断保持启用。
+
 ## 当前命名规则
 
 - `sensor_*`：传感器相关模块，例如 `sensor_wit`、`sensor_ops`、`sensor_limit`。

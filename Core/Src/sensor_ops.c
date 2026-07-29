@@ -7,6 +7,7 @@
 #define OPS_FRAME_FOOTER_FIRST ((uint8_t)0x0AU)
 #define OPS_FRAME_FOOTER_SECOND ((uint8_t)0x0DU)
 #define OPS_FRAME_PAYLOAD_SIZE ((uint16_t)24U)
+#define OPS_RX_DMA_BUFFER_SIZE ((uint16_t)128U)
 #define OPS_STALE_TIMEOUT_MS ((uint32_t)500U)
 
 typedef enum
@@ -25,7 +26,8 @@ typedef union
 } OPS_Payload_t;
 
 static UART_HandleTypeDef *g_ops_uart = NULL;
-static uint8_t g_ops_rx_byte = 0U;
+static uint8_t g_ops_rx_dma_buffer[OPS_RX_DMA_BUFFER_SIZE] = {0};
+static uint16_t g_ops_rx_last_pos = 0U;
 static OPS_ParserState_t g_ops_parser_state = OPS_PARSER_WAIT_HEADER_FIRST;
 static OPS_Payload_t g_ops_payload = {0};
 static uint16_t g_ops_payload_index = 0U;
@@ -123,7 +125,9 @@ static void OPS_UpdatePose(void)
 static OPS_Status_t OPS_StartReceive(void)
 {
   if ((OPS_GetUartHandle() == NULL) ||
-      (HAL_UART_Receive_IT(OPS_GetUartHandle(), &g_ops_rx_byte, 1U) != HAL_OK))
+      (HAL_UARTEx_ReceiveToIdle_DMA(OPS_GetUartHandle(),
+                                    g_ops_rx_dma_buffer,
+                                    OPS_RX_DMA_BUFFER_SIZE) != HAL_OK))
   {
     g_ops_last_status = OPS_STATUS_RX_ERROR;
     return g_ops_last_status;
@@ -135,6 +139,7 @@ static OPS_Status_t OPS_StartReceive(void)
     __HAL_DMA_DISABLE_IT(OPS_GetUartHandle()->hdmarx, DMA_IT_HT);
   }
 
+  g_ops_rx_last_pos = 0U;
   g_ops_last_status = OPS_STATUS_OK;
   return g_ops_last_status;
 }
@@ -272,26 +277,63 @@ void OPS_Update(void)
   OPS_InvalidateStaleData();
 }
 
-void OPS_OnByteReceived(void)
+static void OPS_HandleRxEvent(uint16_t size)
 {
-  if ((OPS_GetUartHandle() == NULL) || (g_ops_initialized == 0U))
+  uint16_t current_pos = size;
+  uint16_t index;
+
+  if (current_pos > OPS_RX_DMA_BUFFER_SIZE)
+  {
+    current_pos = OPS_RX_DMA_BUFFER_SIZE;
+  }
+
+  if (current_pos == g_ops_rx_last_pos)
   {
     return;
   }
 
-  OPS_HandleFrameByte(g_ops_rx_byte);
-  (void)OPS_StartReceive();
+  if (current_pos > g_ops_rx_last_pos)
+  {
+    for (index = g_ops_rx_last_pos; index < current_pos; ++index)
+    {
+      OPS_HandleFrameByte(g_ops_rx_dma_buffer[index]);
+    }
+  }
+  else
+  {
+    for (index = g_ops_rx_last_pos; index < OPS_RX_DMA_BUFFER_SIZE; ++index)
+    {
+      OPS_HandleFrameByte(g_ops_rx_dma_buffer[index]);
+    }
+    for (index = 0U; index < current_pos; ++index)
+    {
+      OPS_HandleFrameByte(g_ops_rx_dma_buffer[index]);
+    }
+  }
+
+  g_ops_rx_last_pos = (current_pos == OPS_RX_DMA_BUFFER_SIZE) ? 0U : current_pos;
 }
 
-void OPS_OnUartError(void)
+void OPS_OnUartRxEvent(UART_HandleTypeDef *huart, uint16_t size)
 {
-  if (OPS_GetUartHandle() == NULL)
+  if ((huart != OPS_GetUartHandle()) || (g_ops_initialized == 0U))
+  {
+    return;
+  }
+
+  OPS_HandleRxEvent(size);
+}
+
+void OPS_OnUartError(UART_HandleTypeDef *huart)
+{
+  if (huart != OPS_GetUartHandle())
   {
     return;
   }
 
   g_ops_last_status = OPS_STATUS_RX_ERROR;
   OPS_ResetParser();
+  g_ops_rx_last_pos = 0U;
   (void)OPS_StartReceive();
 }
 
