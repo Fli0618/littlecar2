@@ -58,14 +58,17 @@ extern "C"
   void OPS_Update(void);
 
   /**
-   * @brief 串口接收中断回调处理 (必须在 HAL_UART_RxCpltCallback 中调用)
+   * @brief 处理 UART5 DMA + IDLE 接收事件。
+   * @param huart UART5 句柄。
+   * @param size DMA 接收缓冲区当前写入位置。
    */
-  void OPS_OnByteReceived(void);
+  void OPS_OnUartRxEvent(UART_HandleTypeDef *huart, uint16_t size);
 
   /**
-   * @brief 串口错误处理回调 (必须在 HAL_UART_ErrorCallback 中调用)
+   * @brief 处理 UART5 接收错误。
+   * @param huart 发生错误的串口句柄。
    */
-  void OPS_OnUartError(void);
+  void OPS_OnUartError(UART_HandleTypeDef *huart);
 
   /* --- 数据获取接口 --- */
 
