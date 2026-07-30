@@ -47,6 +47,8 @@ void AdvanceTest_BlockingMain(void);
  */
 void AdvanceTest_ScrewMotor(uint8_t id, bool is_x);
 
+void Test_Servo1(void);
+
 void Test_emm_1(void);
 void Test_emm_2(void);
 void Test_emm_3(void);

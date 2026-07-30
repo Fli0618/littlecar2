@@ -1,4 +1,4 @@
-/* USER CODE BEGIN Header */
+﻿/* USER CODE BEGIN Header */
 /**
  ******************************************************************************
  * @file           : main.c
@@ -50,7 +50,7 @@
  * 设为 1 时进入 USART1 在线调参模式，并自动禁用 printf；
  * 设为 0 时关闭在线调参，恢复 USART1 printf 输出并运行比赛主流程。
  */
-#define ONLINE_DEBUG_MODE (1U)
+#define ONLINE_DEBUG_MODE (0U)
 
 /* TIM6 提供 1 ms 调度节拍，所有业务周期统一在这里配置。 */
 #define APP_WORLD_PERIOD_MS ((uint32_t)10U)
@@ -403,7 +403,14 @@ int main(void)
     __WFI();
   }
 #else
-  Competition_StartArea_t start_area;
+
+  // 测试
+  Test_Chassis_Sign();
+  // Test_Chassis_SetBodyVelocityEx();
+  // Test_Chassis_MoveMecanumEx();
+
+
+Competition_StartArea_t start_area;
 
   // 比赛尚未开始时只等待 Jetson 的有效启动请求
   while (CommJetson_TakeCompetitionStart(&start_area) == 0U)
@@ -411,7 +418,7 @@ int main(void)
     __WFI();
   }
   // 主流程
-  App_RunTask(start_area);
+  // App_RunTask(start_area);
   while (1)
   {
     __WFI();

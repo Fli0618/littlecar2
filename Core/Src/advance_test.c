@@ -518,6 +518,16 @@ void Test_MMCL(void)
 
 */
 
+// SERVO TEST
+void Test_Servo1(void)
+{
+  printf("[TEST] test servo\r\n");
+  BusServo_SetPositionEx(1, 50, 1000, 200);
+  HAL_Delay(1000);
+  BusServo_SetPositionEx(1, 50, 0, 200);
+  HAL_Delay(1000);
+}
+
 
 // ----------------------------------------------------------------------------------
 // CHASSIS TEST

@@ -25,3 +25,5 @@
 - Jetson 的 `main.py` 是服务入口，不将 `src/vision/advance_yolo.py` 作为独立脚本运行。单元测试不得依赖真实相机、串口或模型下载；硬件测试须单独在 Jetson 上确认。
 - `tools/` 中的单元测试不得依赖真实串口或车辆硬件；需要硬件的测试必须单独标记并在 Windows/现场环境执行。工具的缓存、日志、`__pycache__`、`.pytest_cache` 和 `*.egg-info` 不得提交。
 - 提交前检查 `git diff` 与 `git status`，仅提交本任务相关的内容；不提交 `__pycache__`、`.pytest_cache`、`*.egg-info` 等生成物。
+- 我使用eide进行相关内容的开发，你可以使用stlink进行烧录测试，内容详情见：eide配置.json
+- 被告知使用无线烧录的时候，使用OpenOCD

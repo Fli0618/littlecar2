@@ -24,9 +24,9 @@ extern "C"
  * 底盘约定：轮子 RPM 为正时，对小车产生向前运动贡献。
  */
 #define CHASSIS_MOTOR_LF_SIGN (1)
-#define CHASSIS_MOTOR_RF_SIGN (1)
+#define CHASSIS_MOTOR_RF_SIGN (-1)
 #define CHASSIS_MOTOR_LR_SIGN (1)
-#define CHASSIS_MOTOR_RR_SIGN (1)
+#define CHASSIS_MOTOR_RR_SIGN (-1)
 
 #define CHASSIS_DEFAULT_ACC ((uint8_t)10U)           /*!< 底盘默认加速度参数。 */
 #define CHASSIS_SYNC_ADDR ((uint8_t)0x00U)           /*!< 四轮同步控制地址。 */
