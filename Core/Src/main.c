@@ -405,10 +405,16 @@ int main(void)
 #else
 
   // 测试
-  Test_Chassis_Sign();
+  // 电机基础
+  // Test_Chassis_Sign();
   // Test_Chassis_SetBodyVelocityEx();
   // Test_Chassis_MoveMecanumEx();
+  // Test_MMCL();
 
+  // motion 依赖世界坐标数据
+  // Test_Motion_SetWorldVelocityEx();
+  // Test_Motion_GotoPoseBlocking();
+  // Test_Motion_GotoPoseYawAndCancel();
 
 Competition_StartArea_t start_area;
 

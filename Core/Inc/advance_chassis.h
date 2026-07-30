@@ -28,7 +28,7 @@ extern "C"
 #define CHASSIS_MOTOR_LR_SIGN (1)
 #define CHASSIS_MOTOR_RR_SIGN (-1)
 
-#define CHASSIS_DEFAULT_ACC ((uint8_t)10U)           /*!< 底盘默认加速度参数。 */
+#define CHASSIS_DEFAULT_ACC ((uint8_t)30U)           /*!< 底盘默认加速度参数。 */
 #define CHASSIS_SYNC_ADDR ((uint8_t)0x00U)           /*!< 四轮同步控制地址。 */
 #define CHASSIS_MAX_RPM ((uint16_t)3000U)            /*!< 底盘轮速上限，单位为 RPM。 */
 #define CHASSIS_UART_WAIT_TIMEOUT_MS ((uint32_t)20U) /*!< 串口发送等待超时时间，单位为 ms。 */
@@ -46,16 +46,16 @@ extern "C"
  * 物理速度接口的输入限值。超出时底盘层会钳制，协议层应同时拒绝异常命令。
  * 修改前应完成轮组方向、制动距离和场地边界验证。
  */
-#define CHASSIS_MAX_BODY_SPEED_MM_S (500.0f) /*!< 车体线速度上限，单位为 mm/s。 */
+#define CHASSIS_MAX_BODY_SPEED_MM_S (2000.0f) /*!< 车体线速度上限，单位为 mm/s。 */
 #define CHASSIS_MAX_BODY_WZ_DEG_S (180.0f)   /*!< 车体角速度上限，单位为度/s。 */
 
 /*
  * Physical chassis parameters for mm/s and deg/s conversion.
  * Measure and calibrate these values on the real chassis before high-speed use.
  */
-#define CHASSIS_WHEEL_RADIUS_MM (48.0f) /*!< 车轮半径，单位为 mm。 */
-#define CHASSIS_HALF_LENGTH_MM (110.0f) /*!< 车体半长，单位为 mm。 */
-#define CHASSIS_HALF_WIDTH_MM (90.0f)   /*!< 车体半宽，单位为 mm。 */
+#define CHASSIS_WHEEL_RADIUS_MM (50.0f) /*!< 车轮半径，单位为 mm。 */
+#define CHASSIS_HALF_LENGTH_MM (95.0f) /*!< 车体半长，单位为 mm。 */
+#define CHASSIS_HALF_WIDTH_MM (68.0f)   /*!< 车体半宽，单位为 mm。 */
 #define CHASSIS_MOTOR_GEAR_RATIO (1.0f) /*!< 电机与车轮传动比。 */
 
     /*
