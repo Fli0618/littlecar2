@@ -406,6 +406,11 @@
               <FilePath>../Core/Src/comm_jetson.c</FilePath>
             </File>
             <File>
+              <FileName>comm_stdio.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/comm_stdio.c</FilePath>
+            </File>
+            <File>
               <FileName>comm_tuner.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/comm_tuner.c</FilePath>

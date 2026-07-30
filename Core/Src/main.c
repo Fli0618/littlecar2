@@ -34,6 +34,7 @@
 #include "advance_arm.h"
 #include "car_pose.h"
 #include "comm_jetson.h"
+#include "comm_stdio.h"
 #include "comm_tuner.h"
 
 /* USER CODE END Includes */
@@ -103,18 +104,6 @@ static void MX_TIM6_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-int fputc(int ch, FILE *f)
-{
-  (void)f;
-#if (ONLINE_DEBUG_MODE == 0U)
-  uint8_t byte = (uint8_t)ch;
-  (void)HAL_UART_Transmit(&huart1, &byte, 1, 20U);
-#else
-  (void)ch;
-#endif
-  return ch;
-}
-
 static void App_ToggleLed(void)
 {
   HAL_GPIO_TogglePin(GPIOF, GPIO_PIN_9 | GPIO_PIN_10);
@@ -350,6 +339,8 @@ int main(void)
   MX_USART6_UART_Init();
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
+
+  CommStdio_Init(&huart1, (uint8_t)(ONLINE_DEBUG_MODE == 0U));
 
 #if (ONLINE_DEBUG_MODE != 0U)
   if (CommTuner_Init(&huart1) != HAL_OK)
