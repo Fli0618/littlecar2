@@ -63,6 +63,29 @@ def make_gui():
     return gui
 
 
+def test_pick_font_prefers_available_cjk_family(monkeypatch):
+    gui = CompetitionGUI.__new__(CompetitionGUI)
+    gui.root = object()
+    monkeypatch.setattr(competition_gui.tkfont, "families", lambda _root: ("Arial", "Noto Sans CJK SC"))
+
+    assert gui._pick_font("Noto Sans CJK SC", "Microsoft YaHei") == "Noto Sans CJK SC"
+
+
+def test_pick_font_uses_actual_tk_default_when_candidates_are_missing(monkeypatch):
+    gui = CompetitionGUI.__new__(CompetitionGUI)
+    gui.root = object()
+
+    class DefaultFont:
+        def actual(self, option):
+            assert option == "family"
+            return "Tk Actual Default"
+
+    monkeypatch.setattr(competition_gui.tkfont, "families", lambda _root: ("Arial",))
+    monkeypatch.setattr(competition_gui.tkfont, "nametofont", lambda name: DefaultFont())
+
+    assert gui._pick_font("Noto Sans CJK SC", "Microsoft YaHei") == "Tk Actual Default"
+
+
 def test_pages_switch_and_running_values_update():
     gui = make_gui()
     gui.show_start_page()

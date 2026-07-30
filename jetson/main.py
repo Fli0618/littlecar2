@@ -419,9 +419,16 @@ def main() -> None:
             else (VISION_AIM_OFFSET_X_PX, VISION_AIM_OFFSET_Y_PX)
         )
         try:
+            status_text = _preview_mode_text(mode)
             gui.set_camera_frame(
-                render_camera_preview(frame_bgr, mode, result, aim_offset=aim_offset),
-                status_text=_preview_mode_text(mode),
+                render_camera_preview(
+                    frame_bgr,
+                    mode,
+                    result,
+                    aim_offset=aim_offset,
+                    status_text=status_text,
+                ),
+                status_text=status_text,
             )
         except Exception as error:
             print(f"camera preview rendering failed: {error}", flush=True)

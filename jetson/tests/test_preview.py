@@ -1,8 +1,12 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
+from PIL import ImageFont
 
 from protocol.commands import CMD_START_CIRCLE, CMD_START_COLOR, CMD_START_DISK_CENTER, CMD_START_QR
 from vision import render_camera_preview
+import vision.preview as preview
 
 
 def test_preview_returns_independent_rgb_frame_and_preserves_input():
@@ -38,3 +42,61 @@ def test_preview_renders_each_detection_mode(mode, result):
 def test_preview_rejects_invalid_camera_frame():
     with pytest.raises(TypeError, match="BGR numpy.ndarray"):
         render_camera_preview(np.zeros((10, 10), dtype=np.uint8), 0)
+
+
+def test_text_renderer_routes_unicode_away_from_opencv(monkeypatch):
+    frame = np.zeros((40, 120, 3), dtype=np.uint8)
+    unicode_calls = []
+    opencv_calls = []
+    monkeypatch.setattr(preview, "_draw_unicode_text", lambda *args: unicode_calls.append(args))
+    monkeypatch.setattr(preview.cv2, "putText", lambda *args: opencv_calls.append(args))
+
+    preview._draw_text(frame, "相机预览", (4, 24), (255, 255, 255))
+
+    assert len(unicode_calls) == 1
+    assert opencv_calls == []
+
+
+def test_text_renderer_keeps_ascii_on_opencv(monkeypatch):
+    frame = np.zeros((40, 120, 3), dtype=np.uint8)
+    unicode_calls = []
+    opencv_calls = []
+    monkeypatch.setattr(preview, "_draw_unicode_text", lambda *args: unicode_calls.append(args))
+    monkeypatch.setattr(preview.cv2, "putText", lambda *args: opencv_calls.append(args))
+
+    preview._draw_text(frame, "QR status: confirmed", (4, 24), (255, 255, 255))
+
+    assert len(opencv_calls) == 1
+    assert unicode_calls == []
+
+
+def test_fontconfig_resolver_returns_existing_font_path(monkeypatch):
+    font_path = Path(preview.__file__)
+
+    class Result:
+        stdout = f"{font_path}\n"
+
+    monkeypatch.setattr(preview.subprocess, "run", lambda *args, **kwargs: Result())
+    preview._resolve_cjk_font_path.cache_clear()
+
+    assert preview._resolve_cjk_font_path() == font_path
+
+
+def test_fontconfig_resolver_returns_none_when_command_is_unavailable(monkeypatch):
+    def unavailable(*_args, **_kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(preview.subprocess, "run", unavailable)
+    preview._resolve_cjk_font_path.cache_clear()
+
+    assert preview._resolve_cjk_font_path() is None
+
+
+def test_unicode_renderer_clips_text_at_frame_edges(monkeypatch):
+    frame = np.zeros((12, 12, 3), dtype=np.uint8)
+    font = ImageFont.load_default()
+    monkeypatch.setattr(preview, "_load_unicode_font", lambda _size: font)
+
+    preview._draw_unicode_text(frame, "A", (-2, 8), (255, 255, 255))
+
+    assert frame.any()

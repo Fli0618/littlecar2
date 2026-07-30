@@ -16,6 +16,14 @@ WINDOW_HEIGHT = 900
 TASK_CODE_FONT_SIZE = 150
 START_BUTTON_FONT_SIZE = 72
 FIELD_BUTTON_FONT_SIZE = 28
+CJK_FONT_FAMILIES = (
+    "Noto Sans CJK SC",
+    "Noto Sans SC",
+    "Noto Sans CJK",
+    "WenQuanYi Zen Hei",
+    "Droid Sans Fallback",
+    "Microsoft YaHei",
+)
 
 BACKGROUND_COLOR = "#000000"
 TEXT_COLOR = "#FFFFFF"
@@ -45,7 +53,7 @@ class CompetitionGUI:
         self._camera_photo: ImageTk.PhotoImage | None = None
         self._camera_image: Image.Image | None = None
         self._current_page = "start"
-        self._font_family = self._pick_font("Noto Sans CJK SC", "Noto Sans CJK", "Microsoft YaHei")
+        self._font_family = self._pick_font(*CJK_FONT_FAMILIES)
 
         self.root.title("LittleCar2 比赛")
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
@@ -137,8 +145,19 @@ class CompetitionGUI:
             cell.grid(row=0, column=column, rowspan=2, sticky="nsew")
             if column:
                 cell.configure(highlightbackground=DIVIDER_COLOR, highlightthickness=1, highlightcolor=DIVIDER_COLOR)
-            tk.Label(cell, text=label, bg=BACKGROUND_COLOR, fg=LABEL_COLOR, font=("Arial", 24)).place(relx=0.5, rely=0.33, anchor="center")
-            value = tk.Label(cell, bg=BACKGROUND_COLOR, fg=TEXT_COLOR, font=("Arial", 42, "bold"))
+            tk.Label(
+                cell,
+                text=label,
+                bg=BACKGROUND_COLOR,
+                fg=LABEL_COLOR,
+                font=(self._font_family, 24),
+            ).place(relx=0.5, rely=0.33, anchor="center")
+            value = tk.Label(
+                cell,
+                bg=BACKGROUND_COLOR,
+                fg=TEXT_COLOR,
+                font=(self._font_family, 42, "bold"),
+            )
             value.place(relx=0.5, rely=0.66, anchor="center")
             self._count_values.append(value)
         self.set_counts(0, 0)
@@ -324,7 +343,10 @@ class CompetitionGUI:
 
     def _pick_font(self, *preferred_fonts: str) -> str:
         available = set(tkfont.families(self.root))
-        return next((font for font in preferred_fonts if font in available), preferred_fonts[-1])
+        selected = next((font for font in preferred_fonts if font in available), None)
+        if selected is not None:
+            return selected
+        return str(tkfont.nametofont("TkDefaultFont").actual("family"))
 
     def _select_start_area(self, start_area: int) -> None:
         """保存地图选择，并刷新启动页提示和场地高亮。"""

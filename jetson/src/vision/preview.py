@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+import subprocess
+from functools import lru_cache
+from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 from protocol.commands import CMD_START_CIRCLE, CMD_START_COLOR, CMD_START_DISK_CENTER, CMD_START_QR
 
@@ -18,6 +21,8 @@ _DISK_CENTER_COLOR = (0, 0, 255)
 _SUPPORT_POINT_COLOR = (255, 255, 0)
 _TEXT_COLOR = (255, 255, 255)
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
+_UNICODE_FONT_SIZE = 18
+_FONTCONFIG_CJK_PATTERN = ":lang=zh-cn:charset=4e2d"
 
 
 def render_camera_preview(
@@ -126,8 +131,88 @@ def _point_from_value(value: object) -> tuple[int, int] | None:
 
 
 def _draw_text(frame: np.ndarray, text: str, origin: tuple[int, int], color: tuple[int, int, int]) -> None:
+    if not str(text).isascii():
+        _draw_unicode_text(frame, str(text), origin, color)
+        return
     x, y = _bounded_point(frame, *origin)
     cv2.putText(frame, str(text), (x, y), _FONT, 0.48, color, 1, cv2.LINE_AA)
+
+
+@lru_cache(maxsize=1)
+def _resolve_cjk_font_path() -> Path | None:
+    """通过 Fontconfig 找到至少包含一个常用中文字符的字体文件。"""
+    try:
+        result = subprocess.run(
+            ["fc-match", "-f", "%{file}\n", _FONTCONFIG_CJK_PATTERN],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=2,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return None
+
+    for line in result.stdout.splitlines():
+        path = Path(line.strip())
+        if path.is_file():
+            return path
+    return None
+
+
+@lru_cache(maxsize=4)
+def _load_unicode_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    font_path = _resolve_cjk_font_path()
+    if font_path is not None:
+        try:
+            return ImageFont.truetype(str(font_path), size)
+        except OSError:
+            pass
+    return ImageFont.load_default()
+
+
+def _draw_unicode_text(
+    frame: np.ndarray,
+    text: str,
+    origin: tuple[int, int],
+    color: tuple[int, int, int],
+) -> None:
+    """在小型灰度蒙版上绘制 Unicode，避免每帧转换整张相机图像。"""
+    font = _load_unicode_font(_UNICODE_FONT_SIZE)
+    probe = Image.new("L", (1, 1), 0)
+    probe_draw = ImageDraw.Draw(probe)
+    try:
+        left, top, right, bottom = probe_draw.textbbox((0, 0), text, font=font)
+        mask_width = max(1, right - left)
+        mask_height = max(1, bottom - top)
+        mask = Image.new("L", (mask_width, mask_height), 0)
+        ImageDraw.Draw(mask).text((-left, -top), text, font=font, fill=255)
+    except (UnicodeEncodeError, OSError):
+        x, y = _bounded_point(frame, *origin)
+        cv2.putText(frame, text, (x, y), _FONT, 0.48, color, 1, cv2.LINE_AA)
+        return
+
+    destination_x = int(origin[0])
+    destination_y = int(origin[1]) - mask_height
+    frame_height, frame_width = frame.shape[:2]
+    frame_x1 = max(0, destination_x)
+    frame_y1 = max(0, destination_y)
+    frame_x2 = min(frame_width, destination_x + mask_width)
+    frame_y2 = min(frame_height, destination_y + mask_height)
+    if frame_x1 >= frame_x2 or frame_y1 >= frame_y2:
+        return
+
+    mask_x1 = frame_x1 - destination_x
+    mask_y1 = frame_y1 - destination_y
+    mask_array = np.asarray(mask, dtype=np.uint8)[
+        mask_y1 : mask_y1 + frame_y2 - frame_y1,
+        mask_x1 : mask_x1 + frame_x2 - frame_x1,
+    ]
+    alpha = mask_array.astype(np.float32)[..., None] / 255.0
+    region = frame[frame_y1:frame_y2, frame_x1:frame_x2]
+    blended = region.astype(np.float32) * (1.0 - alpha) + np.asarray(color, dtype=np.float32) * alpha
+    region[:] = blended.astype(np.uint8)
 
 
 def _display_value(value: object) -> str:
