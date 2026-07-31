@@ -1,4 +1,4 @@
-/* USER CODE BEGIN Header */
+﻿/* USER CODE BEGIN Header */
 /**
  ******************************************************************************
  * @file           : main.c
@@ -403,7 +403,29 @@ int main(void)
     __WFI();
   }
 #else
-  Competition_StartArea_t start_area;
+
+  // 测试
+  // 电机基础
+  // Test_Chassis_Sign();
+  // Test_Chassis_SetBodyVelocityEx();
+  // Test_Chassis_MoveMecanumEx();
+  // Test_MMCL();
+
+  // wit ops
+  // while(1)
+  // {
+  //   AdvanceTest_PrintImuOpsData();
+  //   HAL_Delay(200);
+  // }
+
+  // Test_Servo1();
+
+  // motion 依赖世界坐标数据
+  // Test_Motion_SetWorldVelocityEx();
+  // Test_Motion_GotoPoseBlocking();
+  // Test_Motion_GotoPoseYawAndCancel();
+
+Competition_StartArea_t start_area;
 
   // 比赛尚未开始时只等待 Jetson 的有效启动请求
   while (CommJetson_TakeCompetitionStart(&start_area) == 0U)
@@ -411,7 +433,7 @@ int main(void)
     __WFI();
   }
   // 主流程
-  App_RunTask(start_area);
+  // App_RunTask(start_area);
   while (1)
   {
     __WFI();

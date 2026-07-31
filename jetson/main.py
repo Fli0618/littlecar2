@@ -31,7 +31,7 @@ from protocol.commands import (
     TASK_CODE_LENGTH,
 )
 from protocol.frame import pack_frame, parse_frames
-from ui import CompetitionGUI
+from ui import CAMERA_QR, CAMERA_VISION, CompetitionGUI
 from vision import (
     advance_detect_circle,
     advance_detect_color,
@@ -413,15 +413,34 @@ def main() -> None:
     def update_detection_preview(frame_bgr: np.ndarray, mode: int, result: dict[str, object]) -> None:
         if not ENABLE_CAMERA_PREVIEW_UI or not gui.is_camera_page_visible():
             return
+        active_camera_id = CAMERA_QR if mode == CMD_START_QR else CAMERA_VISION
+        selected_camera_id = gui.get_selected_camera()
+        preview_mode = mode
+        preview_result = result
+        preview_frame = frame_bgr
+        if selected_camera_id != active_camera_id:
+            ok, selected_frame = cameras[selected_camera_id].read()
+            if not ok:
+                return
+            preview_frame = selected_frame
+            preview_mode = 0
+            preview_result = {}
         aim_offset = (
             (QR_AIM_OFFSET_X_PX, QR_AIM_OFFSET_Y_PX)
-            if mode == CMD_START_QR
+            if selected_camera_id == CAMERA_QR
             else (VISION_AIM_OFFSET_X_PX, VISION_AIM_OFFSET_Y_PX)
         )
         try:
+            status_text = f"{selected_camera_id} 相机预览"
             gui.set_camera_frame(
-                render_camera_preview(frame_bgr, mode, result, aim_offset=aim_offset),
-                status_text=_preview_mode_text(mode),
+                render_camera_preview(
+                    preview_frame,
+                    preview_mode,
+                    preview_result,
+                    aim_offset=aim_offset,
+                    status_text=status_text,
+                ),
+                status_text=status_text,
             )
         except Exception as error:
             print(f"camera preview rendering failed: {error}", flush=True)
@@ -438,17 +457,23 @@ def main() -> None:
             return
         last_manual_preview_at = now
         try:
-            ok, frame = vision_camera.read()
+            selected_camera_id = gui.get_selected_camera()
+            ok, frame = cameras[selected_camera_id].read()
             if not ok:
                 return
+            status_text = f"{selected_camera_id} 相机预览"
             gui.set_camera_frame(
                 render_camera_preview(
                     frame,
                     0,
-                    aim_offset=(VISION_AIM_OFFSET_X_PX, VISION_AIM_OFFSET_Y_PX),
-                    status_text="手动相机预览",
+                    aim_offset=(
+                        (QR_AIM_OFFSET_X_PX, QR_AIM_OFFSET_Y_PX)
+                        if selected_camera_id == CAMERA_QR
+                        else (VISION_AIM_OFFSET_X_PX, VISION_AIM_OFFSET_Y_PX)
+                    ),
+                    status_text=status_text,
                 ),
-                status_text="手动相机预览",
+                status_text=status_text,
             )
         except Exception as error:
             print(f"idle camera preview failed: {error}", flush=True)

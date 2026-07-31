@@ -16,6 +16,14 @@ WINDOW_HEIGHT = 900
 TASK_CODE_FONT_SIZE = 150
 START_BUTTON_FONT_SIZE = 72
 FIELD_BUTTON_FONT_SIZE = 28
+CJK_FONT_FAMILIES = (
+    "Noto Sans CJK SC",
+    "Noto Sans SC",
+    "Noto Sans CJK",
+    "WenQuanYi Zen Hei",
+    "Droid Sans Fallback",
+    "Microsoft YaHei",
+)
 
 BACKGROUND_COLOR = "#000000"
 TEXT_COLOR = "#FFFFFF"
@@ -26,6 +34,9 @@ FIELD_SURFACE_COLOR = "#DCDCDC"
 FIELD_PLATFORM_COLOR = "#FFFCE2"
 DIMENSION_COLOR = "#2254D8"
 START_ZONE_COLOR = "#1239D6"
+CAMERA_QR = "qr"
+CAMERA_VISION = "vision"
+VALID_CAMERAS = (CAMERA_QR, CAMERA_VISION)
 
 
 class CompetitionGUI:
@@ -42,10 +53,12 @@ class CompetitionGUI:
         self._camera_label: tk.Label | None = None
         self._camera_status: tk.Label | None = None
         self._camera_back_button: tk.Button | None = None
+        self._camera_buttons: dict[str, tk.Button] = {}
+        self._selected_camera = CAMERA_VISION
         self._camera_photo: ImageTk.PhotoImage | None = None
         self._camera_image: Image.Image | None = None
         self._current_page = "start"
-        self._font_family = self._pick_font("Noto Sans CJK SC", "Noto Sans CJK", "Microsoft YaHei")
+        self._font_family = self._pick_font(*CJK_FONT_FAMILIES)
 
         self.root.title("LittleCar2 比赛")
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
@@ -137,8 +150,19 @@ class CompetitionGUI:
             cell.grid(row=0, column=column, rowspan=2, sticky="nsew")
             if column:
                 cell.configure(highlightbackground=DIVIDER_COLOR, highlightthickness=1, highlightcolor=DIVIDER_COLOR)
-            tk.Label(cell, text=label, bg=BACKGROUND_COLOR, fg=LABEL_COLOR, font=("Arial", 24)).place(relx=0.5, rely=0.33, anchor="center")
-            value = tk.Label(cell, bg=BACKGROUND_COLOR, fg=TEXT_COLOR, font=("Arial", 42, "bold"))
+            tk.Label(
+                cell,
+                text=label,
+                bg=BACKGROUND_COLOR,
+                fg=LABEL_COLOR,
+                font=(self._font_family, 24),
+            ).place(relx=0.5, rely=0.33, anchor="center")
+            value = tk.Label(
+                cell,
+                bg=BACKGROUND_COLOR,
+                fg=TEXT_COLOR,
+                font=(self._font_family, 42, "bold"),
+            )
             value.place(relx=0.5, rely=0.66, anchor="center")
             self._count_values.append(value)
         self.set_counts(0, 0)
@@ -167,6 +191,24 @@ class CompetitionGUI:
             font=(self._font_family, FIELD_BUTTON_FONT_SIZE),
         )
         self._camera_status.grid(row=0, column=0, sticky="ew")
+        camera_selector = tk.Frame(footer, bg=BACKGROUND_COLOR)
+        camera_selector.grid(row=0, column=1, padx=(16, 0))
+        for column, (camera_id, label) in enumerate(
+            ((CAMERA_QR, "二维码相机"), (CAMERA_VISION, "视觉相机"))
+        ):
+            button = tk.Button(
+                camera_selector,
+                text=label,
+                command=lambda selected=camera_id: self.select_camera(selected),
+                bg="#454545" if camera_id == self._selected_camera else "#252525",
+                fg=TEXT_COLOR,
+                activebackground="#5A5A5A",
+                activeforeground=TEXT_COLOR,
+                borderwidth=0,
+                font=(self._font_family, FIELD_BUTTON_FONT_SIZE, "bold"),
+            )
+            button.grid(row=0, column=column, padx=(0 if column == 0 else 8, 0), ipadx=12, ipady=8)
+            self._camera_buttons[camera_id] = button
         self._camera_back_button = tk.Button(
             footer,
             text="返回任务码",
@@ -178,7 +220,7 @@ class CompetitionGUI:
             borderwidth=0,
             font=(self._font_family, FIELD_BUTTON_FONT_SIZE, "bold"),
         )
-        self._camera_back_button.grid(row=0, column=1, padx=(16, 0), ipadx=18, ipady=8)
+        self._camera_back_button.grid(row=0, column=2, padx=(16, 0), ipadx=18, ipady=8)
 
     def _on_camera_resize(self, _event: tk.Event[tk.Misc] | None = None) -> None:
         self._render_camera_frame()
@@ -324,7 +366,10 @@ class CompetitionGUI:
 
     def _pick_font(self, *preferred_fonts: str) -> str:
         available = set(tkfont.families(self.root))
-        return next((font for font in preferred_fonts if font in available), preferred_fonts[-1])
+        selected = next((font for font in preferred_fonts if font in available), None)
+        if selected is not None:
+            return selected
+        return str(tkfont.nametofont("TkDefaultFont").actual("family"))
 
     def _select_start_area(self, start_area: int) -> None:
         """保存地图选择，并刷新启动页提示和场地高亮。"""
@@ -404,6 +449,18 @@ class CompetitionGUI:
     def is_camera_page_visible(self) -> bool:
         """返回相机预览页是否为当前显示页面。"""
         return self._camera_preview_enabled and self._current_page == "camera"
+
+    def select_camera(self, camera_id: str) -> None:
+        """选择相机预览源；实际采集仍由主服务统一调度。"""
+        if camera_id not in VALID_CAMERAS:
+            return
+        self._selected_camera = camera_id
+        for button_id, button in self._camera_buttons.items():
+            button.configure(bg="#454545" if button_id == camera_id else "#252525")
+
+    def get_selected_camera(self) -> str:
+        """返回当前需要展示的相机标识。"""
+        return self._selected_camera
 
     def set_camera_frame(self, frame_rgb: np.ndarray, status_text: str = "") -> None:
         """更新 RGB 相机帧和状态文字，不访问相机设备。"""

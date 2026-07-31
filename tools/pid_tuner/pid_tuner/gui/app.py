@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 import sys
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import (QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
                                QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
                                QPushButton, QSpinBox, QSplitter, QVBoxLayout, QWidget, QInputDialog)
 
@@ -15,9 +16,47 @@ from .plots import TelemetryPlots
 from .session import SessionController
 
 
-def number(value: float = 0.0) -> QDoubleSpinBox:
-    box = QDoubleSpinBox(); box.setRange(-100000.0, 100000.0); box.setDecimals(4); box.setValue(value); box.setSingleStep(0.1)
+GOTO_VMAX_MM_S = 600.0
+GOTO_WMAX_DEG_S = 120.0
+GOTO_TIMEOUT_MS = 15000
+HEARTBEAT_INTERVAL_MS = 250
+GOTO_YAW_LABEL = "yaw 相对初始化零点 deg"
+
+MOTION_STATE_TEXT = {
+    0: "空闲",
+    1: "运行中",
+    2: "已到达，无需运动",
+    3: "运动超时",
+    4: "位姿不可用",
+    5: "世界原点不可用",
+    6: "已取消",
+}
+
+
+def number(value: float = 0.0, minimum: float = -100000.0, maximum: float = 100000.0) -> QDoubleSpinBox:
+    box = QDoubleSpinBox(); box.setRange(minimum, maximum); box.setDecimals(4); box.setValue(value); box.setSingleStep(0.1)
     return box
+
+
+def validate_motion_goal(goal: MotionGoal) -> str | None:
+    if not all(math.isfinite(value) for value in (goal.x_mm, goal.y_mm, goal.yaw_deg, goal.vmax_mm_s, goal.wmax_deg_s)):
+        return "GOTO 参数必须是有限数值"
+    if not 0.0 < goal.vmax_mm_s <= GOTO_VMAX_MM_S:
+        return "vmax 必须在 0-600 mm/s 之间"
+    if not 0.0 < goal.wmax_deg_s <= GOTO_WMAX_DEG_S:
+        return "wmax 必须在 0-120 deg/s 之间"
+    if not 0 < goal.timeout_ms <= GOTO_TIMEOUT_MS:
+        return "超时必须在 1-15000 ms 之间"
+    return None
+
+
+def format_telemetry_status(item: Telemetry) -> str:
+    pose_state = "位姿有效" if (item.flags & 0x01) else "位姿无效"
+    motion_state = MOTION_STATE_TEXT.get(item.state, f"未知状态 {item.state}")
+    target = ", ".join(f"{value:.1f}" for value in item.target)
+    actual = ", ".join(f"{value:.1f}" for value in item.actual)
+    return (f"{motion_state} {pose_state} 目标=({target}) 实际=({actual}) "
+            f"PID r{item.pid_revision} 标志=0x{item.flags:02X} 覆盖={item.overwritten_count}")
 
 
 class MainWindow(QMainWindow):
@@ -26,6 +65,8 @@ class MainWindow(QMainWindow):
         self.buffer = TelemetryBuffer(); self.session = SessionController(); self.recording = False; self.recorded = []
         self._build(); self._wire()
         self.timer = QTimer(self); self.timer.setInterval(40); self.timer.timeout.connect(self.refresh); self.timer.start()
+        self.heartbeat_timer = QTimer(self); self.heartbeat_timer.setInterval(HEARTBEAT_INTERVAL_MS)
+        self.heartbeat_timer.timeout.connect(self.session.heartbeat); self.heartbeat_timer.start()
 
     def _build(self) -> None:
         root = QSplitter(); controls = QWidget(); left = QVBoxLayout(controls); left.setContentsMargins(12, 12, 12, 12)
@@ -38,8 +79,9 @@ class MainWindow(QMainWindow):
         pid_form.addRow(self.read_pid); pid_form.addRow(self.apply_pid); pid_form.addRow(self.restore_pid); left.addLayout(pid_form)
         self.profile = QComboBox(); self.load_profile = QPushButton("加载方案"); self.save_profile = QPushButton("另存方案"); self.export_c = QPushButton("导出 C")
         left.addWidget(self.profile); left.addWidget(self.load_profile); left.addWidget(self.save_profile); left.addWidget(self.export_c)
-        self.goal = [number() for _ in range(5)]; self.timeout = QSpinBox(); self.timeout.setRange(1, 15000); self.timeout.setValue(5000)
-        goal_form = QFormLayout(); [goal_form.addRow(name, widget) for name, widget in zip(("X mm", "Y mm", "yaw deg", "vmax mm/s", "wmax deg/s"), self.goal)]
+        self.goal = [number(), number(), number(), number(600.0, 0.1, GOTO_VMAX_MM_S), number(120.0, 0.1, GOTO_WMAX_DEG_S)]; self.timeout = QSpinBox(); self.timeout.setRange(1, GOTO_TIMEOUT_MS); self.timeout.setValue(GOTO_TIMEOUT_MS)
+        self.use_yaw = QCheckBox("启用航向约束"); self.use_yaw.setChecked(True)
+        goal_form = QFormLayout(); [goal_form.addRow(name, widget) for name, widget in zip(("X mm", "Y mm", GOTO_YAW_LABEL, "vmax mm/s", "wmax deg/s"), self.goal)]; goal_form.addRow(self.use_yaw)
         goal_form.addRow("超时 ms", self.timeout); self.goto = QPushButton("开始 GOTO"); self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton"); self.new_experiment = QPushButton("新实验")
         goal_form.addRow(self.goto); goal_form.addRow(self.stop); goal_form.addRow(self.new_experiment); left.addLayout(goal_form)
         self.record = QPushButton("开始记录 CSV"); self.window = QSpinBox(); self.window.setRange(5, 120); self.window.setValue(30); left.addWidget(self.record); left.addWidget(QLabel("时间窗口 (秒)")); left.addWidget(self.window); left.addStretch()
@@ -65,12 +107,24 @@ class MainWindow(QMainWindow):
     def on_pid(self, revision: int, pid: PidConfig) -> None:
         [widget.setValue(value) for widget, value in zip(self.pid, pid.to_dict().values())]; self.status.setText(f"PID 修订号 {revision}")
     def start_motion(self) -> None:
-        self.session.start_motion(MotionGoal(*(widget.value() for widget in self.goal), self.timeout.value()))
+        goal = MotionGoal(*(widget.value() for widget in self.goal), self.timeout.value(),
+                          use_yaw=self.use_yaw.isChecked())
+        error = validate_motion_goal(goal)
+        if error is not None:
+            self.status.setText(f"错误: {error}")
+            return
+        self.session.start_motion(goal)
+        self.status.setText(f"已请求 GOTO 世界目标=({goal.x_mm:.1f}, {goal.y_mm:.1f}, {goal.yaw_deg:.1f})")
         self.buffer.add_event("GOTO")
     def on_telemetry(self, item: object) -> None:
         self.buffer.append(item); self.recorded.append(item) if self.recording else None
-        self.status.setText(f"状态={item.state} PID r{item.pid_revision} 标志=0x{item.flags:02X} 覆盖={item.overwritten_count}")
-    def refresh(self) -> None: self.plots.refresh(self.buffer); self.session.heartbeat()
+        status = format_telemetry_status(item)
+        if item.heartbeat_timed_out:
+            status += " 心跳超时停车"
+        elif item.remote_goal_active:
+            status += f" 心跳正常/{item.heartbeat_age_ms}ms"
+        self.status.setText(status)
+    def refresh(self) -> None: self.plots.refresh(self.buffer)
     def new_experiment_clicked(self) -> None: self.buffer.clear(); self.recorded.clear(); self.buffer.add_event("新实验")
     def toggle_record(self) -> None:
         self.recording = not self.recording; self.record.setText("停止记录并保存" if self.recording else "开始记录 CSV")

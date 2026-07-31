@@ -37,6 +37,12 @@ uint8_t AdvanceControl_SetMode(AdvanceControl_Mode_t mode)
   return 1U;
 }
 
+uint8_t AdvanceControl_ReleaseMode(void)
+{
+  g_control_mode = ADVANCE_CONTROL_NONE;
+  return 1U;
+}
+
 AdvanceControl_Mode_t AdvanceControl_GetMode(void)
 {
   return g_control_mode;

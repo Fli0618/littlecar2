@@ -42,6 +42,19 @@ class Telemetry:
     command_velocity: tuple[float, float, float]
     measured_velocity: tuple[float, float, float]
     integrals: tuple[float, float, float]
+    remote_link_status: int = 0
+
+    @property
+    def remote_goal_active(self) -> bool:
+        return bool(self.remote_link_status & 0x8000)
+
+    @property
+    def heartbeat_timed_out(self) -> bool:
+        return bool(self.remote_link_status & 0x4000)
+
+    @property
+    def heartbeat_age_ms(self) -> int:
+        return self.remote_link_status & 0x3FFF
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

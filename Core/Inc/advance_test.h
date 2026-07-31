@@ -47,6 +47,8 @@ void AdvanceTest_BlockingMain(void);
  */
 void AdvanceTest_ScrewMotor(uint8_t id, bool is_x);
 
+void Test_Servo1(void);
+
 void Test_emm_1(void);
 void Test_emm_2(void);
 void Test_emm_3(void);
@@ -86,6 +88,12 @@ void Test_Motion_GotoPoseBlocking(void);
  * @brief 测试 AdvanceMotion_GotoPoseEx 的航向到点与取消动作。
  */
 void Test_Motion_GotoPoseYawAndCancel(void);
+
+/**
+ * @brief 输出 WIT 陀螺仪与 OPS 定位传感器的当前原始数据。
+ * @note 在主循环中周期调用，用于手动平移、旋转时的坐标轴和正负方向标定。
+ */
+void AdvanceTest_PrintImuOpsData(void);
 
 #ifdef __cplusplus
 }

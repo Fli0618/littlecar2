@@ -402,82 +402,41 @@ void Test_emm_3(void)
   
 }
 
-/* 发送已装载的多电机命令，再用广播同步启动当前批次。 */
-static void AdvanceTest_MMCL_SendLoaded(void)
-{
-  printf("[TEST][MMCL] loaded command bytes=%u\r\n", (unsigned int)MMCL_count);
-  drive_emm_Multi_Motor_Cmd(CHASSIS_SYNC_ADDR);
-  drive_emm_Synchronous_motion(CHASSIS_SYNC_ADDR);
-  HAL_Delay(100U);
-}
-
 /**
- * @brief 对多电机控制 drive_emm_MMCL_Vel_Control 进行实机测试。
+ * @brief 对底盘多电机同步前进、后退流程进行实机测试。
  * @note 测试前必须将车辆架空，并确认现场具备断电或急停条件。
  */
 void Test_MMCL(void)
 {
-  static const uint8_t motor_ids[4] = {
-      CHASSIS_MOTOR_LF_ID,
-      CHASSIS_MOTOR_RF_ID,
-      CHASSIS_MOTOR_LR_ID,
-      CHASSIS_MOTOR_RR_ID};
-  const uint16_t test_rpm = 150U;
+  const int16_t test_rpm = 150;
   const uint8_t test_acc = 10U;
   DriveEmm_Diagnostics_t diagnostics;
-  uint8_t i;
 
   printf("[TEST][MMCL] start: wheels must be off the ground\r\n");
-  MMCL_count = 0U;
-
   printf("[TEST][MMCL] enable motors\r\n");
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_En_Control(motor_ids[i], true, true);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  Chassis_Enable(true);
   HAL_Delay(200U);
 
-  printf("[TEST][MMCL] forward: rpm=%u acc=%u duration=2000ms\r\n",
-         (unsigned int)test_rpm, (unsigned int)test_acc);
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_Vel_Control(motor_ids[i], 0U, test_rpm, test_acc, true);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  printf("[TEST][MMCL] forward: rpm=%d acc=%u duration=2000ms\r\n",
+         (int)test_rpm, (unsigned int)test_acc);
+  Chassis_SetMotorRPMEx(test_rpm, test_rpm, test_rpm, test_rpm, test_acc);
   HAL_Delay(2000U);
 
   printf("[TEST][MMCL] stop after forward\r\n");
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_Stop_Now(motor_ids[i], true);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  Chassis_Stop();
   HAL_Delay(500U);
 
-  printf("[TEST][MMCL] reverse: rpm=%u acc=%u duration=2000ms\r\n",
-         (unsigned int)test_rpm, (unsigned int)test_acc);
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_Vel_Control(motor_ids[i], 1U, test_rpm, test_acc, true);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  printf("[TEST][MMCL] reverse: rpm=%d acc=%u duration=2000ms\r\n",
+         -(int)test_rpm, (unsigned int)test_acc);
+  Chassis_SetMotorRPMEx(-test_rpm, -test_rpm, -test_rpm, -test_rpm, test_acc);
   HAL_Delay(2000U);
 
   printf("[TEST][MMCL] stop after reverse\r\n");
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_Stop_Now(motor_ids[i], true);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  Chassis_Stop();
   HAL_Delay(500U);
 
   printf("[TEST][MMCL] disable motors\r\n");
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_En_Control(motor_ids[i], false, false);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  Chassis_Enable(false);
 
   if (drive_emm_GetDiagnostics(&diagnostics) == HAL_OK)
   {
@@ -518,6 +477,16 @@ void Test_MMCL(void)
 
 */
 
+// SERVO TEST
+void Test_Servo1(void)
+{
+  printf("[TEST] test servo\r\n");
+  BusServo_SetPositionEx(3, 0, 4096, 0);
+  HAL_Delay(2000);
+  BusServo_SetPositionEx(3, 0, 0, 0);
+  HAL_Delay(1000);
+}
+
 
 // ----------------------------------------------------------------------------------
 // CHASSIS TEST
@@ -552,7 +521,7 @@ void Test_Chassis_SetBodyVelocityEx(void)
   HAL_Delay(1000);
 
   // 预期：车体向右移动，其他方向不动
-  Chassis_SetBodyVelocityEx(200.0f, 0.0f, 0.0f, 50);
+  Chassis_SetBodyVelocityEx(150.0f, 0.0f, 0.0f, 50);
   HAL_Delay(1000);
   Chassis_Stop();
   HAL_Delay(1000);
@@ -592,7 +561,7 @@ void Test_Chassis_MoveMecanumEx(void)
   HAL_Delay(1000);
 
   // 预期：车体向右移动并逆时针旋转，其他方向不动
-  Chassis_MoveMecanumEx(0.0, 200.0f, 90.0f, 50);
+  Chassis_MoveMecanumEx(0.0, 200.0f, 180.0f, 50);
   HAL_Delay(1000);
   Chassis_Stop();
   HAL_Delay(1000);
@@ -602,6 +571,39 @@ void Test_Chassis_MoveMecanumEx(void)
   HAL_Delay(1000);
   Chassis_Stop();
   HAL_Delay(1000);
+}
+
+
+void AdvanceTest_PrintImuOpsData(void)
+{
+  const volatile WIT_Data_t *wit_data;
+  OPS_Pose_t ops_pose = {0};
+  OPS_Status_t ops_status;
+
+  wit_data = WIT_GetData();
+  ops_status = OPS_GetPose(&ops_pose);
+
+  printf("[CAL][WIT] accel_g x=%.3f y=%.3f z=%.3f valid=%u tick=%lu\r\n",
+         (double)wit_data->accel_g.x, (double)wit_data->accel_g.y,
+         (double)wit_data->accel_g.z, (unsigned int)wit_data->accel_g.valid,
+         (unsigned long)wit_data->accel_g.updated_tick);
+  printf("[CAL][WIT] gyro_dps x=%.3f y=%.3f z=%.3f valid=%u tick=%lu\r\n",
+         (double)wit_data->gyro_dps.x, (double)wit_data->gyro_dps.y,
+         (double)wit_data->gyro_dps.z, (unsigned int)wit_data->gyro_dps.valid,
+         (unsigned long)wit_data->gyro_dps.updated_tick);
+  printf("[CAL][WIT] angle_deg x=%.3f y=%.3f z=%.3f valid=%u tick=%lu\r\n",
+         (double)wit_data->angle_deg.x, (double)wit_data->angle_deg.y,
+         (double)wit_data->angle_deg.z, (unsigned int)wit_data->angle_deg.valid,
+         (unsigned long)wit_data->angle_deg.updated_tick);
+
+  printf("[CAL][OPS] status=%d valid=%u frame=%lu tick=%lu\r\n",
+         (int)ops_status, (unsigned int)ops_pose.valid,
+         (unsigned long)ops_pose.frame_count, (unsigned long)ops_pose.updated_tick);
+  printf("[CAL][OPS] angle_deg z=%.3f x=%.3f y=%.3f wz_dps=%.3f\r\n",
+         (double)ops_pose.zangle_deg, (double)ops_pose.xangle_deg,
+         (double)ops_pose.yangle_deg, (double)ops_pose.w_z_dps);
+  printf("[CAL][OPS] pos_mm x=%.3f y=%.3f\r\n",
+         (double)ops_pose.pos_x_mm, (double)ops_pose.pos_y_mm);
 }
 
 // ----------------------------------------------------------------------------------
@@ -621,17 +623,19 @@ void Test_Motion_SetWorldVelocityEx(void)
   HAL_Delay(1000);
 
   // 预期：车体沿世界坐标系 X 轴正方向运动，航向角保持不变
-  status = AdvanceMotion_SetWorldVelocityEx(150.0f, 0.0f, 0.0f, 50);
+  status = AdvanceMotion_SetWorldVelocityEx(800.0f, 0.0f, 0.0f, 80);
   printf("[TEST] motion world velocity x status=%d\r\n", (int)status);
-  HAL_Delay(1000);
-  Chassis_Stop();
+  HAL_Delay(2000);
+  // Chassis_Stop();
+  Chassis_SmoothStop(120);
   HAL_Delay(1000);
 
   // 预期：车体沿世界坐标系 Y 轴负方向运动并顺时针旋转
-  status = AdvanceMotion_SetWorldVelocityEx(0.0f, -150.0f, -45.0f, 50);
+  status = AdvanceMotion_SetWorldVelocityEx(0.0f, -800.0f, 0, 80);
   printf("[TEST] motion world velocity y status=%d\r\n", (int)status);
-  HAL_Delay(1000);
-  Chassis_Stop();
+  HAL_Delay(2000);
+  // Chassis_Stop();
+  Chassis_SmoothStop(120);
   Chassis_Enable(false);
 }
 
@@ -658,8 +662,8 @@ void Test_Motion_GotoPoseBlocking(void)
   }
 
   // 预期：车体保持当前航向，移动至世界坐标系 X 轴正方向 300mm 处
-  state = AdvanceMotion_GotoPoseBlocking(pose.x_mm + 300.0f, pose.y_mm,
-                                          pose.yaw_deg, 50);
+  state = AdvanceMotion_GotoPoseBlocking(pose.x_mm + 300.0f, pose.y_mm + 300,
+                                          pose.yaw_deg, 80);
   printf("[TEST] motion goto position state=%d\r\n", (int)state);
   Chassis_Stop();
   Chassis_Enable(false);

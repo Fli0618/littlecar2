@@ -47,6 +47,8 @@ def make_gui():
     gui._camera_label = None
     gui._camera_status = None
     gui._camera_back_button = None
+    gui._camera_buttons = {}
+    gui._selected_camera = competition_gui.CAMERA_VISION
     gui._camera_photo = None
     gui._camera_image = None
     gui._camera_preview_enabled = False
@@ -61,6 +63,29 @@ def make_gui():
     gui._draw_field_annotation = lambda: None
     gui._update_start_selection()
     return gui
+
+
+def test_pick_font_prefers_available_cjk_family(monkeypatch):
+    gui = CompetitionGUI.__new__(CompetitionGUI)
+    gui.root = object()
+    monkeypatch.setattr(competition_gui.tkfont, "families", lambda _root: ("Arial", "Noto Sans CJK SC"))
+
+    assert gui._pick_font("Noto Sans CJK SC", "Microsoft YaHei") == "Noto Sans CJK SC"
+
+
+def test_pick_font_uses_actual_tk_default_when_candidates_are_missing(monkeypatch):
+    gui = CompetitionGUI.__new__(CompetitionGUI)
+    gui.root = object()
+
+    class DefaultFont:
+        def actual(self, option):
+            assert option == "family"
+            return "Tk Actual Default"
+
+    monkeypatch.setattr(competition_gui.tkfont, "families", lambda _root: ("Arial",))
+    monkeypatch.setattr(competition_gui.tkfont, "nametofont", lambda name: DefaultFont())
+
+    assert gui._pick_font("Noto Sans CJK SC", "Microsoft YaHei") == "Tk Actual Default"
 
 
 def test_pages_switch_and_running_values_update():
@@ -167,3 +192,24 @@ def test_set_camera_frame_renders_rgb_image_with_aspect_ratio_and_status(monkeyp
     assert photos[-1].size == (200, 200)
     assert photos[-1].getpixel((0, 0)) == (0, 0, 0)
     assert photos[-1].getpixel((100, 100)) == (12, 34, 56)
+
+
+def test_select_camera_switches_between_two_preview_sources():
+    gui = make_gui()
+    qr_button = Widget()
+    vision_button = Widget()
+    gui._camera_buttons = {
+        competition_gui.CAMERA_QR: qr_button,
+        competition_gui.CAMERA_VISION: vision_button,
+    }
+
+    gui.select_camera(competition_gui.CAMERA_QR)
+
+    assert gui.get_selected_camera() == competition_gui.CAMERA_QR
+    assert qr_button.options["bg"] == "#454545"
+    assert vision_button.options["bg"] == "#252525"
+
+    gui.select_camera(competition_gui.CAMERA_VISION)
+    assert gui.get_selected_camera() == competition_gui.CAMERA_VISION
+    assert qr_button.options["bg"] == "#252525"
+    assert vision_button.options["bg"] == "#454545"
