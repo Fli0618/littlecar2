@@ -402,82 +402,41 @@ void Test_emm_3(void)
   
 }
 
-/* 发送已装载的多电机命令，再用广播同步启动当前批次。 */
-static void AdvanceTest_MMCL_SendLoaded(void)
-{
-  printf("[TEST][MMCL] loaded command bytes=%u\r\n", (unsigned int)MMCL_count);
-  drive_emm_Multi_Motor_Cmd(CHASSIS_SYNC_ADDR);
-  drive_emm_Synchronous_motion(CHASSIS_SYNC_ADDR);
-  HAL_Delay(100U);
-}
-
 /**
- * @brief 对多电机控制 drive_emm_MMCL_Vel_Control 进行实机测试。
+ * @brief 对底盘多电机同步前进、后退流程进行实机测试。
  * @note 测试前必须将车辆架空，并确认现场具备断电或急停条件。
  */
 void Test_MMCL(void)
 {
-  static const uint8_t motor_ids[4] = {
-      CHASSIS_MOTOR_LF_ID,
-      CHASSIS_MOTOR_RF_ID,
-      CHASSIS_MOTOR_LR_ID,
-      CHASSIS_MOTOR_RR_ID};
-  const uint16_t test_rpm = 150U;
+  const int16_t test_rpm = 150;
   const uint8_t test_acc = 10U;
   DriveEmm_Diagnostics_t diagnostics;
-  uint8_t i;
 
   printf("[TEST][MMCL] start: wheels must be off the ground\r\n");
-  MMCL_count = 0U;
-
   printf("[TEST][MMCL] enable motors\r\n");
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_En_Control(motor_ids[i], true, true);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  Chassis_Enable(true);
   HAL_Delay(200U);
 
-  printf("[TEST][MMCL] forward: rpm=%u acc=%u duration=2000ms\r\n",
-         (unsigned int)test_rpm, (unsigned int)test_acc);
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_Vel_Control(motor_ids[i], 0U, test_rpm, test_acc, true);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  printf("[TEST][MMCL] forward: rpm=%d acc=%u duration=2000ms\r\n",
+         (int)test_rpm, (unsigned int)test_acc);
+  Chassis_SetMotorRPMEx(test_rpm, test_rpm, test_rpm, test_rpm, test_acc);
   HAL_Delay(2000U);
 
   printf("[TEST][MMCL] stop after forward\r\n");
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_Stop_Now(motor_ids[i], true);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  Chassis_Stop();
   HAL_Delay(500U);
 
-  printf("[TEST][MMCL] reverse: rpm=%u acc=%u duration=2000ms\r\n",
-         (unsigned int)test_rpm, (unsigned int)test_acc);
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_Vel_Control(motor_ids[i], 1U, test_rpm, test_acc, true);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  printf("[TEST][MMCL] reverse: rpm=%d acc=%u duration=2000ms\r\n",
+         -(int)test_rpm, (unsigned int)test_acc);
+  Chassis_SetMotorRPMEx(-test_rpm, -test_rpm, -test_rpm, -test_rpm, test_acc);
   HAL_Delay(2000U);
 
   printf("[TEST][MMCL] stop after reverse\r\n");
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_Stop_Now(motor_ids[i], true);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  Chassis_Stop();
   HAL_Delay(500U);
 
   printf("[TEST][MMCL] disable motors\r\n");
-  for (i = 0U; i < 4U; ++i)
-  {
-    drive_emm_MMCL_En_Control(motor_ids[i], false, false);
-  }
-  AdvanceTest_MMCL_SendLoaded();
+  Chassis_Enable(false);
 
   if (drive_emm_GetDiagnostics(&diagnostics) == HAL_OK)
   {
