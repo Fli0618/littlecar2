@@ -1,3 +1,3 @@
 # GUI 模块
 
-该目录实现 PySide6 与 pyqtgraph 调参界面。串口协议仅通过上层 `SerialClient` 访问；Qt 主线程以 40 ms 定时器批量刷新曲线。
+该目录实现 PySide6 与 pyqtgraph 调参界面。串口协议仅通过上层 `SerialClient` 访问；Qt 主线程以 40 ms 定时器批量刷新曲线。图表按轴拆分为 OPS 世界坐标 X、OPS 世界坐标 Y、相对航向，以及对应的 X、Y、航向诊断图。诊断下拉框切换误差、命令减实际速度或 PID 积分项时，三轴图表保持独立显示。
