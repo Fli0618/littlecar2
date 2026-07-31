@@ -97,6 +97,7 @@ def decode_telemetry(frame: Frame) -> Telemetry:
         command_velocity=tuple(values[15:18]),
         measured_velocity=tuple(values[18:21]),
         integrals=tuple(values[21:24]),
+        remote_link_status=values[5],
     )
 
 
