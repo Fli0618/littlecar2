@@ -17,7 +17,7 @@ extern "C"
  * 如果某个传感器安装后读数方向相反，将对应宏改为 1。
  */
 #define ADVANCE_WORLD_OPS_YAW_REVERSED ((uint8_t)0U) /*!< OPS 航向角方向反转开关。 */
-#define ADVANCE_WORLD_WIT_YAW_REVERSED ((uint8_t)0U) /*!< WIT 航向角方向反转开关。 */
+#define ADVANCE_WORLD_WIT_YAW_REVERSED ((uint8_t)1U) /*!< WIT 航向角方向反转开关。 */
 
 /*
  * OPS 安装标定。先使用单轴低速测试确认轴向，再填写这些编译期配置。

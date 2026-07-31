@@ -481,9 +481,9 @@ void Test_MMCL(void)
 void Test_Servo1(void)
 {
   printf("[TEST] test servo\r\n");
-  BusServo_SetPositionEx(1, 50, 1000, 200);
-  HAL_Delay(1000);
-  BusServo_SetPositionEx(1, 50, 0, 200);
+  BusServo_SetPositionEx(3, 0, 4096, 0);
+  HAL_Delay(2000);
+  BusServo_SetPositionEx(3, 0, 0, 0);
   HAL_Delay(1000);
 }
 
@@ -561,7 +561,7 @@ void Test_Chassis_MoveMecanumEx(void)
   HAL_Delay(1000);
 
   // 预期：车体向右移动并逆时针旋转，其他方向不动
-  Chassis_MoveMecanumEx(0.0, 200.0f, 90.0f, 50);
+  Chassis_MoveMecanumEx(0.0, 200.0f, 180.0f, 50);
   HAL_Delay(1000);
   Chassis_Stop();
   HAL_Delay(1000);

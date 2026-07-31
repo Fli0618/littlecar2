@@ -412,11 +412,13 @@ int main(void)
   // Test_MMCL();
 
   // wit ops
-  while(1)
-  {
-    AdvanceTest_PrintImuOpsData();
-    HAL_Delay(200);
-  }
+  // while(1)
+  // {
+  //   AdvanceTest_PrintImuOpsData();
+  //   HAL_Delay(200);
+  // }
+
+  // Test_Servo1();
 
   // motion 依赖世界坐标数据
   // Test_Motion_SetWorldVelocityEx();
