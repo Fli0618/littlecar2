@@ -39,6 +39,18 @@ class GuiMotionGoalTests(unittest.TestCase):
                               (0.0, 0.0, 0.0))
         self.assertIn("已到达，无需运动", format_telemetry_status(telemetry))
 
+    def test_heartbeat_timeout_is_visible_in_gui_status(self) -> None:
+        window = MainWindow()
+        try:
+            telemetry = Telemetry(1, 2, 0, 6, 0x07, (0.0, 0.0, 0.0),
+                                  (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+                                  (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+                                  (0.0, 0.0, 0.0), remote_link_status=0x4000)
+            window.on_telemetry(telemetry)
+            self.assertIn("心跳超时停车", window.status.text())
+        finally:
+            window.close()
+
     def test_yaw_label_is_relative_to_initialization_zero(self) -> None:
         self.assertEqual(GOTO_YAW_LABEL, "yaw 相对初始化零点 deg")
 

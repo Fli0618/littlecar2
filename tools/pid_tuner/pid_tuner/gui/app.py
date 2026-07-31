@@ -119,9 +119,10 @@ class MainWindow(QMainWindow):
     def on_telemetry(self, item: object) -> None:
         self.buffer.append(item); self.recorded.append(item) if self.recording else None
         status = format_telemetry_status(item)
-        if item.remote_goal_active:
-            link_state = "超时" if item.heartbeat_timed_out else "正常"
-            status += f" 心跳={link_state}/{item.heartbeat_age_ms}ms"
+        if item.heartbeat_timed_out:
+            status += " 心跳超时停车"
+        elif item.remote_goal_active:
+            status += f" 心跳正常/{item.heartbeat_age_ms}ms"
         self.status.setText(status)
     def refresh(self) -> None: self.plots.refresh(self.buffer)
     def new_experiment_clicked(self) -> None: self.buffer.clear(); self.recorded.clear(); self.buffer.add_event("新实验")
