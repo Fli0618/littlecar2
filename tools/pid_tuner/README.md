@@ -48,7 +48,7 @@ conda run -n low_numpy pip install -e .
 conda run -n low_numpy python launch_gui.py
 ```
 
-启动后使用界面左上方的串口下拉框选择 COM 口并点击“连接”，不需要在启动命令中填写端口。GUI 使用现有世界位姿遥测：X/Y 是经坐标修正后的 OPS 实际位置，yaw 在 WIT 有效时优先使用 WIT，否则使用 OPS。默认显示最近 30 秒，窗口可调 5-120 秒，缓存只保留最近 120 秒。
+启动后使用界面左上方的串口下拉框选择 COM 口并点击“连接”，不需要在启动命令中填写端口。GUI 使用现有世界位姿遥测：X/Y 是经坐标修正后的 OPS 实际位置，yaw 在 WIT 有效时优先使用 WIT，否则使用 OPS。固件启动后持续发送遥测，因此仅连接串口、不发送 GOTO 时图表也会显示实时状态。默认显示最近 30 秒，窗口可调 5-120 秒，缓存只保留最近 120 秒。
 
 运动控制必须在现场具备机械急停与人员监护时使用。断开、通信错误和窗口关闭会尝试发送 STOP；这不能替代物理急停。
 
@@ -74,6 +74,6 @@ conda run -n low_numpy python verify_board.py --port COM5 --write-pid
 conda run -n low_numpy python verify_board.py --port COM5 --exercise-motion --x 200 --y 0 --yaw 0 --csv logs/run.csv
 ```
 
-遥测仅在远程 `GOTO_POSE` 任务处于 `RUNNING` 时发送，默认监听窗口为 30 秒。若任务提前到达、超时或失联，脚本会如实报告实际收到的帧数、CRC 错误、序号缺失和固件侧遥测覆盖计数。
+遥测在固件启动后以 40 ms 周期持续发送，默认监听窗口为 30 秒。若任务提前到达、超时或失联，脚本会如实报告实际收到的帧数、CRC 错误、序号缺失和固件侧遥测覆盖计数。GOTO 线速度不得超过 1500 mm/s。
 
 现场测试前须确保机械急停、断电能力和人员监护可用。GUI STOP 及串口 STOP 都不是物理急停。
