@@ -65,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     goto.add_argument("--x", type=float, required=True); goto.add_argument("--y", type=float, required=True)
     goto.add_argument("--yaw", type=float, required=True); goto.add_argument("--vmax", type=float, required=True)
     goto.add_argument("--wmax", type=float, required=True); goto.add_argument("--timeout", type=int, required=True)
+    goto.add_argument("--no-yaw", action="store_true", help="disable yaw constraint for position-loop tuning")
     goto.add_argument("--csv", type=Path); goto.add_argument("--json", action="store_true")
 
     monitor = commands.add_parser("monitor", help="passively display telemetry")
@@ -109,7 +110,8 @@ def _collect(client: SerialClient, duration_s: float, keepalive: bool, as_json: 
 
 
 def _run_goto(args: argparse.Namespace) -> int:
-    goal = MotionGoal(args.x, args.y, args.yaw, args.vmax, args.wmax, args.timeout)
+    goal = MotionGoal(args.x, args.y, args.yaw, args.vmax, args.wmax, args.timeout,
+                      use_yaw=not args.no_yaw)
     telemetry = []
     with _open(args) as client:
         client.goto(goal)

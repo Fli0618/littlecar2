@@ -34,7 +34,7 @@ conda run -n low_numpy pid-tuner set-pid --port COM4 --kp-pos 1 --ki-pos 0.03 --
 `set-pid` 和 `restore-pid` 未给出 `--apply` 时只进行参数预览。运动命令要求完整的目标、速度和超时参数，并在进程存活期间自动心跳：
 
 ```powershell
-conda run -n low_numpy pid-tuner goto --port COM4 --x 200 --y 0 --yaw 0 --vmax 50 --wmax 30 --timeout 5000 --csv logs/run.csv
+conda run -n low_numpy pid-tuner goto --port COM4 --x 200 --y 0 --yaw 0 --vmax 300 --wmax 60 --timeout 5000 --csv logs/run.csv
 ```
 
 `profile save|list|show|export-c` 管理本地 PID JSON 方案；方案默认保存在 `profiles/`，遥测 CSV 默认建议保存至 `logs/`。两类运行数据都被 Git 忽略。
@@ -48,7 +48,7 @@ conda run -n low_numpy pip install -e .
 conda run -n low_numpy python launch_gui.py
 ```
 
-启动后使用界面左上方的串口下拉框选择 COM 口并点击“连接”，不需要在启动命令中填写端口。GUI 使用现有世界位姿遥测：X/Y 是经坐标修正后的 OPS 实际位置，yaw 在 WIT 有效时优先使用 WIT，否则使用 OPS。STM32 首次获得有效传感器数据时将 yaw 归零，后续图表与 GOTO 均使用该相对角度。固件启动后持续发送遥测，空闲时也会刷新世界位姿，因此手动拖拽可以直接体现在图表上。GOTO 默认目标为 `(0, 0, 0)`，速度为 `50 mm/s`、角速度为 `30 deg/s`、超时为 `5000 ms`；若当前位置在到达容差内，将显示“已到达，无需运动”。默认显示最近 30 秒，窗口可调 5-120 秒，缓存只保留最近 120 秒。
+启动后使用界面左上方的串口下拉框选择 COM 口并点击“连接”，不需要在启动命令中填写端口。GUI 使用现有世界位姿遥测：X/Y 是经坐标修正后的 OPS 实际位置，yaw 在 WIT 有效时优先使用 WIT，否则使用 OPS。STM32 首次获得有效传感器数据时将 yaw 归零，后续图表与 GOTO 均使用该相对角度。固件启动后持续发送遥测，空闲时也会刷新世界位姿，因此手动拖拽可以直接体现在图表上。GOTO 默认目标为 `(0, 0, 0)`，本轮调试最高限速为 `300 mm/s`、`60 deg/s`，超时为 `5000 ms`；“启用航向约束”可用于隔离位置环。若当前位置在到达容差内，将显示“已到达，无需运动”。默认显示最近 30 秒，窗口可调 5-120 秒，缓存只保留最近 120 秒。
 
 运动控制必须在现场具备机械急停与人员监护时使用。断开、通信错误和窗口关闭会尝试发送 STOP；这不能替代物理急停。
 
@@ -74,6 +74,6 @@ conda run -n low_numpy python verify_board.py --port COM5 --write-pid
 conda run -n low_numpy python verify_board.py --port COM5 --exercise-motion --x 200 --y 0 --yaw 0 --csv logs/run.csv
 ```
 
-遥测在固件启动后以 40 ms 周期持续发送，默认监听窗口为 30 秒。若任务提前到达、超时或失联，脚本会如实报告实际收到的帧数、CRC 错误、序号缺失和固件侧遥测覆盖计数。GOTO 线速度不得超过 1500 mm/s。
+遥测在固件启动后以 40 ms 周期持续发送，默认监听窗口为 30 秒。若任务提前到达、超时或失联，脚本会如实报告实际收到的帧数、CRC 错误、序号缺失和固件侧遥测覆盖计数。位置环隔离测试可在 `goto` 后添加 `--no-yaw`；本轮 PID 调试使用 `300 mm/s`、`60 deg/s` 作为最高限速。
 
 现场测试前须确保机械急停、断电能力和人员监护可用。GUI STOP 及串口 STOP 都不是物理急停。

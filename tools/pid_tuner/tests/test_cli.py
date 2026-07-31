@@ -13,6 +13,12 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             build_parser().parse_args(["goto", "--port", "COM4", "--x", "1"])
 
+    def test_goto_accepts_yaw_isolation_switch(self) -> None:
+        args = build_parser().parse_args(["goto", "--port", "COM4", "--x", "100", "--y", "0",
+                                          "--yaw", "0", "--vmax", "300", "--wmax", "60",
+                                          "--timeout", "3000", "--no-yaw"])
+        self.assertTrue(args.no_yaw)
+
     def test_profile_save_from_device_requires_port(self) -> None:
         result = main(["profile", "save", "baseline", "--from-device"])
         self.assertEqual(result, 2)
