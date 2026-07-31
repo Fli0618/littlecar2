@@ -27,7 +27,7 @@ class SessionController(QObject):
     def connect_port(self, port: str, baud: int) -> None:
         def action() -> SerialClient:
             client = SerialClient.open_port(port, baud)
-            client.start(); client.add_telemetry_callback(self.telemetry.emit)
+            client.start(); client.add_telemetry_callback(self._handle_telemetry)
             client.get_pid()
             return client
         future = self._executor.submit(action)
@@ -71,6 +71,12 @@ class SessionController(QObject):
         def done(_: object) -> None:
             self.motion_active = True; self.motion_changed.emit(True); self.status.emit("远程运动中")
         self._submit(lambda client: client.goto(goal), done)
+
+    def _handle_telemetry(self, item: Telemetry) -> None:
+        self.telemetry.emit(item)
+        if self.motion_active and item.state not in (0, 1):
+            self.motion_active = False
+            self.motion_changed.emit(False)
 
     def heartbeat(self) -> None:
         if self.motion_active: self._submit(lambda client: client.heartbeat())

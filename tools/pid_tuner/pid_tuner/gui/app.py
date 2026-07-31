@@ -16,8 +16,8 @@ from .plots import TelemetryPlots
 from .session import SessionController
 
 
-GOTO_VMAX_MM_S = 300.0
-GOTO_WMAX_DEG_S = 60.0
+GOTO_VMAX_MM_S = 600.0
+GOTO_WMAX_DEG_S = 120.0
 GOTO_TIMEOUT_MS = 15000
 GOTO_YAW_LABEL = "yaw 相对初始化零点 deg"
 
@@ -41,9 +41,9 @@ def validate_motion_goal(goal: MotionGoal) -> str | None:
     if not all(math.isfinite(value) for value in (goal.x_mm, goal.y_mm, goal.yaw_deg, goal.vmax_mm_s, goal.wmax_deg_s)):
         return "GOTO 参数必须是有限数值"
     if not 0.0 < goal.vmax_mm_s <= GOTO_VMAX_MM_S:
-        return "vmax 必须在 0-300 mm/s 之间"
+        return "vmax 必须在 0-600 mm/s 之间"
     if not 0.0 < goal.wmax_deg_s <= GOTO_WMAX_DEG_S:
-        return "wmax 必须在 0-60 deg/s 之间"
+        return "wmax 必须在 0-120 deg/s 之间"
     if not 0 < goal.timeout_ms <= GOTO_TIMEOUT_MS:
         return "超时必须在 1-15000 ms 之间"
     return None
@@ -76,7 +76,7 @@ class MainWindow(QMainWindow):
         pid_form.addRow(self.read_pid); pid_form.addRow(self.apply_pid); pid_form.addRow(self.restore_pid); left.addLayout(pid_form)
         self.profile = QComboBox(); self.load_profile = QPushButton("加载方案"); self.save_profile = QPushButton("另存方案"); self.export_c = QPushButton("导出 C")
         left.addWidget(self.profile); left.addWidget(self.load_profile); left.addWidget(self.save_profile); left.addWidget(self.export_c)
-        self.goal = [number(), number(), number(), number(300.0, 0.1, GOTO_VMAX_MM_S), number(60.0, 0.1, GOTO_WMAX_DEG_S)]; self.timeout = QSpinBox(); self.timeout.setRange(1, GOTO_TIMEOUT_MS); self.timeout.setValue(5000)
+        self.goal = [number(), number(), number(), number(600.0, 0.1, GOTO_VMAX_MM_S), number(120.0, 0.1, GOTO_WMAX_DEG_S)]; self.timeout = QSpinBox(); self.timeout.setRange(1, GOTO_TIMEOUT_MS); self.timeout.setValue(GOTO_TIMEOUT_MS)
         self.use_yaw = QCheckBox("启用航向约束"); self.use_yaw.setChecked(True)
         goal_form = QFormLayout(); [goal_form.addRow(name, widget) for name, widget in zip(("X mm", "Y mm", GOTO_YAW_LABEL, "vmax mm/s", "wmax deg/s"), self.goal)]; goal_form.addRow(self.use_yaw)
         goal_form.addRow("超时 ms", self.timeout); self.goto = QPushButton("开始 GOTO"); self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton"); self.new_experiment = QPushButton("新实验")

@@ -19,7 +19,7 @@ class GuiMotionGoalTests(unittest.TestCase):
         try:
             goal = MotionGoal(*(widget.value() for widget in window.goal), window.timeout.value())
             self.assertEqual((goal.x_mm, goal.y_mm, goal.yaw_deg), (0.0, 0.0, 0.0))
-            self.assertEqual((goal.vmax_mm_s, goal.wmax_deg_s, goal.timeout_ms), (300.0, 60.0, 5000))
+            self.assertEqual((goal.vmax_mm_s, goal.wmax_deg_s, goal.timeout_ms), (600.0, 120.0, 15000))
             self.assertTrue(window.use_yaw.isChecked())
             self.assertIsNone(validate_motion_goal(goal))
         finally:
@@ -27,7 +27,7 @@ class GuiMotionGoalTests(unittest.TestCase):
 
     def test_invalid_motion_goal_is_rejected_locally(self) -> None:
         goal = MotionGoal(0.0, 0.0, 0.0, 0.0, 30.0, 5000)
-        self.assertEqual(validate_motion_goal(goal), "vmax 必须在 0-300 mm/s 之间")
+        self.assertEqual(validate_motion_goal(goal), "vmax 必须在 0-600 mm/s 之间")
 
     def test_arrived_status_explains_that_motion_is_not_needed(self) -> None:
         telemetry = Telemetry(1, 2, 0, 2, 0x07, (0.0, 0.0, 0.0),
