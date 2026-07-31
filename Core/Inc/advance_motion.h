@@ -41,10 +41,10 @@ extern "C"
 #define ADVANCE_MOTION_PID_YAW_INTEGRAL_LIMIT_DEG_S (180.0f) /*!< 航向角误差积分限幅，单位为 deg*s。 */
 
 /* 到达判定与无进展保护。 */
-#define ADVANCE_MOTION_POS_TOLERANCE_MM (20.0f) /*!< 位置到达容差，单位为 mm。 */
-#define ADVANCE_MOTION_YAW_TOLERANCE_DEG (2.0f) /*!< 航向角到达容差，单位为度。 */
-#define ADVANCE_MOTION_NO_PROGRESS_WINDOW_MS ((uint32_t)1000U) /*!< 无进展判定观察窗口，单位为 ms。 */
-#define ADVANCE_MOTION_NO_PROGRESS_MIN_REDUCTION_MM (15.0f) /*!< 观察窗口内要求的最小误差下降量，单位为 mm。 */
+#define ADVANCE_MOTION_POS_TOLERANCE_MM (8.0f) /*!< 位置到达容差，单位为 mm。 */
+#define ADVANCE_MOTION_YAW_TOLERANCE_DEG (1.0f) /*!< 航向角到达容差，单位为度。 */
+#define ADVANCE_MOTION_NO_PROGRESS_WINDOW_MS ((uint32_t)2500U) /*!< 无进展判定观察窗口，单位为 ms。 */
+#define ADVANCE_MOTION_NO_PROGRESS_MIN_REDUCTION_MM (2.0f) /*!< 观察窗口内要求的最小误差下降量，单位为 mm。 */
 #define ADVANCE_MOTION_NO_PROGRESS_MIN_COMMAND_MM_S (30.0f) /*!< 启用无进展判定的最小线速度指令，单位为 mm/s。 */
 
 /* 简化到点接口的默认目标参数。 */
