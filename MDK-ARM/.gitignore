@@ -9,6 +9,10 @@
 /bin
 /obj
 /out
+/4-29
+/DebugConfig
+/RTE
+/*.lst
 
 # eide template
 *.ept
