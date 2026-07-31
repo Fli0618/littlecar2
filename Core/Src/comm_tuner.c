@@ -17,6 +17,11 @@
 #define COMM_TUNER_GOTO_WMAX_DEG_S (120.0f)
 #define COMM_TUNER_GOTO_TIMEOUT_MS ((uint32_t)15000U)
 
+/* Telemetry payload bytes 14..15: remote link state plus heartbeat age in ms. */
+#define COMM_TUNER_LINK_STATUS_ACTIVE ((uint16_t)0x8000U)
+#define COMM_TUNER_LINK_STATUS_TIMEOUT ((uint16_t)0x4000U)
+#define COMM_TUNER_LINK_STATUS_AGE_MASK ((uint16_t)0x3FFFU)
+
 #define COMM_TUNER_SYNC0 ((uint8_t)0xA5U)
 #define COMM_TUNER_SYNC1 ((uint8_t)0x5AU)
 
@@ -83,6 +88,7 @@ static volatile uint8_t g_telemetry_pending;
 static uint8_t g_telemetry_sequence;
 static volatile uint32_t g_telemetry_dropped_count;
 static volatile uint8_t g_remote_goal_active;
+static volatile uint8_t g_remote_heartbeat_timeout;
 static volatile uint32_t g_last_heartbeat_tick;
 static volatile uint32_t g_last_telemetry_tick;
 static volatile uint32_t g_rx_dropped_count;
@@ -123,6 +129,33 @@ static void CommTuner_WriteU32(uint8_t *data, uint32_t value)
   data[1] = (uint8_t)(value >> 8U);
   data[2] = (uint8_t)(value >> 16U);
   data[3] = (uint8_t)(value >> 24U);
+}
+
+static void CommTuner_WriteU16(uint8_t *data, uint16_t value)
+{
+  data[0] = (uint8_t)value;
+  data[1] = (uint8_t)(value >> 8U);
+}
+
+static uint16_t CommTuner_GetRemoteLinkStatus(uint32_t now_tick)
+{
+  uint32_t heartbeat_age_ms;
+  uint16_t status = 0U;
+
+  if (g_remote_goal_active != 0U)
+  {
+    heartbeat_age_ms = now_tick - g_last_heartbeat_tick;
+    if (heartbeat_age_ms > COMM_TUNER_LINK_STATUS_AGE_MASK)
+    {
+      heartbeat_age_ms = COMM_TUNER_LINK_STATUS_AGE_MASK;
+    }
+    status = (uint16_t)(COMM_TUNER_LINK_STATUS_ACTIVE | (uint16_t)heartbeat_age_ms);
+  }
+  if (g_remote_heartbeat_timeout != 0U)
+  {
+    status |= COMM_TUNER_LINK_STATUS_TIMEOUT;
+  }
+  return status;
 }
 
 static float CommTuner_ReadFloat(const uint8_t *data)
@@ -292,19 +325,20 @@ static void CommTuner_QueueTelemetry(void)
   AdvanceMotion_DebugSnapshot_t snapshot;
   uint8_t payload[COMM_TUNER_TELEMETRY_PAYLOAD_SIZE];
   uint16_t frame_length;
+  uint32_t now_tick;
 
   if (AdvanceMotion_GetDebugSnapshot(&snapshot) != ADVANCE_MOTION_STATUS_OK)
   {
     return;
   }
 
+  now_tick = HAL_GetTick();
   CommTuner_WriteU32(&payload[0], snapshot.tick);
   CommTuner_WriteU32(&payload[4], snapshot.pid_revision);
   CommTuner_WriteU32(&payload[8], g_telemetry_dropped_count);
   payload[12] = (uint8_t)snapshot.state;
   payload[13] = snapshot.flags;
-  payload[14] = 0U;
-  payload[15] = 0U;
+  CommTuner_WriteU16(&payload[14], CommTuner_GetRemoteLinkStatus(now_tick));
   CommTuner_WriteFloat(&payload[16], snapshot.goal.x_mm);
   CommTuner_WriteFloat(&payload[20], snapshot.goal.y_mm);
   CommTuner_WriteFloat(&payload[24], snapshot.goal.yaw_deg);
@@ -382,6 +416,7 @@ static void CommTuner_HandleGoto(uint8_t sequence, const uint8_t *payload)
   }
 
   g_remote_goal_active = 1U;
+  g_remote_heartbeat_timeout = 0U;
   g_last_heartbeat_tick = HAL_GetTick();
   g_last_telemetry_tick = g_last_heartbeat_tick;
   CommTuner_SendAck(COMM_TUNER_CMD_GOTO_POSE, sequence, 0U, 0U);
@@ -489,6 +524,7 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
     }
     AdvanceMotion_Cancel();
     g_remote_goal_active = 0U;
+    g_remote_heartbeat_timeout = 0U;
     CommTuner_ClearTelemetry();
     CommTuner_SendAck(command, sequence, 0U, 0U);
     break;
@@ -686,6 +722,7 @@ HAL_StatusTypeDef CommTuner_Init(UART_HandleTypeDef *huart)
   g_telemetry_sequence = 0U;
   g_telemetry_dropped_count = 0U;
   g_remote_goal_active = 0U;
+  g_remote_heartbeat_timeout = 0U;
   g_last_heartbeat_tick = 0U;
   g_last_telemetry_tick = 0U;
   CommTuner_ClearReceiveState();
@@ -734,6 +771,7 @@ void CommTuner_Update(void)
   {
     AdvanceMotion_Cancel();
     g_remote_goal_active = 0U;
+    g_remote_heartbeat_timeout = 1U;
   }
 }
 

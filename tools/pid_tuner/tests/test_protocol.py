@@ -33,13 +33,16 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual([(item.command, item.sequence) for item in frames], [(0x12, 2)])
 
     def test_telemetry_layout(self) -> None:
-        payload = struct.pack("<IIIBBH18f", 100, 3, 5, 1, 0x1F, 0, *range(18))
+        payload = struct.pack("<IIIBBH18f", 100, 3, 5, 1, 0x1F, 0xC12C, *range(18))
         telemetry = decode_telemetry(Frame(CMD_TELEMETRY, 9, payload))
         self.assertEqual(telemetry.tick, 100)
         self.assertEqual(telemetry.pid_revision, 3)
         self.assertEqual(telemetry.overwritten_count, 5)
         self.assertEqual(telemetry.target, (0.0, 1.0, 2.0))
         self.assertEqual(telemetry.integrals, (15.0, 16.0, 17.0))
+        self.assertTrue(telemetry.remote_goal_active)
+        self.assertTrue(telemetry.heartbeat_timed_out)
+        self.assertEqual(telemetry.heartbeat_age_ms, 300)
 
 
 if __name__ == "__main__":
