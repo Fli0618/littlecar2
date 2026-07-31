@@ -9,6 +9,9 @@ from .buffer import TelemetryBuffer
 class TelemetryPlots(QWidget):
     """Display pose and per-axis diagnostic values on a shared time axis."""
 
+    _LINEAR_DEFAULT_RANGE_MM = 500.0
+    _YAW_DEFAULT_RANGE_DEG = 180.0
+
     _DIAGNOSTIC_TITLES = (
         ("X 误差 (mm)", "Y 误差 (mm)", "航向误差 (deg)"),
         ("X 命令-实际速度 (mm/s)", "Y 命令-实际速度 (mm/s)", "航向命令-实际速度 (deg/s)"),
@@ -19,7 +22,6 @@ class TelemetryPlots(QWidget):
         super().__init__()
         self.window_s = 30.0
         self.follow_latest = True
-        self.auto_y = True
         self.mode = QComboBox()
         self.mode.addItems(["误差", "速度", "积分项"])
         self.follow = QPushButton("跟随最新")
@@ -75,9 +77,8 @@ class TelemetryPlots(QWidget):
         self.follow_latest = True
 
     def enable_auto_y(self) -> None:
-        self.auto_y = True
-        for plot in self.plots:
-            plot.enableAutoRange(axis="y", enable=True)
+        if hasattr(self, "_buffer"):
+            self.refresh(self._buffer)
 
     def refresh(self, buffer: TelemetryBuffer) -> None:
         self._buffer = buffer
@@ -109,8 +110,44 @@ class TelemetryPlots(QWidget):
 
         if self.follow_latest:
             self.position_x.setXRange(max(0.0, times[-1] - self.window_s), max(self.window_s, times[-1]), padding=0)
-        if self.auto_y:
-            for plot in self.plots:
+        self._update_y_ranges(samples, data)
+
+    @staticmethod
+    def _set_default_or_adaptive_y_range(plot: pg.PlotItem, values: list[float], default_limit: float) -> None:
+        """Keep normal motion on a stable scale and expand only for outliers."""
+        minimum = min(values)
+        maximum = max(values)
+        if -default_limit <= minimum and maximum <= default_limit:
+            plot.setYRange(-default_limit, default_limit, padding=0)
+            return
+
+        span = maximum - minimum
+        padding = max(span * 0.08, default_limit * 0.05)
+        plot.setYRange(minimum - padding, maximum + padding, padding=0)
+
+    def _update_y_ranges(self, samples: list, diagnostic_data: list[tuple[float, float, float]]) -> None:
+        self._set_default_or_adaptive_y_range(
+            self.position_x,
+            [value for sample in samples for value in (sample.target[0], sample.actual[0])],
+            self._LINEAR_DEFAULT_RANGE_MM,
+        )
+        self._set_default_or_adaptive_y_range(
+            self.position_y,
+            [value for sample in samples for value in (sample.target[1], sample.actual[1])],
+            self._LINEAR_DEFAULT_RANGE_MM,
+        )
+        self._set_default_or_adaptive_y_range(
+            self.yaw,
+            [value for sample in samples for value in (sample.target[2], sample.actual[2])],
+            self._YAW_DEFAULT_RANGE_DEG,
+        )
+
+        if self.mode.currentIndex() == 0:
+            self._set_default_or_adaptive_y_range(self.error_x, [item[0] for item in diagnostic_data], self._LINEAR_DEFAULT_RANGE_MM)
+            self._set_default_or_adaptive_y_range(self.error_y, [item[1] for item in diagnostic_data], self._LINEAR_DEFAULT_RANGE_MM)
+            self._set_default_or_adaptive_y_range(self.error_yaw, [item[2] for item in diagnostic_data], self._YAW_DEFAULT_RANGE_DEG)
+        else:
+            for plot in self.diag_plots:
                 plot.enableAutoRange(axis="y", enable=True)
 
     @property
