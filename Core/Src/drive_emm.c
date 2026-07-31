@@ -324,7 +324,45 @@ static HAL_StatusTypeDef DriveEmm_QueueTransmit(UART_HandleTypeDef *huart, uint8
   if (DriveEmm_StartQueuedTransmit() != HAL_OK)
   {
     DriveEmm_RecordTxError();
+    /* 帧已由队列接管，周期更新会重试启动 DMA，不能让调用方重复提交。 */
+  }
+  return HAL_OK;
+}
+
+static HAL_StatusTypeDef DriveEmm_QueueTransmitPair(const uint8_t *first, uint16_t first_length,
+                                                     const uint8_t *second, uint16_t second_length)
+{
+  uint8_t first_slot;
+  uint8_t second_slot;
+
+  if ((first == NULL) || (second == NULL) || (first_length == 0U) || (second_length == 0U) ||
+      (first_length > DRIVE_EMM_TX_FRAME_MAX_LENGTH) ||
+      (second_length > DRIVE_EMM_TX_FRAME_MAX_LENGTH))
+  {
     return HAL_ERROR;
+  }
+
+  __disable_irq();
+  if (g_drive_emm_tx_count > (uint8_t)(DRIVE_EMM_TX_QUEUE_DEPTH - 2U))
+  {
+    __enable_irq();
+    DriveEmm_RecordTxError();
+    return HAL_BUSY;
+  }
+
+  first_slot = g_drive_emm_tx_head;
+  second_slot = (uint8_t)((first_slot + 1U) % DRIVE_EMM_TX_QUEUE_DEPTH);
+  memcpy(g_drive_emm_tx_queue[first_slot], first, first_length);
+  memcpy(g_drive_emm_tx_queue[second_slot], second, second_length);
+  g_drive_emm_tx_length[first_slot] = first_length;
+  g_drive_emm_tx_length[second_slot] = second_length;
+  g_drive_emm_tx_head = (uint8_t)((second_slot + 1U) % DRIVE_EMM_TX_QUEUE_DEPTH);
+  g_drive_emm_tx_count = (uint8_t)(g_drive_emm_tx_count + 2U);
+  __enable_irq();
+
+  if (DriveEmm_StartQueuedTransmit() != HAL_OK)
+  {
+    DriveEmm_RecordTxError();
   }
   return HAL_OK;
 }
@@ -489,6 +527,39 @@ void drive_emm_Multi_Motor_Cmd(uint8_t addr)
   {
     MMCL_count = 0;
   }
+}
+
+HAL_StatusTypeDef drive_emm_Commit_Multi_Motor_Cmd(uint8_t addr)
+{
+  uint16_t i;
+  uint16_t j;
+  uint16_t len;
+  uint8_t command[MMCL_LEN + 5U] = {0};
+  const uint8_t sync_command[4] = {addr, 0xFFU, 0x66U, 0x6BU};
+  HAL_StatusTypeDef status;
+
+  if (MMCL_count == 0U)
+  {
+    return HAL_ERROR;
+  }
+
+  len = (uint16_t)(MMCL_count + 5U);
+  command[0] = addr;
+  command[1] = 0xAAU;
+  command[2] = (uint8_t)(len >> 8);
+  command[3] = (uint8_t)len;
+  for (i = 0U, j = 4U; i < MMCL_count; ++i, ++j)
+  {
+    command[j] = (uint8_t)MMCL_cmd[i];
+  }
+  command[j++] = 0x6BU;
+
+  status = DriveEmm_QueueTransmitPair(command, j, sync_command, sizeof(sync_command));
+  if (status == HAL_OK)
+  {
+    MMCL_count = 0U;
+  }
+  return status;
 }
 
 /**

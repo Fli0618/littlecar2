@@ -271,6 +271,8 @@ void drive_emm_Restore_Motor(uint8_t addr);
 /** @brief 发送多电机命令。 */
 /** @param addr 电机地址。 */
 void drive_emm_Multi_Motor_Cmd(uint8_t addr);
+/** 原子提交已加载的多电机命令及其同步触发帧。 */
+HAL_StatusTypeDef drive_emm_Commit_Multi_Motor_Cmd(uint8_t addr);
 // 电机使能控制
 /** @brief 控制电机使能状态。 */
 /** @param addr 电机地址。 */
