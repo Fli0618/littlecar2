@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -6,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from pid_tuner.gui.app import GOTO_YAW_LABEL, MainWindow, format_telemetry_status, validate_motion_goal
+from pid_tuner.gui.session import SessionController
 from pid_tuner.models import MotionGoal, Telemetry
 
 
@@ -39,6 +42,54 @@ class GuiMotionGoalTests(unittest.TestCase):
     def test_yaw_label_is_relative_to_initialization_zero(self) -> None:
         self.assertEqual(GOTO_YAW_LABEL, "yaw 相对初始化零点 deg")
 
+
+    def test_heartbeat_does_not_queue_while_previous_request_is_running(self) -> None:
+        class BlockingClient:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.started = threading.Event()
+                self.release = threading.Event()
+
+            def heartbeat(self) -> None:
+                self.calls += 1
+                self.started.set()
+                self.release.wait(1.0)
+
+        controller = SessionController()
+        client = BlockingClient()
+        controller._client = client  # type: ignore[assignment]
+        controller.connected = True
+        controller.motion_active = True
+        try:
+            for _ in range(10):
+                controller.heartbeat()
+            self.assertTrue(client.started.wait(1.0))
+            self.assertEqual(client.calls, 1)
+            client.release.set()
+            time.sleep(0.05)
+            controller.heartbeat()
+            deadline = time.monotonic() + 1.0
+            while client.calls != 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(client.calls, 2)
+        finally:
+            client.release.set()
+            controller._executor.shutdown(wait=True, cancel_futures=True)
+
+    def test_stop_and_terminal_telemetry_disable_heartbeat(self) -> None:
+        controller = SessionController()
+        controller.motion_active = True
+        try:
+            controller.stop()
+            self.assertFalse(controller.motion_active)
+            controller.motion_active = True
+            controller._handle_telemetry(Telemetry(1, 1, 0, 2, 0, (0.0, 0.0, 0.0),
+                                                  (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+                                                  (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+                                                  (0.0, 0.0, 0.0)))
+            self.assertFalse(controller.motion_active)
+        finally:
+            controller._executor.shutdown(wait=True, cancel_futures=True)
 
 if __name__ == "__main__":
     unittest.main()

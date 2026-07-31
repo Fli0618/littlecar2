@@ -19,6 +19,7 @@ from .session import SessionController
 GOTO_VMAX_MM_S = 600.0
 GOTO_WMAX_DEG_S = 120.0
 GOTO_TIMEOUT_MS = 15000
+HEARTBEAT_INTERVAL_MS = 250
 GOTO_YAW_LABEL = "yaw 相对初始化零点 deg"
 
 MOTION_STATE_TEXT = {
@@ -64,6 +65,8 @@ class MainWindow(QMainWindow):
         self.buffer = TelemetryBuffer(); self.session = SessionController(); self.recording = False; self.recorded = []
         self._build(); self._wire()
         self.timer = QTimer(self); self.timer.setInterval(40); self.timer.timeout.connect(self.refresh); self.timer.start()
+        self.heartbeat_timer = QTimer(self); self.heartbeat_timer.setInterval(HEARTBEAT_INTERVAL_MS)
+        self.heartbeat_timer.timeout.connect(self.session.heartbeat); self.heartbeat_timer.start()
 
     def _build(self) -> None:
         root = QSplitter(); controls = QWidget(); left = QVBoxLayout(controls); left.setContentsMargins(12, 12, 12, 12)
@@ -115,8 +118,12 @@ class MainWindow(QMainWindow):
         self.buffer.add_event("GOTO")
     def on_telemetry(self, item: object) -> None:
         self.buffer.append(item); self.recorded.append(item) if self.recording else None
-        self.status.setText(format_telemetry_status(item))
-    def refresh(self) -> None: self.plots.refresh(self.buffer); self.session.heartbeat()
+        status = format_telemetry_status(item)
+        if item.remote_goal_active:
+            link_state = "超时" if item.heartbeat_timed_out else "正常"
+            status += f" 心跳={link_state}/{item.heartbeat_age_ms}ms"
+        self.status.setText(status)
+    def refresh(self) -> None: self.plots.refresh(self.buffer)
     def new_experiment_clicked(self) -> None: self.buffer.clear(); self.recorded.clear(); self.buffer.add_event("新实验")
     def toggle_record(self) -> None:
         self.recording = not self.recording; self.record.setText("停止记录并保存" if self.recording else "开始记录 CSV")
