@@ -23,6 +23,8 @@ void AdvanceControl_Init(void);
  * @details 切换到 NONE 时立即发送停止命令；两个活动模式之间不能直接切换。
  */
 uint8_t AdvanceControl_SetMode(AdvanceControl_Mode_t mode);
+/** @brief 仅释放控制权，不附带底盘停车命令。调用方必须先确认停车命令已提交。 */
+uint8_t AdvanceControl_ReleaseMode(void);
 /** @brief 获取当前唯一的底盘控制权模式。 */
 AdvanceControl_Mode_t AdvanceControl_GetMode(void);
 

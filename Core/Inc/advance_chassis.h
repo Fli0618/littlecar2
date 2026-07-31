@@ -83,13 +83,13 @@ extern "C"
      * 四个底盘电机立即停止。
      * 内部向四个已配置的电机 ID 发送 Emm 停止命令。
      */
-    void Chassis_Stop(void);
+    uint8_t Chassis_Stop(void);
 
     /*
      * 平滑停止四个底盘电机。
      * 内部发送四轮 0RPM 速度命令，acc 越小减速越柔和。
      */
-    void Chassis_SmoothStop(uint8_t acc);
+    uint8_t Chassis_SmoothStop(uint8_t acc);
     /* 仅表示最近一次底盘速度命令是否非零，用于反馈超时的停车保护。 */
     uint8_t Chassis_IsMotionCommandActive(void);
 
@@ -97,7 +97,7 @@ extern "C"
      * 直接设置四个轮子的转速，并指定加速度参数。
      * acc 会传给 Emm 速度模式；在 Emm 协议中，0 表示直接启动。
      */
-    void Chassis_SetMotorRPMEx(int16_t lf_rpm, int16_t rf_rpm, int16_t lr_rpm, int16_t rr_rpm, uint8_t acc);
+    uint8_t Chassis_SetMotorRPMEx(int16_t lf_rpm, int16_t rf_rpm, int16_t lr_rpm, int16_t rr_rpm, uint8_t acc);
 
     /*
      * 输入速度为 mm/s 和度/s，会转换为电机 RPM。
@@ -105,7 +105,7 @@ extern "C"
      * vx_right_mm_s > 0：向右移动；vy_forward_mm_s > 0：向前移动
      * wz_ccw_deg_s > 0：从上往下看（俯视）时逆时针旋转。
      */
-    void Chassis_SetBodyVelocityEx(float vx_right_mm_s, float vy_forward_mm_s, float wz_ccw_deg_s, uint8_t acc);
+    uint8_t Chassis_SetBodyVelocityEx(float vx_right_mm_s, float vy_forward_mm_s, float wz_ccw_deg_s, uint8_t acc);
 
     /*
      * 通用麦克纳姆轮运动命令，并指定加速度。

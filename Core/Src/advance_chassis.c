@@ -112,18 +112,17 @@ static void Chassis_ScaleWheelRpm(int32_t *lf, int32_t *rf, int32_t *lr, int32_t
 }
 
 /* 缩放四轮 RPM 后，按指定加速度发送同步速度命令。 */
-static void Chassis_SetMotorRPMScaledEx(int32_t lf_rpm, int32_t rf_rpm, int32_t lr_rpm, int32_t rr_rpm, uint8_t acc)
+static uint8_t Chassis_SetMotorRPMScaledEx(int32_t lf_rpm, int32_t rf_rpm, int32_t lr_rpm, int32_t rr_rpm, uint8_t acc)
 {
   Chassis_ScaleWheelRpm(&lf_rpm, &rf_rpm, &lr_rpm, &rr_rpm);
-  Chassis_SetMotorRPMEx((int16_t)lf_rpm, (int16_t)rf_rpm, (int16_t)lr_rpm, (int16_t)rr_rpm, acc);
+  return Chassis_SetMotorRPMEx((int16_t)lf_rpm, (int16_t)rf_rpm, (int16_t)lr_rpm, (int16_t)rr_rpm, acc);
 }
 
 /* 发送已装载的多电机命令，并触发同步运动。 */
-static void Chassis_SendLoadedCommand(void)
+static uint8_t Chassis_SendLoadedCommand(void)
 {
   /* drive_emm 内部 DMA 队列保证两帧按顺序发送，控制周期不阻塞等待 UART。 */
-  drive_emm_Multi_Motor_Cmd(CHASSIS_SYNC_ADDR);
-  drive_emm_Synchronous_motion(CHASSIS_SYNC_ADDR);
+  return (drive_emm_Commit_Multi_Motor_Cmd(CHASSIS_SYNC_ADDR) == HAL_OK) ? 1U : 0U;
 }
 
 /* 将单个电机的方向、RPM 和加速度装载到驱动器命令缓存。 */
@@ -154,48 +153,61 @@ void Chassis_Enable(bool enable)
     drive_emm_MMCL_En_Control(g_chassis_motors[i].id, enable, true);
   }
 
-  Chassis_SendLoadedCommand();
+  (void)Chassis_SendLoadedCommand();
 }
 
 /* 立即停止四个底盘电机，并清除运动命令活动状态。 */
-void Chassis_Stop(void)
+uint8_t Chassis_Stop(void)
 {
   uint8_t i;
 
+  if (drive_emm_CanQueueFrames(2U) == 0U)
+  {
+    return 0U;
+  }
+  MMCL_count = 0U;
   for (i = 0U; i < 4U; ++i)
   {
     drive_emm_MMCL_Stop_Now(g_chassis_motors[i].id, true);
   }
 
-  Chassis_SendLoadedCommand();
+  if (Chassis_SendLoadedCommand() == 0U)
+  {
+    return 0U;
+  }
   g_chassis_motion_command_active = 0U;
+  return 1U;
 }
 
 /* 按指定加速度平滑停止四个底盘电机。 */
-void Chassis_SmoothStop(uint8_t acc)
+uint8_t Chassis_SmoothStop(uint8_t acc)
 {
-  Chassis_SetMotorRPMEx(0, 0, 0, 0, acc);
+  return Chassis_SetMotorRPMEx(0, 0, 0, 0, acc);
 }
 
 /* 直接设置四个轮子的目标 RPM，并按指定加速度发送同步命令。 */
-void Chassis_SetMotorRPMEx(int16_t lf_rpm, int16_t rf_rpm, int16_t lr_rpm, int16_t rr_rpm, uint8_t acc)
+uint8_t Chassis_SetMotorRPMEx(int16_t lf_rpm, int16_t rf_rpm, int16_t lr_rpm, int16_t rr_rpm, uint8_t acc)
 {
   if (drive_emm_CanQueueFrames(2U) == 0U)
   {
-    g_chassis_motion_command_active = 0U;
-    return;
+    return 0U;
   }
+  MMCL_count = 0U;
   /* 先装入四个轮子的速度命令，再一次性发送多电机命令。 */
   Chassis_LoadMotorSpeed(&g_chassis_motors[0], lf_rpm, acc);
   Chassis_LoadMotorSpeed(&g_chassis_motors[1], rf_rpm, acc);
   Chassis_LoadMotorSpeed(&g_chassis_motors[2], lr_rpm, acc);
   Chassis_LoadMotorSpeed(&g_chassis_motors[3], rr_rpm, acc);
 
-  Chassis_SendLoadedCommand();
+  if (Chassis_SendLoadedCommand() == 0U)
+  {
+    return 0U;
+  }
   g_chassis_motion_command_active = ((lf_rpm != 0) || (rf_rpm != 0) ||
                                      (lr_rpm != 0) || (rr_rpm != 0))
                                         ? 1U
                                         : 0U;
+  return 1U;
 }
 
 /* 返回最近一次底盘速度命令是否为非零运动命令。 */
@@ -205,7 +217,7 @@ uint8_t Chassis_IsMotionCommandActive(void)
 }
 
 /* 根据车体线速度和角速度计算四轮 RPM，并发送同步运动命令。 */
-void Chassis_SetBodyVelocityEx(float vx_right_mm_s, float vy_forward_mm_s, float wz_ccw_deg_s, uint8_t acc)
+uint8_t Chassis_SetBodyVelocityEx(float vx_right_mm_s, float vy_forward_mm_s, float wz_ccw_deg_s, uint8_t acc)
 {
   float vx = Chassis_LimitFloat(vx_right_mm_s, CHASSIS_MAX_BODY_SPEED_MM_S) * (float)CHASSIS_BODY_X_SIGN;
   float vy = Chassis_LimitFloat(vy_forward_mm_s, CHASSIS_MAX_BODY_SPEED_MM_S) * (float)CHASSIS_BODY_Y_SIGN;
@@ -223,7 +235,7 @@ void Chassis_SetBodyVelocityEx(float vx_right_mm_s, float vy_forward_mm_s, float
   lr = Chassis_RoundFloatToI32((vy - vx - (wheel_base * wz_rad_s)) * rpm_per_mm_s);
   rr = Chassis_RoundFloatToI32((vy + vx + (wheel_base * wz_rad_s)) * rpm_per_mm_s);
 
-  Chassis_SetMotorRPMScaledEx(lf, rf, lr, rr, acc);
+  return Chassis_SetMotorRPMScaledEx(lf, rf, lr, rr, acc);
 }
 /* 根据前进、横移和旋转 RPM 合成四轮麦克纳姆运动。 */
 void Chassis_MoveMecanumEx(int16_t forward_rpm, int16_t strafe_rpm, int16_t wz_ccw_rpm, uint8_t acc)
