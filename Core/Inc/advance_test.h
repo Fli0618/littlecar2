@@ -89,6 +89,12 @@ void Test_Motion_GotoPoseBlocking(void);
  */
 void Test_Motion_GotoPoseYawAndCancel(void);
 
+/**
+ * @brief 输出 WIT 陀螺仪与 OPS 定位传感器的当前原始数据。
+ * @note 在主循环中周期调用，用于手动平移、旋转时的坐标轴和正负方向标定。
+ */
+void AdvanceTest_PrintImuOpsData(void);
+
 #ifdef __cplusplus
 }
 #endif

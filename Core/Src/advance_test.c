@@ -614,6 +614,39 @@ void Test_Chassis_MoveMecanumEx(void)
   HAL_Delay(1000);
 }
 
+
+void AdvanceTest_PrintImuOpsData(void)
+{
+  const volatile WIT_Data_t *wit_data;
+  OPS_Pose_t ops_pose = {0};
+  OPS_Status_t ops_status;
+
+  wit_data = WIT_GetData();
+  ops_status = OPS_GetPose(&ops_pose);
+
+  printf("[CAL][WIT] accel_g x=%.3f y=%.3f z=%.3f valid=%u tick=%lu\r\n",
+         (double)wit_data->accel_g.x, (double)wit_data->accel_g.y,
+         (double)wit_data->accel_g.z, (unsigned int)wit_data->accel_g.valid,
+         (unsigned long)wit_data->accel_g.updated_tick);
+  printf("[CAL][WIT] gyro_dps x=%.3f y=%.3f z=%.3f valid=%u tick=%lu\r\n",
+         (double)wit_data->gyro_dps.x, (double)wit_data->gyro_dps.y,
+         (double)wit_data->gyro_dps.z, (unsigned int)wit_data->gyro_dps.valid,
+         (unsigned long)wit_data->gyro_dps.updated_tick);
+  printf("[CAL][WIT] angle_deg x=%.3f y=%.3f z=%.3f valid=%u tick=%lu\r\n",
+         (double)wit_data->angle_deg.x, (double)wit_data->angle_deg.y,
+         (double)wit_data->angle_deg.z, (unsigned int)wit_data->angle_deg.valid,
+         (unsigned long)wit_data->angle_deg.updated_tick);
+
+  printf("[CAL][OPS] status=%d valid=%u frame=%lu tick=%lu\r\n",
+         (int)ops_status, (unsigned int)ops_pose.valid,
+         (unsigned long)ops_pose.frame_count, (unsigned long)ops_pose.updated_tick);
+  printf("[CAL][OPS] angle_deg z=%.3f x=%.3f y=%.3f wz_dps=%.3f\r\n",
+         (double)ops_pose.zangle_deg, (double)ops_pose.xangle_deg,
+         (double)ops_pose.yangle_deg, (double)ops_pose.w_z_dps);
+  printf("[CAL][OPS] pos_mm x=%.3f y=%.3f\r\n",
+         (double)ops_pose.pos_x_mm, (double)ops_pose.pos_y_mm);
+}
+
 // ----------------------------------------------------------------------------------
 // MOTION TEST
 // motion 依赖世界坐标数据，请确认 OPS、WIT 已正常更新且世界原点已建立

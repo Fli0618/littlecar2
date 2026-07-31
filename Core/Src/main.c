@@ -411,6 +411,13 @@ int main(void)
   // Test_Chassis_MoveMecanumEx();
   // Test_MMCL();
 
+  // wit ops
+  while(1)
+  {
+    AdvanceTest_PrintImuOpsData();
+    HAL_Delay(200);
+  }
+
   // motion 依赖世界坐标数据
   // Test_Motion_SetWorldVelocityEx();
   // Test_Motion_GotoPoseBlocking();
