@@ -13,7 +13,7 @@
 #define COMM_TUNER_FRAME_MAX_SIZE (COMM_TUNER_FRAME_OVERHEAD + COMM_TUNER_MAX_PAYLOAD_SIZE)
 #define COMM_TUNER_HEARTBEAT_TIMEOUT_MS ((uint32_t)1500U)
 #define COMM_TUNER_TELEMETRY_PERIOD_MS ((uint32_t)40U)
-#define COMM_TUNER_GOTO_VMAX_MM_S (200.0f)
+#define COMM_TUNER_GOTO_VMAX_MM_S (1500.0f)
 #define COMM_TUNER_GOTO_WMAX_DEG_S (90.0f)
 #define COMM_TUNER_GOTO_TIMEOUT_MS ((uint32_t)15000U)
 
@@ -712,6 +712,14 @@ void CommTuner_Update(void)
   AdvanceMotion_RuntimeStatus_t status;
   uint32_t now_tick;
 
+  now_tick = HAL_GetTick();
+  if ((now_tick - g_last_telemetry_tick) >= COMM_TUNER_TELEMETRY_PERIOD_MS)
+  {
+    g_last_telemetry_tick = now_tick;
+    CommTuner_QueueTelemetry();
+  }
+
+  /* Telemetry is available in every motion state; only motion safety needs an active goal. */
   if (g_remote_goal_active == 0U)
   {
     return;
@@ -720,21 +728,12 @@ void CommTuner_Update(void)
       (status.state != ADVANCE_MOTION_STATE_RUNNING))
   {
     g_remote_goal_active = 0U;
-    CommTuner_ClearTelemetry();
     return;
   }
-  now_tick = HAL_GetTick();
   if ((now_tick - g_last_heartbeat_tick) >= COMM_TUNER_HEARTBEAT_TIMEOUT_MS)
   {
     AdvanceMotion_Cancel();
     g_remote_goal_active = 0U;
-    CommTuner_ClearTelemetry();
-    return;
-  }
-  if ((now_tick - g_last_telemetry_tick) >= COMM_TUNER_TELEMETRY_PERIOD_MS)
-  {
-    g_last_telemetry_tick = now_tick;
-    CommTuner_QueueTelemetry();
   }
 }
 

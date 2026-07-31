@@ -521,7 +521,7 @@ void Test_Chassis_SetBodyVelocityEx(void)
   HAL_Delay(1000);
 
   // 预期：车体向右移动，其他方向不动
-  Chassis_SetBodyVelocityEx(200.0f, 0.0f, 0.0f, 50);
+  Chassis_SetBodyVelocityEx(150.0f, 0.0f, 0.0f, 50);
   HAL_Delay(1000);
   Chassis_Stop();
   HAL_Delay(1000);
@@ -623,17 +623,19 @@ void Test_Motion_SetWorldVelocityEx(void)
   HAL_Delay(1000);
 
   // 预期：车体沿世界坐标系 X 轴正方向运动，航向角保持不变
-  status = AdvanceMotion_SetWorldVelocityEx(150.0f, 0.0f, 0.0f, 50);
+  status = AdvanceMotion_SetWorldVelocityEx(800.0f, 0.0f, 0.0f, 80);
   printf("[TEST] motion world velocity x status=%d\r\n", (int)status);
-  HAL_Delay(1000);
-  Chassis_Stop();
+  HAL_Delay(2000);
+  // Chassis_Stop();
+  Chassis_SmoothStop(120);
   HAL_Delay(1000);
 
   // 预期：车体沿世界坐标系 Y 轴负方向运动并顺时针旋转
-  status = AdvanceMotion_SetWorldVelocityEx(0.0f, -150.0f, -45.0f, 50);
+  status = AdvanceMotion_SetWorldVelocityEx(0.0f, -800.0f, 0, 80);
   printf("[TEST] motion world velocity y status=%d\r\n", (int)status);
-  HAL_Delay(1000);
-  Chassis_Stop();
+  HAL_Delay(2000);
+  // Chassis_Stop();
+  Chassis_SmoothStop(120);
   Chassis_Enable(false);
 }
 
@@ -660,8 +662,8 @@ void Test_Motion_GotoPoseBlocking(void)
   }
 
   // 预期：车体保持当前航向，移动至世界坐标系 X 轴正方向 300mm 处
-  state = AdvanceMotion_GotoPoseBlocking(pose.x_mm + 300.0f, pose.y_mm,
-                                          pose.yaw_deg, 50);
+  state = AdvanceMotion_GotoPoseBlocking(pose.x_mm + 300.0f, pose.y_mm + 300,
+                                          pose.yaw_deg, 80);
   printf("[TEST] motion goto position state=%d\r\n", (int)state);
   Chassis_Stop();
   Chassis_Enable(false);

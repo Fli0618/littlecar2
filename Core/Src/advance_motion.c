@@ -351,6 +351,22 @@ static AdvanceMotion_Status_t AdvanceMotion_GetFreshPose(WorldPose2D_t *pose)
   return ADVANCE_MOTION_STATUS_OK;
 }
 
+static void AdvanceMotion_UpdateInactiveDebugSnapshot(uint32_t now_tick)
+{
+  uint8_t flags = 0U;
+
+  if (AdvanceMotion_GetFreshPose(&g_motion.pose) == ADVANCE_MOTION_STATUS_OK)
+  {
+    flags = ADVANCE_MOTION_DEBUG_FLAG_VALID |
+            ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH;
+    if ((now_tick - g_motion.pose.yaw_updated_tick) <= ADVANCE_MOTION_YAW_TIMEOUT_MS)
+    {
+      flags |= ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH;
+    }
+  }
+  AdvanceMotion_UpdateDebugSnapshot(now_tick, flags);
+}
+
 static void AdvanceMotion_SetTerminalState(AdvanceMotion_RunState_t state)
 {
   g_motion.updated_tick = HAL_GetTick();
@@ -531,7 +547,7 @@ void AdvanceMotion_Update(void)
 
   if (g_motion_state != ADVANCE_MOTION_STATE_RUNNING)
   {
-    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
+    AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
     return;
   }
 
@@ -539,7 +555,7 @@ void AdvanceMotion_Update(void)
       ((now_tick - g_motion.started_tick) >= g_motion.goal.timeout_ms))
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_TIMEOUT);
-    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
+    AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
     return;
   }
 
@@ -547,13 +563,13 @@ void AdvanceMotion_Update(void)
   if (pose_status == ADVANCE_MOTION_STATUS_NO_ORIGIN)
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_ORIGIN);
-    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
+    AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
     return;
   }
   if (pose_status != ADVANCE_MOTION_STATUS_OK)
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_POSE);
-    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
+    AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
     return;
   }
 
@@ -566,7 +582,7 @@ void AdvanceMotion_Update(void)
       ((now_tick - g_motion.pose.yaw_updated_tick) > ADVANCE_MOTION_YAW_TIMEOUT_MS))
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_POSE);
-    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
+    AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
     return;
   }
   g_motion.yaw_error_deg = yaw_required ? AdvanceWorld_WrapAngleDeg(g_motion.goal.yaw_deg - g_motion.pose.yaw_deg) : 0.0f;
@@ -639,7 +655,7 @@ void AdvanceMotion_Update(void)
   if (AdvanceMotion_HasNoProgress(now_tick, command_magnitude) != 0U)
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED);
-    AdvanceMotion_UpdateDebugSnapshot(now_tick, 0U);
+    AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
     return;
   }
 

@@ -11,6 +11,21 @@ extern "C"
 #include "drive_emm.h"
 
 /*
+    测试
+    直线运动最快
+    Chassis_SetBodyVelocityEx(0, 1500, 0, 160);
+    HAL_Delay(2000);
+    Chassis_SmoothStop(130);
+
+    自转
+    Chassis_SetBodyVelocityEx(1000, 0, 0, 130);
+    HAL_Delay(2000);
+    Chassis_SmoothStop(130);
+
+    
+*/
+
+/*
  * 四个电机地址在这里配置，用于匹配 ZDT 驱动器实际 ID。
  * LF: 左前轮，RF: 右前轮，LR: 左后轮，RR: 右后轮。
  */
@@ -46,8 +61,8 @@ extern "C"
  * 物理速度接口的输入限值。超出时底盘层会钳制，协议层应同时拒绝异常命令。
  * 修改前应完成轮组方向、制动距离和场地边界验证。
  */
-#define CHASSIS_MAX_BODY_SPEED_MM_S (2000.0f) /*!< 车体线速度上限，单位为 mm/s。 */
-#define CHASSIS_MAX_BODY_WZ_DEG_S (180.0f)   /*!< 车体角速度上限，单位为度/s。 */
+#define CHASSIS_MAX_BODY_SPEED_MM_S (5000.0f) /*!< 车体线速度上限，单位为 mm/s。 */
+#define CHASSIS_MAX_BODY_WZ_DEG_S (360.0f)   /*!< 车体角速度上限，单位为度/s。 */
 
 /*
  * Physical chassis parameters for mm/s and deg/s conversion.

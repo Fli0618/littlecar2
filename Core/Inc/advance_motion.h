@@ -62,7 +62,7 @@ extern "C"
 #define ADVANCE_MOTION_WORLD_Y_MAX_MM (5000.0f) /*!< 世界坐标 Y 最大边界，单位为 mm。 */
 
 /* 目标速度与超时时间的输入上限。 */
-#define ADVANCE_MOTION_MAX_VMAX_MM_S (500.0f) /*!< 允许的最大线速度，单位为 mm/s。 */
+#define ADVANCE_MOTION_MAX_VMAX_MM_S (1500.0f) /*!< 允许的最大线速度，单位为 mm/s。 */
 #define ADVANCE_MOTION_MAX_WMAX_DEG_S (180.0f) /*!< 允许的最大角速度，单位为度/s。 */
 #define ADVANCE_MOTION_MAX_TIMEOUT_MS ((uint32_t)60000U) /*!< 允许的最大目标超时时间，单位为 ms。 */
 
