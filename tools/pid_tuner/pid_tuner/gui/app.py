@@ -3,11 +3,12 @@ from __future__ import annotations
 import math
 from pathlib import Path
 import sys
+from datetime import datetime
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
                                QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-                               QPushButton, QSpinBox, QSplitter, QVBoxLayout, QWidget, QInputDialog)
+                               QPushButton, QScrollArea, QSpinBox, QSplitter, QVBoxLayout, QWidget, QInputDialog)
 
 from ..models import MotionGoal, PidConfig
 from ..storage import DEFAULT_PROFILES_DIR, export_c_defaults, list_profiles, load_profile, save_profile, write_telemetry_csv
@@ -42,13 +43,20 @@ def number(value: float = 0.0, minimum: float = -100000.0, maximum: float = 1000
 def validate_motion_goal(goal: MotionGoal) -> str | None:
     if not all(math.isfinite(value) for value in (goal.x_mm, goal.y_mm, goal.yaw_deg, goal.vmax_mm_s, goal.wmax_deg_s)):
         return "GOTO 参数必须是有限数值"
-    if not 0.0 < goal.vmax_mm_s <= GOTO_VMAX_MM_S:
+    if not goal.use_position and not goal.use_yaw:
+        return "GOTO 至少需要启用位置或航向"
+    if goal.use_position and not 0.0 < goal.vmax_mm_s <= GOTO_VMAX_MM_S:
         return "vmax 必须在 0-1200 mm/s 之间"
-    if not 0.0 < goal.wmax_deg_s <= GOTO_WMAX_DEG_S:
+    if goal.use_yaw and not 0.0 < goal.wmax_deg_s <= GOTO_WMAX_DEG_S:
         return "wmax 必须在 0-120 deg/s 之间"
     if not 0 < goal.timeout_ms <= GOTO_TIMEOUT_MS:
         return "超时必须在 1-15000 ms 之间"
     return None
+
+
+def format_pid_apply_log(revision: int, pid: PidConfig) -> str:
+    values = ", ".join(f"{name}={value:.4f}" for name, value in pid.to_dict().items())
+    return f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] PID 已上传 r{revision}: {values}"
 
 
 def format_telemetry_status(item: Telemetry) -> str:
@@ -70,7 +78,11 @@ class MainWindow(QMainWindow):
         self.heartbeat_timer.timeout.connect(self.session.heartbeat); self.heartbeat_timer.start()
 
     def _build(self) -> None:
-        root = QSplitter(); controls = QWidget(); left = QVBoxLayout(controls); left.setContentsMargins(12, 12, 12, 12)
+        root = QSplitter(Qt.Orientation.Horizontal)
+        root.setChildrenCollapsible(False)
+        controls = QWidget()
+        controls.setMinimumWidth(300)
+        left = QVBoxLayout(controls); left.setContentsMargins(12, 12, 12, 12)
         self.port = QComboBox(); self.refresh_ports_button = QPushButton("刷新 COM"); self.baud = QComboBox(); self.baud.addItems(["115200", "230400"]); self.connect_button = QPushButton("连接")
         connection = QFormLayout(); connection.addRow("串口", self.port); connection.addRow(self.refresh_ports_button); connection.addRow("波特率", self.baud); connection.addRow(self.connect_button); left.addLayout(connection)
         self.status = QLabel("未连接"); left.addWidget(self.status)
@@ -82,17 +94,36 @@ class MainWindow(QMainWindow):
         left.addWidget(self.profile); left.addWidget(self.load_profile); left.addWidget(self.save_profile); left.addWidget(self.export_c)
         self.goal = [number(), number(), number(), number(600.0, 0.1, GOTO_VMAX_MM_S), number(120.0, 0.1, GOTO_WMAX_DEG_S)]; self.timeout = QSpinBox(); self.timeout.setRange(1, GOTO_TIMEOUT_MS); self.timeout.setValue(GOTO_TIMEOUT_MS)
         self.use_yaw = QCheckBox("启用航向约束"); self.use_yaw.setChecked(True)
+        self.yaw_source = QComboBox(); self.yaw_source.addItems(["WIT", "OPS"]); self.reset_origin = QPushButton("重置零点")
         goal_form = QFormLayout(); [goal_form.addRow(name, widget) for name, widget in zip(("X mm", "Y mm", GOTO_YAW_LABEL, "vmax mm/s", "wmax deg/s"), self.goal)]; goal_form.addRow(self.use_yaw)
-        goal_form.addRow("超时 ms", self.timeout); self.goto = QPushButton("开始 GOTO"); self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton"); self.new_experiment = QPushButton("新实验")
-        goal_form.addRow(self.goto); goal_form.addRow(self.stop); goal_form.addRow(self.new_experiment); left.addLayout(goal_form)
+        goal_form.addRow("航向 PID 源", self.yaw_source); goal_form.addRow(self.reset_origin)
+        goal_form.addRow("超时 ms", self.timeout); self.goto = QPushButton("开始组合 GOTO"); self.goto_position = QPushButton("发送位置 GOTO"); self.goto_yaw = QPushButton("发送角度 GOTO"); self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton"); self.new_experiment = QPushButton("新实验")
+        goal_form.addRow(self.goto); goal_form.addRow(self.goto_position); goal_form.addRow(self.goto_yaw); goal_form.addRow(self.stop); goal_form.addRow(self.new_experiment); left.addLayout(goal_form)
         self.record = QPushButton("开始记录 CSV"); self.window = QSpinBox(); self.window.setRange(5, 120); self.window.setValue(30); left.addWidget(self.record); left.addWidget(QLabel("时间窗口 (秒)")); left.addWidget(self.window); left.addStretch()
-        self.plots = TelemetryPlots(); root.addWidget(controls); root.addWidget(self.plots); root.setSizes([330, 1110]); self.setCentralWidget(root); self.refresh_ports(); self.reload_profiles()
+        self.controls_scroll = QScrollArea()
+        self.controls_scroll.setWidgetResizable(True)
+        self.controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.controls_scroll.setWidget(controls)
+
+        self.plots = TelemetryPlots()
+        self.plots_scroll = QScrollArea()
+        self.plots_scroll.setWidgetResizable(False)
+        self.plots_scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.plots_scroll.setWidget(self.plots)
+
+        root.addWidget(self.controls_scroll)
+        root.addWidget(self.plots_scroll)
+        root.setStretchFactor(0, 0)
+        root.setStretchFactor(1, 1)
+        root.setSizes([330, 1110])
+        self.setCentralWidget(root); self.refresh_ports(); self.reload_profiles()
 
     def _wire(self) -> None:
         self.connect_button.clicked.connect(self.toggle_connection); self.refresh_ports_button.clicked.connect(self.refresh_ports); self.read_pid.clicked.connect(self.session.read_pid); self.apply_pid.clicked.connect(self.apply_current_pid); self.restore_pid.clicked.connect(self.session.restore_pid)
-        self.goto.clicked.connect(self.start_motion); self.stop.clicked.connect(self.session.stop); self.new_experiment.clicked.connect(self.new_experiment_clicked); self.record.clicked.connect(self.toggle_record)
+        self.goto.clicked.connect(self.start_motion); self.goto_position.clicked.connect(self.start_position_motion); self.goto_yaw.clicked.connect(self.start_yaw_motion); self.stop.clicked.connect(self.session.stop); self.new_experiment.clicked.connect(self.new_experiment_clicked); self.record.clicked.connect(self.toggle_record)
+        self.yaw_source.currentTextChanged.connect(self.session.set_yaw_source); self.reset_origin.clicked.connect(self.session.reset_origin)
         self.load_profile.clicked.connect(self.load_selected_profile); self.save_profile.clicked.connect(self.save_current_profile); self.export_c.clicked.connect(self.export_current_c)
-        self.window.valueChanged.connect(lambda value: self.plots.set_window(float(value))); self.session.telemetry.connect(self.on_telemetry); self.session.status.connect(self.status.setText); self.session.failure.connect(self.on_failure); self.session.pid_read.connect(self.on_pid); self.session.pid_applied.connect(lambda revision: self.buffer.add_event(f"PID r{revision}")); self.session.motion_changed.connect(lambda _: self.buffer.add_event("运动状态改变"))
+        self.window.valueChanged.connect(lambda value: self.plots.set_window(float(value))); self.session.telemetry.connect(self.on_telemetry); self.session.status.connect(self.status.setText); self.session.failure.connect(self.on_failure); self.session.pid_read.connect(self.on_pid); self.session.pid_applied.connect(self.on_pid_applied); self.session.yaw_source_changed.connect(self.on_yaw_source_changed); self.session.origin_reset.connect(self.on_origin_reset); self.session.motion_changed.connect(lambda _: self.buffer.add_event("运动状态改变"))
 
     def refresh_ports(self) -> None:
         from serial.tools import list_ports
@@ -108,15 +139,25 @@ class MainWindow(QMainWindow):
     def on_pid(self, revision: int, pid: PidConfig) -> None:
         [widget.setValue(value) for widget, value in zip(self.pid, pid.to_dict().values())]; self.status.setText(f"PID 修订号 {revision}")
     def start_motion(self) -> None:
+        self._start_motion(use_position=True, use_yaw=self.use_yaw.isChecked())
+
+    def start_position_motion(self) -> None:
+        self._start_motion(use_position=True, use_yaw=False)
+
+    def start_yaw_motion(self) -> None:
+        self._start_motion(use_position=False, use_yaw=True)
+
+    def _start_motion(self, use_position: bool, use_yaw: bool) -> None:
         goal = MotionGoal(*(widget.value() for widget in self.goal), self.timeout.value(),
-                          use_yaw=self.use_yaw.isChecked())
+                          use_yaw=use_yaw, use_position=use_position)
         error = validate_motion_goal(goal)
         if error is not None:
             self.status.setText(f"错误: {error}")
             return
         self.session.start_motion(goal)
-        self.status.setText(f"已请求 GOTO 世界目标=({goal.x_mm:.1f}, {goal.y_mm:.1f}, {goal.yaw_deg:.1f})")
-        self.buffer.add_event("GOTO")
+        kind = "组合" if use_position and use_yaw else ("位置" if use_position else "角度")
+        self.status.setText(f"已请求{kind} GOTO")
+        self.buffer.add_event(f"{kind} GOTO")
     def on_telemetry(self, item: object) -> None:
         self.buffer.append(item); self.recorded.append(item) if self.recording else None
         status = format_telemetry_status(item)
@@ -125,7 +166,17 @@ class MainWindow(QMainWindow):
         elif item.remote_goal_active:
             status += f" 心跳正常/{item.heartbeat_age_ms}ms"
         self.status.setText(status)
+        if item.yaw_source != self.yaw_source.currentText():
+            self.yaw_source.blockSignals(True); self.yaw_source.setCurrentText(item.yaw_source); self.yaw_source.blockSignals(False)
     def refresh(self) -> None: self.plots.refresh(self.buffer)
+    def on_pid_applied(self, revision: int, pid: PidConfig) -> None:
+        print(format_pid_apply_log(revision, pid), flush=True)
+        self.buffer.add_event(f"PID r{revision}")
+        self.status.setText(f"PID 已应用，修订号 {revision}")
+    def on_yaw_source_changed(self, source: str) -> None:
+        self.status.setText(f"航向 PID 数据源已切换为 {source}"); self.buffer.add_event(f"航向源 {source}")
+    def on_origin_reset(self) -> None:
+        [widget.setValue(0.0) for widget in self.goal[:3]]; self.buffer.add_event("零点重置"); self.status.setText("零点已重置")
     def new_experiment_clicked(self) -> None: self.buffer.clear(); self.recorded.clear(); self.buffer.add_event("新实验")
     def toggle_record(self) -> None:
         self.recording = not self.recording; self.record.setText("停止记录并保存" if self.recording else "开始记录 CSV")

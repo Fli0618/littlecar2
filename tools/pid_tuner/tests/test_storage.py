@@ -26,4 +26,6 @@ class StorageTests(unittest.TestCase):
             write_telemetry_csv(path, [sample])
             text = path.read_text(encoding="utf-8")
         self.assertIn("target_x_mm", text)
+        self.assertIn("wit_yaw_deg", text)
+        self.assertIn("ops_yaw_deg", text)
         self.assertIn("18", text)

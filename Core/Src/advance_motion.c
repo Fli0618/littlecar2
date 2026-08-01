@@ -76,6 +76,10 @@ static void AdvanceMotion_ResetPidAndProgress(void)
 
 static void AdvanceMotion_UpdateDebugSnapshot(uint32_t now_tick, uint8_t flags)
 {
+  if (AdvanceWorld_GetYawSource() == ADVANCE_WORLD_YAW_SOURCE_OPS)
+  {
+    flags |= ADVANCE_MOTION_DEBUG_FLAG_YAW_SOURCE_OPS;
+  }
   g_motion_debug.tick = now_tick;
   g_motion_debug.pid_revision = g_pid_active_revision;
   g_motion_debug.state = g_motion_state;
@@ -204,10 +208,12 @@ static void AdvanceMotion_SavePidPose(const WorldPose2D_t *pose, uint32_t now_ti
 static void AdvanceMotion_UpdatePidIntegral(float vx_world_mm_s, float vy_world_mm_s,
                                              float wz_ccw_deg_s, float dt_s,
                                              uint8_t linear_saturated, uint8_t yaw_saturated,
-                                             uint8_t yaw_required)
+                                             uint8_t position_required, uint8_t yaw_required)
 {
-  if ((linear_saturated == 0U) ||
-      ((g_motion.error_x_mm * vx_world_mm_s) + (g_motion.error_y_mm * vy_world_mm_s) <= 0.0f))
+  if ((position_required != 0U) &&
+      ((linear_saturated == 0U) ||
+       (((g_motion.error_x_mm * vx_world_mm_s) +
+         (g_motion.error_y_mm * vy_world_mm_s)) <= 0.0f)))
   {
     g_motion_control.pid_integral_x_mm_s = AdvanceWorld_LimitFloat(
         g_motion_control.pid_integral_x_mm_s + (g_motion.error_x_mm * dt_s),
@@ -306,21 +312,47 @@ static uint8_t AdvanceMotion_IsGoalValid(const WorldGoalPose2D_t *goal)
     return 0U;
   }
 
-  if ((goal->x_mm < ADVANCE_MOTION_WORLD_X_MIN_MM) ||
-      (goal->x_mm > ADVANCE_MOTION_WORLD_X_MAX_MM) ||
-      (goal->y_mm < ADVANCE_MOTION_WORLD_Y_MIN_MM) ||
-      (goal->y_mm > ADVANCE_MOTION_WORLD_Y_MAX_MM) ||
-      (goal->vmax_mm_s < 0.0f) ||
-      (goal->vmax_mm_s > ADVANCE_MOTION_MAX_VMAX_MM_S) ||
-      (goal->wmax_deg_s < 0.0f) ||
-      (goal->wmax_deg_s > ADVANCE_MOTION_MAX_WMAX_DEG_S) ||
+  if ((((goal->goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) != 0U) &&
+       ((goal->x_mm < ADVANCE_MOTION_WORLD_X_MIN_MM) ||
+        (goal->x_mm > ADVANCE_MOTION_WORLD_X_MAX_MM) ||
+        (goal->y_mm < ADVANCE_MOTION_WORLD_Y_MIN_MM) ||
+        (goal->y_mm > ADVANCE_MOTION_WORLD_Y_MAX_MM) ||
+        (goal->vmax_mm_s <= 0.0f) ||
+        (goal->vmax_mm_s > ADVANCE_MOTION_MAX_VMAX_MM_S))) ||
+      (((goal->goal_flags & ADVANCE_MOTION_GOAL_USE_YAW) != 0U) &&
+       ((goal->wmax_deg_s <= 0.0f) ||
+        (goal->wmax_deg_s > ADVANCE_MOTION_MAX_WMAX_DEG_S))) ||
       (goal->timeout_ms > ADVANCE_MOTION_MAX_TIMEOUT_MS) ||
-      ((goal->goal_flags & (uint8_t)(~ADVANCE_MOTION_GOAL_USE_YAW)) != 0U))
+      ((goal->goal_flags & (uint8_t)(~(ADVANCE_MOTION_GOAL_USE_YAW | ADVANCE_MOTION_GOAL_USE_POSITION))) != 0U) ||
+      ((goal->goal_flags & (ADVANCE_MOTION_GOAL_USE_YAW | ADVANCE_MOTION_GOAL_USE_POSITION)) == 0U))
   {
     return 0U;
   }
 
   return 1U;
+}
+
+static AdvanceMotion_Status_t AdvanceMotion_GetFreshYaw(WorldPose2D_t *pose)
+{
+  float yaw_deg;
+  uint32_t updated_tick;
+
+  if (pose == NULL)
+  {
+    return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+  }
+  (void)AdvanceWorld_GetPoseCopy(pose);
+  if (AdvanceWorld_GetYawCopy(&yaw_deg, &updated_tick) != ADVANCE_WORLD_STATUS_OK)
+  {
+    return ADVANCE_MOTION_STATUS_NO_POSE;
+  }
+  if ((HAL_GetTick() - updated_tick) > ADVANCE_MOTION_YAW_TIMEOUT_MS)
+  {
+    return ADVANCE_MOTION_STATUS_POSE_TIMEOUT;
+  }
+  pose->yaw_deg = yaw_deg;
+  pose->yaw_updated_tick = updated_tick;
+  return ADVANCE_MOTION_STATUS_OK;
 }
 
 /* 获取未超时的有效世界坐标，并转换为运动控制状态码。 */
@@ -483,7 +515,9 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
     return ADVANCE_MOTION_STATUS_BUSY;
   }
 
-  pose_status = AdvanceMotion_GetFreshPose(&pose);
+  pose_status = ((goal->goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) != 0U)
+                    ? AdvanceMotion_GetFreshPose(&pose)
+                    : AdvanceMotion_GetFreshYaw(&pose);
   if (pose_status != ADVANCE_MOTION_STATUS_OK)
   {
     return pose_status;
@@ -539,7 +573,7 @@ AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(float x_mm, float y_mm,
       .vmax_mm_s = ADVANCE_MOTION_DEFAULT_VMAX_MM_S,
       .wmax_deg_s = ADVANCE_MOTION_DEFAULT_WMAX_DEG_S,
       .timeout_ms = ADVANCE_MOTION_DEFAULT_TIMEOUT_MS,
-      .goal_flags = ADVANCE_MOTION_GOAL_USE_YAW};
+      .goal_flags = ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW};
 
   return AdvanceMotion_GotoGoalBlocking(&goal, acc);
 }
@@ -558,6 +592,7 @@ void AdvanceMotion_Update(void)
   float raw_linear_magnitude;
   float raw_wz_ccw_deg_s;
   float command_magnitude;
+  uint8_t position_required;
   uint8_t yaw_required;
   uint8_t linear_saturated;
   uint8_t yaw_saturated = 0U;
@@ -578,7 +613,11 @@ void AdvanceMotion_Update(void)
     return;
   }
 
-  pose_status = AdvanceMotion_GetFreshPose(&g_motion.pose);
+  position_required = ((g_motion.goal.goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) != 0U) ? 1U : 0U;
+  yaw_required = ((g_motion.goal.goal_flags & ADVANCE_MOTION_GOAL_USE_YAW) != 0U) ? 1U : 0U;
+  pose_status = (position_required != 0U)
+                    ? AdvanceMotion_GetFreshPose(&g_motion.pose)
+                    : AdvanceMotion_GetFreshYaw(&g_motion.pose);
   if (pose_status == ADVANCE_MOTION_STATUS_NO_ORIGIN)
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_ORIGIN);
@@ -592,21 +631,22 @@ void AdvanceMotion_Update(void)
     return;
   }
 
-  g_motion.error_x_mm = g_motion.goal.x_mm - g_motion.pose.x_mm;
-  g_motion.error_y_mm = g_motion.goal.y_mm - g_motion.pose.y_mm;
-  g_motion.position_error_mm = sqrtf((g_motion.error_x_mm * g_motion.error_x_mm) +
-                                     (g_motion.error_y_mm * g_motion.error_y_mm));
-  yaw_required = ((g_motion.goal.goal_flags & ADVANCE_MOTION_GOAL_USE_YAW) != 0U) ? 1U : 0U;
-  if ((yaw_required != 0U) &&
-      ((now_tick - g_motion.pose.yaw_updated_tick) > ADVANCE_MOTION_YAW_TIMEOUT_MS))
+  if (position_required != 0U)
   {
-    AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_POSE);
-    AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
-    return;
+    g_motion.error_x_mm = g_motion.goal.x_mm - g_motion.pose.x_mm;
+    g_motion.error_y_mm = g_motion.goal.y_mm - g_motion.pose.y_mm;
+    g_motion.position_error_mm = sqrtf((g_motion.error_x_mm * g_motion.error_x_mm) +
+                                       (g_motion.error_y_mm * g_motion.error_y_mm));
+  }
+  else
+  {
+    g_motion.error_x_mm = 0.0f;
+    g_motion.error_y_mm = 0.0f;
+    g_motion.position_error_mm = 0.0f;
   }
   g_motion.yaw_error_deg = yaw_required ? AdvanceWorld_WrapAngleDeg(g_motion.goal.yaw_deg - g_motion.pose.yaw_deg) : 0.0f;
 
-  if ((g_motion.position_error_mm <= ADVANCE_MOTION_POS_TOLERANCE_MM) &&
+  if (((position_required == 0U) || (g_motion.position_error_mm <= ADVANCE_MOTION_POS_TOLERANCE_MM)) &&
       ((yaw_required == 0U) || (AdvanceMotion_AbsFloat(g_motion.yaw_error_deg) <= ADVANCE_MOTION_YAW_TOLERANCE_DEG)))
   {
     AdvanceMotion_ResetPidAndProgress();
@@ -649,17 +689,24 @@ void AdvanceMotion_Update(void)
 
   AdvanceMotion_SavePidPose(&g_motion.pose, now_tick);
 
-  vx_world_mm_s = (g_pid_active.kp_pos * g_motion.error_x_mm) +
-                  (g_pid_active.ki_pos * g_motion_control.pid_integral_x_mm_s) -
-                  (g_pid_active.kd_pos * g_motion_control.measured_vx_world_mm_s);
-  vy_world_mm_s = (g_pid_active.kp_pos * g_motion.error_y_mm) +
-                  (g_pid_active.ki_pos * g_motion_control.pid_integral_y_mm_s) -
-                  (g_pid_active.kd_pos * g_motion_control.measured_vy_world_mm_s);
-  vmax_mm_s = AdvanceMotion_GetGoalVmax(&g_motion.goal);
-  raw_linear_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
-                                (vy_world_mm_s * vy_world_mm_s));
-  (void)AdvanceMotion_LimitVector(&vx_world_mm_s, &vy_world_mm_s, vmax_mm_s);
-  linear_saturated = (raw_linear_magnitude > vmax_mm_s) ? 1U : 0U;
+  vx_world_mm_s = 0.0f;
+  vy_world_mm_s = 0.0f;
+  raw_linear_magnitude = 0.0f;
+  linear_saturated = 0U;
+  if (position_required != 0U)
+  {
+    vx_world_mm_s = (g_pid_active.kp_pos * g_motion.error_x_mm) +
+                    (g_pid_active.ki_pos * g_motion_control.pid_integral_x_mm_s) -
+                    (g_pid_active.kd_pos * g_motion_control.measured_vx_world_mm_s);
+    vy_world_mm_s = (g_pid_active.kp_pos * g_motion.error_y_mm) +
+                    (g_pid_active.ki_pos * g_motion_control.pid_integral_y_mm_s) -
+                    (g_pid_active.kd_pos * g_motion_control.measured_vy_world_mm_s);
+    vmax_mm_s = AdvanceMotion_GetGoalVmax(&g_motion.goal);
+    raw_linear_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
+                                  (vy_world_mm_s * vy_world_mm_s));
+    (void)AdvanceMotion_LimitVector(&vx_world_mm_s, &vy_world_mm_s, vmax_mm_s);
+    linear_saturated = (raw_linear_magnitude > vmax_mm_s) ? 1U : 0U;
+  }
 
   if (yaw_required != 0U)
   {
@@ -675,18 +722,21 @@ void AdvanceMotion_Update(void)
   }
 
   AdvanceMotion_UpdatePidIntegral(vx_world_mm_s, vy_world_mm_s, wz_ccw_deg_s, dt_s,
-                                   linear_saturated, yaw_saturated, yaw_required);
+                                   linear_saturated, yaw_saturated, position_required, yaw_required);
   command_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
                              (vy_world_mm_s * vy_world_mm_s));
-  if (AdvanceMotion_HasNoProgress(now_tick, command_magnitude) != 0U)
+  if ((position_required != 0U) && (AdvanceMotion_HasNoProgress(now_tick, command_magnitude) != 0U))
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED);
     AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
     return;
   }
 
-  if (AdvanceMotion_ApplyWorldVelocityEx(vx_world_mm_s, vy_world_mm_s, wz_ccw_deg_s,
-                                         g_motion_control.acc, &g_motion.pose) == ADVANCE_MOTION_STATUS_OK)
+  if (((position_required != 0U) &&
+       (AdvanceMotion_ApplyWorldVelocityEx(vx_world_mm_s, vy_world_mm_s, wz_ccw_deg_s,
+                                            g_motion_control.acc, &g_motion.pose) == ADVANCE_MOTION_STATUS_OK)) ||
+      ((position_required == 0U) &&
+       (Chassis_SetBodyVelocityEx(0.0f, 0.0f, wz_ccw_deg_s, g_motion_control.acc) != 0U)))
   {
     g_motion_control.command_vx_world_mm_s = vx_world_mm_s;
     g_motion_control.command_vy_world_mm_s = vy_world_mm_s;
@@ -699,6 +749,16 @@ void AdvanceMotion_Update(void)
                                         ((yaw_required != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH : 0U) |
                                         ((linear_saturated != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_LINEAR_SATURATED : 0U) |
                                         ((yaw_saturated != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_SATURATED : 0U));
+}
+
+void AdvanceMotion_ResetYawControl(void)
+{
+  g_motion_control.pid_integral_yaw_deg_s = 0.0f;
+  g_motion_control.last_yaw_updated_tick = 0U;
+  g_motion_control.pid_last_yaw_deg = 0.0f;
+  g_motion_control.measured_wz_deg_s = 0.0f;
+  g_motion_control.arrive_hold_start_tick = 0U;
+  g_motion_control.pid_history_valid = 0U;
 }
 
 /* 取消当前运动任务、释放控制权并停止底盘。 */

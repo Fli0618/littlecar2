@@ -7,7 +7,7 @@
 
 #define COMM_TUNER_RX_DMA_SIZE ((uint16_t)128U)
 #define COMM_TUNER_QUEUE_DEPTH ((uint8_t)4U)
-#define COMM_TUNER_PROTOCOL_VERSION ((uint8_t)1U)
+#define COMM_TUNER_PROTOCOL_VERSION ((uint8_t)2U)
 #define COMM_TUNER_MAX_PAYLOAD_SIZE ((uint16_t)96U)
 #define COMM_TUNER_FRAME_OVERHEAD ((uint16_t)9U)
 #define COMM_TUNER_FRAME_MAX_SIZE (COMM_TUNER_FRAME_OVERHEAD + COMM_TUNER_MAX_PAYLOAD_SIZE)
@@ -31,6 +31,8 @@
 #define COMM_TUNER_CMD_GOTO_POSE ((uint8_t)0x10U)
 #define COMM_TUNER_CMD_STOP ((uint8_t)0x11U)
 #define COMM_TUNER_CMD_HEARTBEAT ((uint8_t)0x12U)
+#define COMM_TUNER_CMD_SET_YAW_SOURCE ((uint8_t)0x13U)
+#define COMM_TUNER_CMD_RESET_ORIGIN ((uint8_t)0x14U)
 #define COMM_TUNER_CMD_ACK ((uint8_t)0x80U)
 #define COMM_TUNER_CMD_PID ((uint8_t)0x81U)
 #define COMM_TUNER_CMD_TELEMETRY ((uint8_t)0x82U)
@@ -50,7 +52,7 @@
 #define COMM_TUNER_SET_PID_PAYLOAD_SIZE ((uint16_t)24U)
 #define COMM_TUNER_PID_PAYLOAD_SIZE ((uint16_t)28U)
 #define COMM_TUNER_GOTO_PAYLOAD_SIZE ((uint16_t)25U)
-#define COMM_TUNER_TELEMETRY_PAYLOAD_SIZE ((uint16_t)88U)
+#define COMM_TUNER_TELEMETRY_PAYLOAD_SIZE ((uint16_t)96U)
 
 typedef struct
 {
@@ -357,6 +359,8 @@ static void CommTuner_QueueTelemetry(void)
   CommTuner_WriteFloat(&payload[76], snapshot.integral_x_mm_s);
   CommTuner_WriteFloat(&payload[80], snapshot.integral_y_mm_s);
   CommTuner_WriteFloat(&payload[84], snapshot.integral_yaw_deg_s);
+  CommTuner_WriteFloat(&payload[88], snapshot.pose.wit_yaw_deg);
+  CommTuner_WriteFloat(&payload[92], snapshot.pose.ops_yaw_deg);
 
   frame_length = CommTuner_BuildFrame(COMM_TUNER_CMD_TELEMETRY,
                                       g_telemetry_sequence++, payload, sizeof(payload),
@@ -399,8 +403,11 @@ static void CommTuner_HandleGoto(uint8_t sequence, const uint8_t *payload)
   goal.timeout_ms = CommTuner_ReadU32(&payload[20]);
   goal.goal_flags = payload[24];
 
-  if ((goal.vmax_mm_s <= 0.0f) || (goal.vmax_mm_s > COMM_TUNER_GOTO_VMAX_MM_S) ||
-      (goal.wmax_deg_s <= 0.0f) || (goal.wmax_deg_s > COMM_TUNER_GOTO_WMAX_DEG_S) ||
+  if (((goal.goal_flags & (ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW)) == 0U) ||
+      (((goal.goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) != 0U) &&
+       ((goal.vmax_mm_s <= 0.0f) || (goal.vmax_mm_s > COMM_TUNER_GOTO_VMAX_MM_S))) ||
+      (((goal.goal_flags & ADVANCE_MOTION_GOAL_USE_YAW) != 0U) &&
+       ((goal.wmax_deg_s <= 0.0f) || (goal.wmax_deg_s > COMM_TUNER_GOTO_WMAX_DEG_S))) ||
       (goal.timeout_ms == 0U) || (goal.timeout_ms > COMM_TUNER_GOTO_TIMEOUT_MS))
   {
     CommTuner_SendError(COMM_TUNER_CMD_GOTO_POSE, sequence, COMM_TUNER_ERROR_BAD_GOAL, 1U);
@@ -541,6 +548,46 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
     }
     CommTuner_SendAck(command, sequence, 0U, 0U);
     break;
+
+  case COMM_TUNER_CMD_SET_YAW_SOURCE:
+    if (payload_length != 1U)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
+      return;
+    }
+    if ((payload[0] > (uint8_t)ADVANCE_WORLD_YAW_SOURCE_OPS) ||
+        (AdvanceWorld_SetYawSource((AdvanceWorld_YawSource_t)payload[0]) != ADVANCE_WORLD_STATUS_OK))
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_GOAL, 1U);
+      return;
+    }
+    AdvanceMotion_ResetYawControl();
+    CommTuner_SendAck(command, sequence, 0U, 0U);
+    break;
+
+  case COMM_TUNER_CMD_RESET_ORIGIN:
+  {
+    AdvanceMotion_RuntimeStatus_t status;
+    if (payload_length != 0U)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
+      return;
+    }
+    (void)AdvanceMotion_GetStatus(&status);
+    if (status.state == ADVANCE_MOTION_STATE_RUNNING)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BUSY, 1U);
+      return;
+    }
+    if (AdvanceWorld_ResetOrigin() != ADVANCE_WORLD_STATUS_OK)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_NO_POSE, 1U);
+      return;
+    }
+    AdvanceMotion_ResetYawControl();
+    CommTuner_SendAck(command, sequence, 0U, 0U);
+    break;
+  }
 
   default:
     CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_COMMAND, 1U);

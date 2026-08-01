@@ -7,9 +7,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QAbstractSpinBox
 
-from pid_tuner.gui.app import GOTO_YAW_LABEL, MainWindow, format_telemetry_status, validate_motion_goal
+from pid_tuner.gui.app import GOTO_YAW_LABEL, MainWindow, format_pid_apply_log, format_telemetry_status, validate_motion_goal
 from pid_tuner.gui.session import SessionController
-from pid_tuner.models import MotionGoal, Telemetry
+from pid_tuner.models import MotionGoal, PidConfig, Telemetry
 
 
 class GuiMotionGoalTests(unittest.TestCase):
@@ -38,12 +38,35 @@ class GuiMotionGoalTests(unittest.TestCase):
         self.assertIsNone(validate_motion_goal(at_limit))
         self.assertEqual(validate_motion_goal(above_limit), "vmax 必须在 0-1200 mm/s 之间")
 
+    def test_independent_motion_goals_validate_only_their_used_axis(self) -> None:
+        self.assertIsNone(validate_motion_goal(MotionGoal(0, 0, 0, 0, 30, 1000, use_position=False)))
+        self.assertIsNone(validate_motion_goal(MotionGoal(0, 0, 0, 300, 0, 1000, use_yaw=False)))
+
+    def test_pid_apply_log_contains_revision_and_all_values(self) -> None:
+        text = format_pid_apply_log(7, PidConfig(1, .03, .1, 2, .05, .08))
+        self.assertIn("r7", text)
+        self.assertIn("kp_pos=1.0000", text)
+        self.assertIn("kd_yaw=0.0800", text)
+
     def test_float_inputs_hide_spinbox_buttons(self) -> None:
         window = MainWindow()
         try:
             inputs = [*window.pid, *window.goal]
             self.assertTrue(inputs)
             self.assertTrue(all(widget.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.NoButtons for widget in inputs))
+        finally:
+            window.close()
+
+    def test_low_resolution_uses_scrollable_controls_and_plots(self) -> None:
+        window = MainWindow()
+        try:
+            window.resize(800, 600)
+            window.show()
+            self.app.processEvents()
+            self.assertIsNotNone(window.controls_scroll.widget())
+            self.assertIs(window.plots_scroll.widget(), window.plots)
+            self.assertGreaterEqual(window.plots.minimumWidth(), 900)
+            self.assertGreaterEqual(window.plots.minimumHeight(), 820)
         finally:
             window.close()
 
