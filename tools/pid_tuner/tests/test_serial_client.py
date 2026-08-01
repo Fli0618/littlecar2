@@ -3,7 +3,8 @@ import time
 import unittest
 
 from pid_tuner.models import BoardError, MotionGoal, PidConfig
-from pid_tuner.protocol import CMD_ACK, CMD_ERROR, CMD_GET_PID, CMD_PID, CMD_TELEMETRY, StreamDecoder, encode_frame
+from pid_tuner.protocol import (CMD_ACK, CMD_ERROR, CMD_GET_PID, CMD_PID, CMD_RESET_ORIGIN,
+                                CMD_SET_YAW_SOURCE, CMD_TELEMETRY, StreamDecoder, encode_frame)
 from pid_tuner.serial_client import SerialClient
 
 from fake_transport import FakeTransport
@@ -42,7 +43,7 @@ class SerialClientTests(unittest.TestCase):
         self.assertEqual(first.sequence, second.sequence)
 
     def test_telemetry_callback(self) -> None:
-        telemetry_payload = struct.pack("<IIIBBH18f", 10, 2, 0, 1, 3, 0, *range(18))
+        telemetry_payload = struct.pack("<IIIBBH20f", 10, 2, 0, 1, 3, 0, *range(20))
 
         def on_write(raw, _attempt):
             request = StreamDecoder().feed(raw)[0]
@@ -70,7 +71,21 @@ class SerialClientTests(unittest.TestCase):
         goal = MotionGoal(1, 2, 3, 4, 5, 6000)
         with SerialClient(FakeTransport(on_write)) as client:
             client.goto(goal)
-        self.assertEqual(struct.unpack("<5fIB", captured[0].payload), (1, 2, 3, 4, 5, 6000, 1))
+        self.assertEqual(struct.unpack("<5fIB", captured[0].payload), (1, 2, 3, 4, 5, 6000, 3))
+
+    def test_yaw_source_and_origin_commands(self) -> None:
+        captured = []
+
+        def on_write(raw, _attempt):
+            request = StreamDecoder().feed(raw)[0]
+            captured.append(request)
+            return [encode_frame(CMD_ACK, request.sequence, bytes([request.command]))]
+
+        with SerialClient(FakeTransport(on_write)) as client:
+            client.set_yaw_source("OPS")
+            client.reset_origin()
+        self.assertEqual((captured[0].command, captured[0].payload), (CMD_SET_YAW_SOURCE, b"\x01"))
+        self.assertEqual((captured[1].command, captured[1].payload), (CMD_RESET_ORIGIN, b""))
 
     def test_board_error_is_exposed(self) -> None:
         def on_write(raw, _attempt):

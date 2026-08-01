@@ -68,6 +68,7 @@ extern "C"
 
 /* 目标可选约束标志。 */
 #define ADVANCE_MOTION_GOAL_USE_YAW ((uint8_t)0x01U) /*!< 目标标志：使用航向角约束。 */
+#define ADVANCE_MOTION_GOAL_USE_POSITION ((uint8_t)0x02U) /*!< 目标标志：使用 X/Y 位置约束。 */
 
   typedef enum
   {
@@ -143,6 +144,7 @@ extern "C"
 #define ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH ((uint8_t)0x04U)
 #define ADVANCE_MOTION_DEBUG_FLAG_LINEAR_SATURATED ((uint8_t)0x08U)
 #define ADVANCE_MOTION_DEBUG_FLAG_YAW_SATURATED ((uint8_t)0x10U)
+#define ADVANCE_MOTION_DEBUG_FLAG_YAW_SOURCE_OPS ((uint8_t)0x80U)
 
   /** @brief 初始化运动控制模块。 */
   void AdvanceMotion_Init(void);
@@ -178,6 +180,8 @@ extern "C"
                                                           uint32_t *revision);
   /** @brief 提交固件默认 PID 配置，在下一次 20 ms 周期边界整体生效。 */
   AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultPid(uint32_t *revision);
+  /** @brief 航向数据源变更后清除航向 PID 历史，避免使用旧源的积分与微分项。 */
+  void AdvanceMotion_ResetYawControl(void);
 
 #ifdef __cplusplus
 }

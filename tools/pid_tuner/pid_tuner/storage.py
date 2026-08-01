@@ -73,6 +73,7 @@ def write_telemetry_csv(path: Path, telemetry: list[Telemetry]) -> None:
         "command_vx_mm_s", "command_vy_mm_s", "command_wz_deg_s",
         "measured_vx_mm_s", "measured_vy_mm_s", "measured_wz_deg_s",
         "integral_x_mm_s", "integral_y_mm_s", "integral_yaw_deg_s",
+        "wit_yaw_deg", "ops_yaw_deg",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:

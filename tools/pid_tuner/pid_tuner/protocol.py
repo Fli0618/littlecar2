@@ -8,7 +8,7 @@ from typing import Iterable
 from .models import PidConfig, Telemetry
 
 SYNC = b"\xA5\x5A"
-VERSION = 1
+VERSION = 2
 MAX_PAYLOAD = 96
 FRAME_OVERHEAD = 9
 
@@ -18,12 +18,14 @@ CMD_RESTORE_PID = 0x03
 CMD_GOTO_POSE = 0x10
 CMD_STOP = 0x11
 CMD_HEARTBEAT = 0x12
+CMD_SET_YAW_SOURCE = 0x13
+CMD_RESET_ORIGIN = 0x14
 CMD_ACK = 0x80
 CMD_PID = 0x81
 CMD_TELEMETRY = 0x82
 CMD_ERROR = 0xE0
 
-TELEMETRY_PAYLOAD_SIZE = 88
+TELEMETRY_PAYLOAD_SIZE = 96
 
 
 class ProtocolError(ValueError):
@@ -71,7 +73,15 @@ def encode_goal(goal: "MotionGoal") -> bytes:
         raise ProtocolError("goal must be a MotionGoal")
     return struct.pack("<5fIB", goal.x_mm, goal.y_mm, goal.yaw_deg,
                        goal.vmax_mm_s, goal.wmax_deg_s, goal.timeout_ms,
-                       0x01 if goal.use_yaw else 0x00)
+                       (0x01 if goal.use_yaw else 0x00) | (0x02 if goal.use_position else 0x00))
+
+
+def encode_yaw_source(source: str) -> bytes:
+    values = {"WIT": 0, "OPS": 1}
+    try:
+        return bytes([values[source.upper()]])
+    except (AttributeError, KeyError) as error:
+        raise ProtocolError("yaw source must be WIT or OPS") from error
 
 
 def decode_pid(payload: bytes) -> tuple[int, PidConfig]:
@@ -84,7 +94,7 @@ def decode_pid(payload: bytes) -> tuple[int, PidConfig]:
 def decode_telemetry(frame: Frame) -> Telemetry:
     if frame.command != CMD_TELEMETRY or len(frame.payload) != TELEMETRY_PAYLOAD_SIZE:
         raise ProtocolError("invalid telemetry frame")
-    values = struct.unpack("<IIIBBH18f", frame.payload)
+    values = struct.unpack("<IIIBBH20f", frame.payload)
     return Telemetry(
         tick=values[0],
         pid_revision=values[1],
@@ -98,6 +108,8 @@ def decode_telemetry(frame: Frame) -> Telemetry:
         measured_velocity=tuple(values[18:21]),
         integrals=tuple(values[21:24]),
         remote_link_status=values[5],
+        wit_yaw_deg=values[24],
+        ops_yaw_deg=values[25],
     )
 
 
@@ -145,5 +157,5 @@ def telemetry_csv_row(telemetry: Telemetry) -> Iterable[float | int]:
         telemetry.tick, telemetry.pid_revision, telemetry.overwritten_count,
         telemetry.state, telemetry.flags, *telemetry.target, *telemetry.actual,
         *telemetry.error, *telemetry.command_velocity, *telemetry.measured_velocity,
-        *telemetry.integrals,
+        *telemetry.integrals, telemetry.wit_yaw_deg, telemetry.ops_yaw_deg,
     )
