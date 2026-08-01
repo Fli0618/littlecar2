@@ -79,7 +79,8 @@ class PlannerWindow(QMainWindow):
         segment_form = QFormLayout(); self.segment_kind = QComboBox(); self.segment_kind.addItems(["bezier", "arc"]); self.handle = spin(180, 1, 2000, 10); self.radius = spin(300, 1, 4000, 10); self.clockwise = QCheckBox("顺时针圆弧")
         segment_form.addRow("到下一点的段", self.segment_kind); segment_form.addRow("贝塞尔手柄", self.handle); segment_form.addRow("圆弧半径", self.radius); segment_form.addRow(self.clockwise); apply_segment = QPushButton("更新路径段"); apply_segment.clicked.connect(self.update_segment); segment_form.addRow(apply_segment); controls.addLayout(segment_form)
         controls.addWidget(QLabel("仿真")); sim_form = QFormLayout(); self.vmax = spin(200, 1, 1500, 10); self.wmax = spin(90, 1, 180, 5); self.response = spin(.18, .01, 5, .01)
-        sim_form.addRow("最大线速度", self.vmax); sim_form.addRow("最大角速度", self.wmax); sim_form.addRow("线速度响应(s)", self.response); controls.addLayout(sim_form)
+        self.sensor_delay = spin(.04, 0, 2, .01); self.sensor_noise = spin(0, 0, 100, .1)
+        sim_form.addRow("最大线速度", self.vmax); sim_form.addRow("最大角速度", self.wmax); sim_form.addRow("线速度响应(s)", self.response); sim_form.addRow("传感器延迟(s)", self.sensor_delay); sim_form.addRow("传感器噪声(mm)", self.sensor_noise); controls.addLayout(sim_form)
         pid_form = QFormLayout(); self.kp_pos = spin(1.28, 0, 20, .05); self.ki_pos = spin(.13, 0, 20, .05); self.kd_pos = spin(.72, 0, 20, .05); self.kp_yaw = spin(1.65, 0, 20, .05); self.ki_yaw = spin(1.0, 0, 20, .05); self.kd_yaw = spin(.65, 0, 20, .05); self.yaw_response = spin(.14, .01, 5, .01); self.lookahead = spin(80, 1, 1000, 10)
         for label, widget in (("Kp 位置", self.kp_pos), ("Ki 位置", self.ki_pos), ("Kd 位置", self.kd_pos), ("Kp 航向", self.kp_yaw), ("Ki 航向", self.ki_yaw), ("Kd 航向", self.kd_yaw), ("航向响应(s)", self.yaw_response), ("前瞻距离", self.lookahead)): pid_form.addRow(label, widget)
         controls.addLayout(pid_form)
@@ -179,7 +180,7 @@ class PlannerWindow(QMainWindow):
         settings = self.plan.settings; settings.vmax_mm_s, settings.wmax_deg_s, settings.linear_response_s = self.vmax.value(), self.wmax.value(), self.response.value()
         settings.kp_pos, settings.ki_pos, settings.kd_pos = self.kp_pos.value(), self.ki_pos.value(), self.kd_pos.value()
         settings.kp_yaw, settings.ki_yaw, settings.kd_yaw = self.kp_yaw.value(), self.ki_yaw.value(), self.kd_yaw.value()
-        settings.yaw_response_s, settings.lookahead_mm = self.yaw_response.value(), self.lookahead.value()
+        settings.yaw_response_s, settings.lookahead_mm, settings.sensor_delay_s, settings.sensor_noise_mm = self.yaw_response.value(), self.lookahead.value(), self.sensor_delay.value(), self.sensor_noise.value()
         if self.simulation is None: self.simulation = Simulation(points, stops, settings, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.start_heading.value()); self.actual_trace = []
         self.timer.start()
 

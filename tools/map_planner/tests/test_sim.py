@@ -20,3 +20,8 @@ class SimulationTests(unittest.TestCase):
     def test_out_of_bounds_uses_start_marker(self):
         simulation = Simulation([Pose(0, 0), Pose(0, 100)], [], SimulationSettings(), 100, 100, 0)
         self.assertTrue(simulation.step().out_of_bounds)
+
+    def test_sensor_delay_does_not_prevent_simulation(self):
+        settings = SimulationSettings(sensor_delay_s=.2, sensor_noise_mm=2)
+        simulation = Simulation([Pose(0, 0), Pose(0, 500)], [], settings)
+        self.assertGreaterEqual(simulation.step().error_mm, 0)

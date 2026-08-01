@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import random
 
 from .geometry import wrap_deg
 from .geometry import world_to_paper
@@ -41,6 +42,8 @@ class Simulation:
     route_index: int = 0
     dwell_remaining_s: float = 0.0
     finished: bool = False
+    sensor_history: list[Pose] = field(default_factory=list)
+    _random: random.Random = field(default_factory=lambda: random.Random(0))
 
     def __post_init__(self) -> None:
         if self.route:
@@ -57,8 +60,13 @@ class Simulation:
             self.elapsed_s += dt
             return self._frame(self.route[self.route_index], True)
         reference = self.route[min(len(self.route) - 1, self.route_index + max(1, int(self.settings.lookahead_mm / 10.0)))]
-        ex, ey = reference.x_mm - self.actual.x_mm, reference.y_mm - self.actual.y_mm
-        eyaw = wrap_deg(reference.yaw_deg - self.actual.yaw_deg)
+        self.sensor_history.append(Pose(self.actual.x_mm, self.actual.y_mm, self.actual.yaw_deg))
+        delay_steps = int(self.settings.sensor_delay_s / dt)
+        sensed = self.sensor_history[max(0, len(self.sensor_history) - 1 - delay_steps)]
+        if self.settings.sensor_noise_mm:
+            sensed = Pose(sensed.x_mm + self._random.gauss(0.0, self.settings.sensor_noise_mm), sensed.y_mm + self._random.gauss(0.0, self.settings.sensor_noise_mm), sensed.yaw_deg)
+        ex, ey = reference.x_mm - sensed.x_mm, reference.y_mm - sensed.y_mm
+        eyaw = wrap_deg(reference.yaw_deg - sensed.yaw_deg)
         raw_vx = self.settings.kp_pos * ex + self.settings.ki_pos * self.ix - self.settings.kd_pos * self.vx
         raw_vy = self.settings.kp_pos * ey + self.settings.ki_pos * self.iy - self.settings.kd_pos * self.vy
         magnitude = math.hypot(raw_vx, raw_vy)
