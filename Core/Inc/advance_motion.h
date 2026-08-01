@@ -23,18 +23,18 @@ extern "C"
 #define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
 
 /* 位置 PID 默认参数与在线调参上限。 */
-#define ADVANCE_MOTION_DEFAULT_KP_POS (2.0f) /*!< 位置误差比例默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KP_POS (1.0f) /*!< 位置误差比例默认增益。 */
 #define ADVANCE_MOTION_DEFAULT_KI_POS (0.03f) /*!< 位置误差积分默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KD_POS (0.25f) /*!< 基于实测速度的位置微分默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KD_POS (0.1f) /*!< 基于实测速度的位置微分默认增益。 */
 #define ADVANCE_MOTION_MAX_KP_POS (20.0f) /*!< 位置误差比例增益上限。 */
 #define ADVANCE_MOTION_MAX_KI_POS (20.0f) /*!< 位置误差积分增益上限。 */
 #define ADVANCE_MOTION_MAX_KD_POS (20.0f) /*!< 基于实测速度的位置微分增益上限。 */
 #define ADVANCE_MOTION_PID_POS_INTEGRAL_LIMIT_MM_S (1000.0f) /*!< 位置误差积分限幅，单位为 mm*s。 */
 
 /* 航向 PID 默认参数与在线调参上限。 */
-#define ADVANCE_MOTION_DEFAULT_KP_YAW (3.5f) /*!< 航向角误差比例默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KI_YAW (0.10f) /*!< 航向角误差积分默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KD_YAW (0.25f) /*!< 基于实测角速度的航向微分默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KP_YAW (1.9f) /*!< 航向角误差比例默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KI_YAW (0.9f) /*!< 航向角误差积分默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KD_YAW (0.2f) /*!< 基于实测角速度的航向微分默认增益。 */
 #define ADVANCE_MOTION_MAX_KP_YAW (20.0f) /*!< 航向角误差比例增益上限。 */
 #define ADVANCE_MOTION_MAX_KI_YAW (20.0f) /*!< 航向角误差积分增益上限。 */
 #define ADVANCE_MOTION_MAX_KD_YAW (20.0f) /*!< 基于实测角速度的航向微分增益上限。 */
