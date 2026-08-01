@@ -4,7 +4,8 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QPointF, QRectF
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
+from PySide6.QtTest import QTest
 
 from map_planner.gui import PlannerWindow
 
@@ -72,6 +73,22 @@ class GuiTests(unittest.TestCase):
             self.assertFalse(window.select_button.isChecked())
             window.select_all()
             self.assertEqual(len([item for item in window.scene.selectedItems() if hasattr(item, "index")]), 2)
+        finally:
+            window.close()
+
+    def test_space_left_mouse_and_middle_mouse_start_panning(self):
+        window = PlannerWindow()
+        try:
+            window.show()
+            window.view.setFocus()
+            QTest.keyPress(window.view, Qt.Key.Key_Space)
+            QTest.mousePress(window.view.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(80, 80))
+            self.assertTrue(window.view._panning)
+            QTest.mouseRelease(window.view.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(80, 80))
+            QTest.keyRelease(window.view, Qt.Key.Key_Space)
+            QTest.mousePress(window.view.viewport(), Qt.MouseButton.MiddleButton, pos=QPoint(80, 80))
+            self.assertTrue(window.view._panning)
+            QTest.mouseRelease(window.view.viewport(), Qt.MouseButton.MiddleButton, pos=QPoint(80, 80))
         finally:
             window.close()
 

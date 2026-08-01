@@ -43,15 +43,18 @@ class MapView(QGraphicsView):
 
     def __init__(self) -> None:
         super().__init__(); self.mode = "select"; self._rubber = None; self._origin = None; self._panning = False
+        self._space_pressed = False; self._pan_origin = QPoint(); self._pan_scroll = QPoint()
         self.setRenderHint(QPainter.RenderHint.Antialiasing); self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def wheelEvent(self, event):  # type: ignore[no-untyped-def]
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15; self.scale(factor, factor)
 
     def mousePressEvent(self, event):  # type: ignore[no-untyped-def]
-        if event.button() == Qt.MouseButton.MiddleButton or (event.button() == Qt.MouseButton.LeftButton and QApplication.keyboardModifiers() & Qt.KeyboardModifier.SpaceModifier):
-            self._panning = True; self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-            super().mousePressEvent(event); return
+        if event.button() == Qt.MouseButton.MiddleButton or (event.button() == Qt.MouseButton.LeftButton and self._space_pressed):
+            self._panning = True; self._pan_origin = event.position().toPoint()
+            self._pan_scroll = QPoint(self.horizontalScrollBar().value(), self.verticalScrollBar().value())
+            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor); event.accept(); return
         item = self.itemAt(event.position().toPoint())
         editable = isinstance(item, (WaypointItem, RotationHandleItem, StartItem, StartHeadingHandle))
         if event.button() == Qt.MouseButton.LeftButton and self.mode in ("add", "calibrate") and not editable:
@@ -62,18 +65,42 @@ class MapView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):  # type: ignore[no-untyped-def]
+        if self._panning:
+            delta = event.position().toPoint() - self._pan_origin
+            self.horizontalScrollBar().setValue(self._pan_scroll.x() - delta.x())
+            self.verticalScrollBar().setValue(self._pan_scroll.y() - delta.y())
+            event.accept(); return
         if self._rubber is not None:
             self._rubber.setGeometry(QRect(self._origin, event.position().toPoint()).normalized()); return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):  # type: ignore[no-untyped-def]
         if self._panning:
-            super().mouseReleaseEvent(event); self._panning = False; self.setDragMode(QGraphicsView.DragMode.NoDrag); return
+            self._panning = False
+            self.viewport().setCursor(Qt.CursorShape.OpenHandCursor if self._space_pressed else Qt.CursorShape.ArrowCursor)
+            event.accept(); return
         if self._rubber is not None:
             rect = self._rubber.geometry(); self._rubber.hide(); self._rubber = None
             if rect.width() > 3 and rect.height() > 3: self.box_selected.emit(self.mapToScene(rect).boundingRect(), bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier))
             return
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):  # type: ignore[no-untyped-def]
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_pressed = True; self.viewport().setCursor(Qt.CursorShape.OpenHandCursor); event.accept(); return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):  # type: ignore[no-untyped-def]
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_pressed = False
+            if not self._panning: self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept(); return
+        super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event):  # type: ignore[no-untyped-def]
+        self._space_pressed = False
+        if not self._panning: self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        super().focusOutEvent(event)
 
 
 class RotationHandleItem(QGraphicsEllipseItem):
@@ -136,7 +163,8 @@ class PlannerWindow(QMainWindow):
         toolbar = QHBoxLayout(); self.tool_group = QButtonGroup(self); self.tool_group.setExclusive(True)
         self.select_button = QPushButton("选择"); self.add_button = QPushButton("添加节点")
         for button, value in ((self.select_button, "select"), (self.add_button, "add")):
-            button.setCheckable(True); self.tool_group.addButton(button); button.clicked.connect(lambda checked=False, mode=value: self.set_mode(mode)); toolbar.addWidget(button)
+            button.setCheckable(True); self.tool_group.addButton(button)
+            button.toggled.connect(lambda checked=False, mode=value: checked and self.set_mode(mode)); toolbar.addWidget(button)
         self.select_button.setChecked(True); box.addLayout(toolbar)
         box.addWidget(QLabel("方案")); self.plan_list = QListWidget(); self.plan_list.itemDoubleClicked.connect(self.load_selected); self.plan_list.setMinimumHeight(76); box.addWidget(self.plan_list)
         row = QHBoxLayout()
