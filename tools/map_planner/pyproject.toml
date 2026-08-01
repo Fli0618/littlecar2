@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "littlecar-map-planner"
+version = "0.1.0"
+description = "LittleCar2 比赛地图路径规划与仿真工具"
+requires-python = ">=3.9"
+dependencies = ["PySide6>=6.6"]
+
+[project.scripts]
+littlecar-map-planner = "map_planner.gui:main"
+
+[tool.setuptools.packages.find]
+include = ["map_planner*"]
