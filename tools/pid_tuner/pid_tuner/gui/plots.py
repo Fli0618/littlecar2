@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pyqtgraph as pg
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from .buffer import TelemetryBuffer
 
@@ -11,6 +11,8 @@ class TelemetryPlots(QWidget):
 
     _LINEAR_DEFAULT_RANGE_MM = 500.0
     _YAW_DEFAULT_RANGE_DEG = 180.0
+    _MINIMUM_WIDTH = 900
+    _MINIMUM_HEIGHT = 820
 
     _DIAGNOSTIC_TITLES = (
         ("X 误差 (mm)", "Y 误差 (mm)"),
@@ -20,6 +22,7 @@ class TelemetryPlots(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self.setMinimumSize(self._MINIMUM_WIDTH, self._MINIMUM_HEIGHT)
         self.window_s = 30.0
         self.follow_latest = True
         self.mode = QComboBox()
@@ -33,6 +36,8 @@ class TelemetryPlots(QWidget):
         controls.addStretch()
 
         self.graphics = pg.GraphicsLayoutWidget()
+        self.graphics.setMinimumSize(self._MINIMUM_WIDTH, self._MINIMUM_HEIGHT - 56)
+        self.graphics.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.position_x = self.graphics.addPlot(row=0, col=0, title="OPS X 位置 (世界坐标, mm)")
         self.error_x = self.graphics.addPlot(row=0, col=1, title=self._DIAGNOSTIC_TITLES[0][0])
         self.position_y = self.graphics.addPlot(row=1, col=0, title="OPS Y 位置 (世界坐标, mm)")

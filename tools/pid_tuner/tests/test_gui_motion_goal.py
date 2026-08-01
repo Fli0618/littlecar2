@@ -57,6 +57,19 @@ class GuiMotionGoalTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_low_resolution_uses_scrollable_controls_and_plots(self) -> None:
+        window = MainWindow()
+        try:
+            window.resize(800, 600)
+            window.show()
+            self.app.processEvents()
+            self.assertIsNotNone(window.controls_scroll.widget())
+            self.assertIs(window.plots_scroll.widget(), window.plots)
+            self.assertGreaterEqual(window.plots.minimumWidth(), 900)
+            self.assertGreaterEqual(window.plots.minimumHeight(), 820)
+        finally:
+            window.close()
+
     def test_arrived_status_explains_that_motion_is_not_needed(self) -> None:
         telemetry = Telemetry(1, 2, 0, 2, 0x07, (0.0, 0.0, 0.0),
                               (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),

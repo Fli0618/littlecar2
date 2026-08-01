@@ -5,10 +5,10 @@ from pathlib import Path
 import sys
 from datetime import datetime
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
                                QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-                               QPushButton, QSpinBox, QSplitter, QVBoxLayout, QWidget, QInputDialog)
+                               QPushButton, QScrollArea, QSpinBox, QSplitter, QVBoxLayout, QWidget, QInputDialog)
 
 from ..models import MotionGoal, PidConfig
 from ..storage import DEFAULT_PROFILES_DIR, export_c_defaults, list_profiles, load_profile, save_profile, write_telemetry_csv
@@ -78,7 +78,11 @@ class MainWindow(QMainWindow):
         self.heartbeat_timer.timeout.connect(self.session.heartbeat); self.heartbeat_timer.start()
 
     def _build(self) -> None:
-        root = QSplitter(); controls = QWidget(); left = QVBoxLayout(controls); left.setContentsMargins(12, 12, 12, 12)
+        root = QSplitter(Qt.Orientation.Horizontal)
+        root.setChildrenCollapsible(False)
+        controls = QWidget()
+        controls.setMinimumWidth(300)
+        left = QVBoxLayout(controls); left.setContentsMargins(12, 12, 12, 12)
         self.port = QComboBox(); self.refresh_ports_button = QPushButton("刷新 COM"); self.baud = QComboBox(); self.baud.addItems(["115200", "230400"]); self.connect_button = QPushButton("连接")
         connection = QFormLayout(); connection.addRow("串口", self.port); connection.addRow(self.refresh_ports_button); connection.addRow("波特率", self.baud); connection.addRow(self.connect_button); left.addLayout(connection)
         self.status = QLabel("未连接"); left.addWidget(self.status)
@@ -96,7 +100,23 @@ class MainWindow(QMainWindow):
         goal_form.addRow("超时 ms", self.timeout); self.goto = QPushButton("开始组合 GOTO"); self.goto_position = QPushButton("发送位置 GOTO"); self.goto_yaw = QPushButton("发送角度 GOTO"); self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton"); self.new_experiment = QPushButton("新实验")
         goal_form.addRow(self.goto); goal_form.addRow(self.goto_position); goal_form.addRow(self.goto_yaw); goal_form.addRow(self.stop); goal_form.addRow(self.new_experiment); left.addLayout(goal_form)
         self.record = QPushButton("开始记录 CSV"); self.window = QSpinBox(); self.window.setRange(5, 120); self.window.setValue(30); left.addWidget(self.record); left.addWidget(QLabel("时间窗口 (秒)")); left.addWidget(self.window); left.addStretch()
-        self.plots = TelemetryPlots(); root.addWidget(controls); root.addWidget(self.plots); root.setSizes([330, 1110]); self.setCentralWidget(root); self.refresh_ports(); self.reload_profiles()
+        self.controls_scroll = QScrollArea()
+        self.controls_scroll.setWidgetResizable(True)
+        self.controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.controls_scroll.setWidget(controls)
+
+        self.plots = TelemetryPlots()
+        self.plots_scroll = QScrollArea()
+        self.plots_scroll.setWidgetResizable(False)
+        self.plots_scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.plots_scroll.setWidget(self.plots)
+
+        root.addWidget(self.controls_scroll)
+        root.addWidget(self.plots_scroll)
+        root.setStretchFactor(0, 0)
+        root.setStretchFactor(1, 1)
+        root.setSizes([330, 1110])
+        self.setCentralWidget(root); self.refresh_ports(); self.reload_profiles()
 
     def _wire(self) -> None:
         self.connect_button.clicked.connect(self.toggle_connection); self.refresh_ports_button.clicked.connect(self.refresh_ports); self.read_pid.clicked.connect(self.session.read_pid); self.apply_pid.clicked.connect(self.apply_current_pid); self.restore_pid.clicked.connect(self.session.restore_pid)
