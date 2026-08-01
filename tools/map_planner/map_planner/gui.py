@@ -40,6 +40,19 @@ class MapView(QGraphicsView):
         super().mousePressEvent(event)
 
 
+class WaypointItem(QGraphicsEllipseItem):
+    """可拖动的途经点，释放时把图纸坐标回写给规划模型。"""
+
+    def __init__(self, index: int, x: float, y: float, moved) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(-16, -16, 32, 32)
+        self.index = index; self.moved = moved; self.setPos(x, y)
+        self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsMovable | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setPen(QPen(QColor("#0c5d8a"), 3)); self.setBrush(QColor("#c5ecff")); self.setZValue(5)
+
+    def mouseReleaseEvent(self, event):  # type: ignore[no-untyped-def]
+        super().mouseReleaseEvent(event); point = self.scenePos(); self.moved(self.index, point.x(), point.y())
+
+
 class PlannerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__(); self.setWindowTitle("LittleCar2 比赛地图路径规划"); self.resize(1480, 920)
@@ -141,12 +154,19 @@ class PlannerWindow(QMainWindow):
             for point in points[1:]: path.lineTo(*world_to_paper(point, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.start_heading.value()))
             self.scene.addPath(path, QPen(QColor("#d27800"), 12))
         for index, point in enumerate(self.plan.waypoints):
-            paper = self._paper_pose(Pose(point.x_mm, point.y_mm, point.yaw_deg)); item = self.scene.addEllipse(paper.x_mm - 16, paper.y_mm - 16, 32, 32, QPen(QColor("#0c5d8a"), 3), QColor("#c5ecff")); item.setToolTip(f"点 {index + 1}: ({point.x_mm:.1f}, {point.y_mm:.1f})")
+            paper = self._paper_pose(Pose(point.x_mm, point.y_mm, point.yaw_deg)); item = WaypointItem(index, paper.x_mm, paper.y_mm, self.move_waypoint); self.scene.addItem(item); item.setToolTip(f"点 {index + 1}: ({point.x_mm:.1f}, {point.y_mm:.1f})")
         if self.actual_trace:
             path = QPainterPath(QPointF(*world_to_paper(self.actual_trace[0], self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.start_heading.value())))
             for point in self.actual_trace[1:]: path.lineTo(*world_to_paper(point, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.start_heading.value()))
             self.scene.addPath(path, QPen(QColor("#9e1b32"), 5, Qt.PenStyle.DashLine))
         self.status.setText("；".join(errors) if errors else self.status.text())
+
+    def move_waypoint(self, index: int, paper_x: float, paper_y: float) -> None:
+        """拖动节点后保持世界航向和停靠属性，仅更新其世界坐标。"""
+        if not 0 <= index < len(self.plan.waypoints): return
+        pose = paper_to_world(paper_x, paper_y, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.start_heading.value())
+        point = self.plan.waypoints[index]; point.x_mm, point.y_mm = pose.x_mm, pose.y_mm
+        self.refresh_waypoints(); self.waypoint_list.setCurrentRow(index); self.redraw(); self.status.setText(f"已移动途经点 {index + 1}")
 
     def _draw_car(self, actual: Pose | None) -> None:
         pose = actual or Pose(); paper = self._paper_pose(pose); side = CAR_SIZE_MM

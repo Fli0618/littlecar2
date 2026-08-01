@@ -22,5 +22,7 @@ class GuiTests(unittest.TestCase):
             window.x.setValue(25)
             window.update_waypoint()
             self.assertEqual(window.plan.waypoints[0].x_mm, 25)
+            window.move_waypoint(0, 2250, 80)
+            self.assertNotEqual(window.plan.waypoints[0].y_mm, 0)
         finally:
             window.close()
