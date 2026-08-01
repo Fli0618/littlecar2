@@ -83,10 +83,10 @@ class RotationHandleItem(QGraphicsEllipseItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
 
     def mouseMoveEvent(self, event):  # type: ignore[no-untyped-def]
-        super().mouseMoveEvent(event); self.changed()
+        super().mouseMoveEvent(event); self.changed(self)
 
     def mouseReleaseEvent(self, event):  # type: ignore[no-untyped-def]
-        super().mouseReleaseEvent(event); self.changed()
+        super().mouseReleaseEvent(event); self.changed(self)
 
 
 class WaypointItem(QGraphicsEllipseItem):
@@ -110,8 +110,8 @@ class StartHeadingHandle(QGraphicsEllipseItem):
     def __init__(self, owner, changed):  # type: ignore[no-untyped-def]
         super().__init__(-12, -12, 24, 24, owner); self.changed = changed
         self.setBrush(QColor("#ffffff")); self.setPen(QPen(QColor("#1565c0"), 3)); self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-    def mouseMoveEvent(self, event): super().mouseMoveEvent(event); self.changed()
-    def mouseReleaseEvent(self, event): super().mouseReleaseEvent(event); self.changed()
+    def mouseMoveEvent(self, event): super().mouseMoveEvent(event); self.changed(self)
+    def mouseReleaseEvent(self, event): super().mouseReleaseEvent(event); self.changed(self)
 
 
 class StartItem(QGraphicsPolygonItem):
@@ -274,14 +274,14 @@ class PlannerWindow(QMainWindow):
         h(0,2400,2400,2530,"2400","dim_2400w"); v(0,2400,2400,2500,"2400","dim_2400h"); h(550,1000,950,1015,"450","dim_platform_450"); v(500,950,550,475,"450","dim_platform_450"); h(1000,1400,500,420,"400","dim_channel_400"); h(2100,2400,0,-100,"300","dim_start_300"); v(0,300,2400,2470,"300","dim_start_300"); h(0,150,0,-180,"150","dim_margin_150"); v(1100,1300,2400,2570,"1100–1300","dim_vertical_range")
 
     def draw_start(self):
-        item=StartItem(self.plan.start_heading_deg,lambda: self.rotate_start(item.handle)); item.setPos(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm); self.scene.addItem(item)
+        item=StartItem(self.plan.start_heading_deg,self.rotate_start); item.setPos(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm); self.scene.addItem(item)
 
     def draw_route(self):
         previous=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm)
         for i,p in enumerate(self.plan.waypoints):
             paper=self.paper_of(p); current=QPointF(paper.x_mm,paper.y_mm); self.scene.addLine(previous.x(),previous.y(),current.x(),current.y(),QPen(QColor("#d27800"),8))
             mid=(previous+current)/2; badge=self.scene.addEllipse(mid.x()-18,mid.y()-18,36,36,QPen(QColor("#8a5500"),2),QColor("#ffffff")); badge.setZValue(4); label=self.scene.addText(str(i+1),QFont("Microsoft YaHei",14)); label.setPos(mid.x()-6,mid.y()-13); label.setZValue(5); previous=current
-            item=WaypointItem(i,paper.x_mm,paper.y_mm,i==self.active_index,lambda index,before,after,shift=False:self.move_waypoint(index,before,after,shift),lambda index=i: self.rotate_waypoint(index,item.handle),self.set_active_from_context); self.scene.addItem(item)
+            item=WaypointItem(i,paper.x_mm,paper.y_mm,i==self.active_index,lambda index,before,after,shift=False:self.move_waypoint(index,before,after,shift),lambda handle: self.rotate_waypoint(handle.parentItem().index,handle),self.set_active_from_context); self.scene.addItem(item)
         if self.actual_trace:
             path=QPainterPath(QPointF(*world_to_paper(self.actual_trace[0],self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)))
             for p in self.actual_trace[1:]: path.lineTo(*world_to_paper(p,self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg))
