@@ -28,7 +28,16 @@ _MODEL_PATHS: dict[str, dict[str, Path]] = {
         "circle": _CIRCLE_MODEL_PATH.with_suffix(".engine"),
     },
 }
-_MODEL_BACKEND: ModelBackend = "pt"
+# On this 8 GiB Jetson, the PyTorch path can require a large contiguous CMA
+# allocation for the attention layers.  The engines are the supported runtime
+# format and avoid that unstable allocation path.
+_MODEL_BACKEND: ModelBackend = "engine"
+
+_PYTORCH_CMA_HINT = (
+    "PyTorch CUDA inference could not allocate Jetson contiguous shared memory (CMA). "
+    "Use configure_model_backend('engine') for the deployed TensorRT engines. "
+    "If PT inference is required, close GPU/desktop clients using /dev/nvmap or reboot, then retry."
+)
 
 
 def configure_model_backend(backend: ModelBackend) -> None:
@@ -55,16 +64,27 @@ def _model_path(model_kind: str) -> Path:
     return _MODEL_PATHS[_MODEL_BACKEND][model_kind]
 
 
+def validate_engine_runtime() -> str:
+    """Verify that the JetPack TensorRT binding is importable by this Python."""
+    system_dist_packages = Path(
+        f"/usr/lib/python{sys.version_info.major}.{sys.version_info.minor}/dist-packages"
+    )
+    if system_dist_packages.is_dir() and str(system_dist_packages) not in sys.path:
+        sys.path.append(str(system_dist_packages))
+    try:
+        import tensorrt as trt
+    except Exception as exc:
+        raise RuntimeError(
+            "TensorRT Python binding is unavailable. Run the service with the Jetson yolo_env "
+            "and PYTHONNOUSERSITE=1; TensorRT must match the installed JetPack release."
+        ) from exc
+    return str(trt.__version__)
+
+
 def _create_yolo_model(model_path: Path) -> Any:
     """构造一个 YOLO 模型，供缓存加载函数调用。"""
     if model_path.suffix == ".engine":
-        # JetPack installs the TensorRT Python binding for system Python,
-        # while this project normally runs from a Conda environment.
-        system_dist_packages = Path(
-            f"/usr/lib/python{sys.version_info.major}.{sys.version_info.minor}/dist-packages"
-        )
-        if system_dist_packages.is_dir() and str(system_dist_packages) not in sys.path:
-            sys.path.append(str(system_dist_packages))
+        validate_engine_runtime()
     from ultralytics import YOLO
 
     try:
@@ -118,14 +138,21 @@ def _detect(frame_bgr: np.ndarray, model_path: Path) -> dict[str, list[dict[str,
         use_half = bool(torch.cuda.is_available())
     except Exception:
         use_half = False
-    result = model.predict(
-        source=frame_bgr,
-        imgsz=_IMAGE_SIZE,
-        half=use_half,
-        conf=_CONFIDENCE_THRESHOLD,
-        iou=_IOU_THRESHOLD,
-        verbose=False,
-    )[0]
+    try:
+        result = model.predict(
+            source=frame_bgr,
+            imgsz=_IMAGE_SIZE,
+            half=use_half,
+            conf=_CONFIDENCE_THRESHOLD,
+            iou=_IOU_THRESHOLD,
+            verbose=False,
+        )[0]
+    except RuntimeError as exc:
+        if _MODEL_BACKEND == "pt" and any(
+            marker in str(exc) for marker in ("CUBLAS_STATUS_ALLOC_FAILED", "NvMapMemAlloc", "out of memory")
+        ):
+            raise RuntimeError(_PYTORCH_CMA_HINT) from exc
+        raise
     if result.boxes is None:
         return {"detections": []}
 
