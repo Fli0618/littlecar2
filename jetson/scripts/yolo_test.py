@@ -9,12 +9,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import torch
-from ultralytics import YOLO
+from vision.yolo import detect_yolo, load_yolo_model
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 CONFIDENCE = 0.5
 IOU = 0.45
 SAMPLE_COUNT = 200
@@ -22,18 +20,18 @@ SAMPLE_COUNT = 200
 TESTS = (
     (
         "颜色物料",
-        PROJECT_ROOT / "assets" / "models" / "6color-circle-v3.pt",
+        PROJECT_ROOT / "assets" / "models" / "6color-circle-v3.engine",
         PROJECT_ROOT / "assets" / "彩色物料数据集v3" / "images",
     ),
     (
         "带数字同心圆",
-        PROJECT_ROOT / "assets" / "models" / "circle-with-number-v3.pt",
+        PROJECT_ROOT / "assets" / "models" / "circle-with-number-v3.engine",
         PROJECT_ROOT / "assets" / "circle_with_number_v3" / "images",
     ),
 )
 
 
-def run_benchmark(name: str, model: YOLO, image_dir: Path) -> None:
+def run_benchmark(name: str, model: object, image_dir: Path) -> None:
     image_paths = [
         path
         for path in image_dir.rglob("*")
@@ -53,15 +51,12 @@ def run_benchmark(name: str, model: YOLO, image_dir: Path) -> None:
             continue
 
         started = time.perf_counter()
-        result = model.predict(source=frame, conf=CONFIDENCE, iou=IOU, device=DEVICE, verbose=False)[0]
+        detections = detect_yolo(frame, model, conf_thres=CONFIDENCE, iou_thres=IOU)
         latencies_ms.append((time.perf_counter() - started) * 1000.0)
 
-        boxes = result.boxes
-        count = 0 if boxes is None else len(boxes)
-        detection_counts.append(count)
-        if boxes is not None:
-            for class_id in boxes.cls.tolist():
-                class_counts[str(result.names[int(class_id)])] += 1
+        detection_counts.append(len(detections))
+        for detection in detections:
+            class_counts[str(detection["class_name"])] += 1
 
         if index % 20 == 0 or index == len(selected_paths):
             print(f"{name}: {index}/{len(selected_paths)}")
@@ -82,9 +77,9 @@ def main() -> None:
     for name, model_path, image_dir in TESTS:
         if not model_path.is_file():
             raise FileNotFoundError(f"未找到 {name} 模型: {model_path}")
-        models.append((name, YOLO(str(model_path)), image_dir))
+        models.append((name, load_yolo_model(model_path), image_dir))
 
-    print(f"推理设备: {DEVICE}")
+    print("推理后端: TensorRT engine")
     for name, model, image_dir in models:
         run_benchmark(name, model, image_dir)
 

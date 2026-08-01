@@ -90,9 +90,16 @@ def test_advance_qr_changes_code_and_reset_clears_latch():
 
 
 def test_model_backend_rejects_unknown_values():
-    yolo.configure_model_backend("pt")
-    with pytest.raises(ValueError):
-        yolo.configure_model_backend("onnx")
+    try:
+        yolo.configure_model_backend("pt")
+        with pytest.raises(ValueError):
+            yolo.configure_model_backend("onnx")
+    finally:
+        yolo.configure_model_backend("engine")
+
+
+def test_default_backend_is_engine():
+    assert yolo.get_model_backend() == "engine"
 
 
 def test_engine_backend_requires_both_engine_files(tmp_path, monkeypatch):
@@ -101,15 +108,17 @@ def test_engine_backend_requires_both_engine_files(tmp_path, monkeypatch):
         "circle": tmp_path / "circle.engine",
     }
     monkeypatch.setitem(yolo._MODEL_PATHS, "engine", engine_paths)
-    yolo.configure_model_backend("pt")
-    with pytest.raises(FileNotFoundError):
-        yolo.configure_model_backend("engine")
+    try:
+        yolo.configure_model_backend("pt")
+        with pytest.raises(FileNotFoundError):
+            yolo.configure_model_backend("engine")
 
-    engine_paths["color"].touch()
-    engine_paths["circle"].touch()
-    yolo.configure_model_backend("engine")
-    assert yolo.get_model_backend() == "engine"
-    yolo.configure_model_backend("pt")
+        engine_paths["color"].touch()
+        engine_paths["circle"].touch()
+        yolo.configure_model_backend("engine")
+        assert yolo.get_model_backend() == "engine"
+    finally:
+        yolo.configure_model_backend("pt")
 
 
 def test_switching_backend_clears_model_cache(tmp_path, monkeypatch):
@@ -127,4 +136,17 @@ def test_switching_backend_clears_model_cache(tmp_path, monkeypatch):
         assert yolo._get_model.cache_info().currsize == 1
         yolo.configure_model_backend("engine")
         assert yolo._get_model.cache_info().currsize == 0
-    yolo.configure_model_backend("pt")
+    yolo.configure_model_backend("engine")
+
+
+def test_pt_cma_allocation_error_has_engine_recovery_hint(tmp_path, monkeypatch):
+    model_path = tmp_path / "model.pt"
+    model_path.touch()
+    monkeypatch.setitem(yolo._MODEL_PATHS, "pt", {"color": model_path, "circle": model_path})
+    model = type("Model", (), {"predict": lambda self, **kw: (_ for _ in ()).throw(RuntimeError("CUBLAS_STATUS_ALLOC_FAILED"))})()
+    try:
+        yolo.configure_model_backend("pt")
+        with patch.object(yolo, "_create_yolo_model", return_value=model), pytest.raises(RuntimeError, match="configure_model_backend\\('engine'\\)"):
+            yolo.detect_color(np.zeros((100, 100, 3), dtype=np.uint8))
+    finally:
+        yolo.configure_model_backend("engine")
