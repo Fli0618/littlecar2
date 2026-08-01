@@ -23,9 +23,9 @@ extern "C"
 #define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
 
 /* 位置 PID 默认参数与在线调参上限。 */
-#define ADVANCE_MOTION_DEFAULT_KP_POS (1.3f) /*!< 位置误差比例默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KI_POS (0.12f) /*!< 位置误差积分默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KD_POS (0.65f) /*!< 基于实测速度的位置微分默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KP_POS (1.28f) /*!< 位置误差比例默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KI_POS (0.13f) /*!< 位置误差积分默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KD_POS (0.72f) /*!< 基于实测速度的位置微分默认增益。 */
 #define ADVANCE_MOTION_MAX_KP_POS (20.0f) /*!< 位置误差比例增益上限。 */
 #define ADVANCE_MOTION_MAX_KI_POS (20.0f) /*!< 位置误差积分增益上限。 */
 #define ADVANCE_MOTION_MAX_KD_POS (20.0f) /*!< 基于实测速度的位置微分增益上限。 */
