@@ -23,33 +23,33 @@ extern "C"
 #define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
 
 /* 位置 PID 默认参数与在线调参上限。 */
-#define ADVANCE_MOTION_DEFAULT_KP_POS (1.28f) /*!< 位置误差比例默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KI_POS (0.13f) /*!< 位置误差积分默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KD_POS (0.72f) /*!< 基于实测速度的位置微分默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KP_POS (0.98f) /*!< 位置误差比例默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KI_POS (0.185f) /*!< 位置误差积分默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KD_POS (0.620f) /*!< 基于实测速度的位置微分默认增益。 */
 #define ADVANCE_MOTION_MAX_KP_POS (20.0f) /*!< 位置误差比例增益上限。 */
 #define ADVANCE_MOTION_MAX_KI_POS (20.0f) /*!< 位置误差积分增益上限。 */
 #define ADVANCE_MOTION_MAX_KD_POS (20.0f) /*!< 基于实测速度的位置微分增益上限。 */
 #define ADVANCE_MOTION_PID_POS_INTEGRAL_LIMIT_MM_S (1000.0f) /*!< 位置误差积分限幅，单位为 mm*s。 */
 
 /* 航向 PID 默认参数与在线调参上限。 */
-#define ADVANCE_MOTION_DEFAULT_KP_YAW (1.65f) /*!< 航向角误差比例默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KI_YAW (1.0f) /*!< 航向角误差积分默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KD_YAW (0.65f) /*!< 基于实测角速度的航向微分默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KP_YAW (1.42f) /*!< 航向角误差比例默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KI_YAW (0.625f) /*!< 航向角误差积分默认增益。 */
+#define ADVANCE_MOTION_DEFAULT_KD_YAW (0.427f) /*!< 基于实测角速度的航向微分默认增益。 */
 #define ADVANCE_MOTION_MAX_KP_YAW (20.0f) /*!< 航向角误差比例增益上限。 */
 #define ADVANCE_MOTION_MAX_KI_YAW (20.0f) /*!< 航向角误差积分增益上限。 */
 #define ADVANCE_MOTION_MAX_KD_YAW (20.0f) /*!< 基于实测角速度的航向微分增益上限。 */
 #define ADVANCE_MOTION_PID_YAW_INTEGRAL_LIMIT_DEG_S (180.0f) /*!< 航向角误差积分限幅，单位为 deg*s。 */
 
 /* 到达判定与无进展保护。 */
-#define ADVANCE_MOTION_POS_TOLERANCE_MM (8.0f) /*!< 位置到达容差，单位为 mm。 */
-#define ADVANCE_MOTION_YAW_TOLERANCE_DEG (1.0f) /*!< 航向角到达容差，单位为度。 */
+#define ADVANCE_MOTION_POS_TOLERANCE_MM (10.0f) /*!< 位置到达容差，单位为 mm。 */
+#define ADVANCE_MOTION_YAW_TOLERANCE_DEG (1.5f) /*!< 航向角到达容差，单位为度。 */
 #define ADVANCE_MOTION_NO_PROGRESS_WINDOW_MS ((uint32_t)2500U) /*!< 无进展判定观察窗口，单位为 ms。 */
 #define ADVANCE_MOTION_NO_PROGRESS_MIN_REDUCTION_MM (2.0f) /*!< 观察窗口内要求的最小误差下降量，单位为 mm。 */
 #define ADVANCE_MOTION_NO_PROGRESS_MIN_COMMAND_MM_S (30.0f) /*!< 启用无进展判定的最小线速度指令，单位为 mm/s。 */
 
 /* 简化到点接口的默认目标参数。 */
-#define ADVANCE_MOTION_DEFAULT_VMAX_MM_S (200.0f) /*!< 默认最大线速度，单位为 mm/s。 */
-#define ADVANCE_MOTION_DEFAULT_WMAX_DEG_S (90.0f) /*!< 默认最大角速度，单位为度/s。 */
+#define ADVANCE_MOTION_DEFAULT_VMAX_MM_S (820.0f) /*!< 默认最大线速度，单位为 mm/s。 */
+#define ADVANCE_MOTION_DEFAULT_WMAX_DEG_S (100.0f) /*!< 默认最大角速度，单位为度/s。 */
 #define ADVANCE_MOTION_DEFAULT_TIMEOUT_MS ((uint32_t)10000U) /*!< 默认目标超时时间，单位为 ms。 */
 
 /*
