@@ -1,15 +1,28 @@
 # 比赛地图路径规划工具
 
-独立的 Windows PC 工具，用于 LittleCar2 决赛场地上的路径编辑、运动仿真和方案保存。工具不会连接串口或控制车辆。
+独立的 PySide6 赛前规划与仿真工具，不连接串口，也不会向小车下发指令。
 
-在 `low_numpy` 环境安装并启动：
+地图按官方 `2400 mm × 2400 mm` 图纸绘制。四个黄色区的定位坐标由“场地中心对称、十字通道居中”关系推导为 `(550,550)`、`(1400,550)`、`(550,1400)`、`(1400,1400)`。新建方案必须先选择启停区或自定义起点，再拖动蓝色流程箭头完成朝向标定。
+
+- `选择`：框选，Ctrl 增减选择，`Ctrl+A` 全选节点，`Ctrl+Z` 撤销。
+- `添加节点`：点击添加；按住 Shift 吸附至相对前一节点的水平、垂直或 45 度方向。
+- 中键拖拽或空格加左键平移地图；滚轮只缩放地图。
+- 每个节点默认只进行位置 GOTO 并到点停止；拖动节点的圆形旋转柄会启用航向约束。
+- 框选或 `Ctrl+A` 后可批量平移、删除节点，`Ctrl+Z`/`Ctrl+Shift+Z` 撤销或重做。
+- 虚线绿色框是 `300 mm × 300 mm` 车体中心可移动范围，即图纸坐标 `X/Y=150～2250 mm`；越界方案不能保存或播放。
+
+方案 JSON 使用 `map_version: 2`。`start` 保存官方图纸坐标和起始朝向，`commands` 保存标定后固定世界坐标系中的顺序 GOTO Pose 命令；旧版方案不再兼容。
+
+在项目根目录安装并启动：
 
 ```powershell
-conda run -n low_numpy pip install -e .
+conda run -n low_numpy pip install -e tools/map_planner
 conda run -n low_numpy littlecar-map-planner
-conda run -n low_numpy python -m unittest discover -s tests
 ```
 
-场地为 2400 mm x 2400 mm。起始车辆中心是世界坐标原点，车辆前方为 `+Y`、右侧为 `+X`、逆时针航向为正。方案 JSON 默认保存到本目录的 `plans/`，该目录不提交到 Git。
+离屏测试：
 
-地图固定复刻原料区转盘、暂存区和粗加工区的同心圆物料位、四个平台、启停区及二次编码区；这些图元仅作为视觉标注，不参与碰撞判定或路径编辑。
+```powershell
+$env:QT_QPA_PLATFORM='offscreen'
+conda run -n low_numpy python -m pytest tools/map_planner/tests -q
+```
