@@ -212,8 +212,11 @@ class PlannerWindow(QMainWindow):
 
     def set_mode(self, mode):
         if mode == "add" and self.calibration_pending:
-            self.select_button.setChecked(True); self.status.setText("请先完成起点和朝向标定。"); return
-        self.mode=mode; self.view.mode=mode; self.status.setText("选择：框选、Ctrl 多选；中键或空格+左键平移地图。" if mode=="select" else "添加节点：点击地图添加，按住 Shift 吸附水平、垂直或 45 度。")
+            self.select_button.setChecked(True)
+            if hasattr(self,"status"): self.status.setText("请先完成起点和朝向标定。")
+            return
+        self.mode=mode; self.view.mode=mode
+        if hasattr(self,"status"): self.status.setText("选择：框选、Ctrl 多选；中键或空格+左键平移地图。" if mode=="select" else "添加节点：点击地图添加，按住 Shift 吸附水平、垂直或 45 度。")
         if mode == "select": self.select_button.setChecked(True)
         elif mode == "add": self.add_button.setChecked(True)
 
