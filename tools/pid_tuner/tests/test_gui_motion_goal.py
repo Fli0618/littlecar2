@@ -5,7 +5,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QAbstractSpinBox
 
 from pid_tuner.gui.app import GOTO_YAW_LABEL, MainWindow, format_telemetry_status, validate_motion_goal
 from pid_tuner.gui.session import SessionController
@@ -30,7 +30,22 @@ class GuiMotionGoalTests(unittest.TestCase):
 
     def test_invalid_motion_goal_is_rejected_locally(self) -> None:
         goal = MotionGoal(0.0, 0.0, 0.0, 0.0, 30.0, 5000)
-        self.assertEqual(validate_motion_goal(goal), "vmax 必须在 0-600 mm/s 之间")
+        self.assertEqual(validate_motion_goal(goal), "vmax 必须在 0-1200 mm/s 之间")
+
+    def test_vmax_limit_accepts_1200_and_rejects_values_above_it(self) -> None:
+        at_limit = MotionGoal(0.0, 0.0, 0.0, 1200.0, 120.0, 5000)
+        above_limit = MotionGoal(0.0, 0.0, 0.0, 1200.1, 120.0, 5000)
+        self.assertIsNone(validate_motion_goal(at_limit))
+        self.assertEqual(validate_motion_goal(above_limit), "vmax 必须在 0-1200 mm/s 之间")
+
+    def test_float_inputs_hide_spinbox_buttons(self) -> None:
+        window = MainWindow()
+        try:
+            inputs = [*window.pid, *window.goal]
+            self.assertTrue(inputs)
+            self.assertTrue(all(widget.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.NoButtons for widget in inputs))
+        finally:
+            window.close()
 
     def test_arrived_status_explains_that_motion_is_not_needed(self) -> None:
         telemetry = Telemetry(1, 2, 0, 2, 0x07, (0.0, 0.0, 0.0),
