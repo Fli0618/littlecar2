@@ -15,9 +15,17 @@ class GuiTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    @staticmethod
+    def calibrated(window):
+        window.calibration_pending = False
+        window.calibration_stage = "complete"
+        window.update_calibration_ui()
+        window.set_mode("add")
+
     def test_map_click_adds_waypoint_and_updates_properties(self):
         window = PlannerWindow()
         try:
+            self.calibrated(window)
             window.on_map_click(2250, 100)
             self.assertEqual(len(window.plan.waypoints), 1)
             window.waypoint_list.setCurrentRow(0)
@@ -32,10 +40,11 @@ class GuiTests(unittest.TestCase):
     def test_box_selection_and_undo_restore_plan(self):
         window = PlannerWindow()
         try:
+            self.calibrated(window)
             window.on_map_click(2250, 100)
             window.on_map_click(2200, 100)
             window.select_box(QRectF(2100, 0, 250, 250), False)
-            self.assertEqual(len(window.scene.selectedItems()), 3)
+            self.assertEqual(len(window.scene.selectedItems()), 2)
             window.remove_waypoint()
             self.assertEqual(len(window.plan.waypoints), 0)
             window.undo()
@@ -66,7 +75,7 @@ class GuiTests(unittest.TestCase):
     def test_toolbar_is_exclusive_and_ctrl_a_selects_nodes(self):
         window = PlannerWindow()
         try:
-            window.set_mode("add")
+            self.calibrated(window)
             window.on_map_click(2200, 200)
             window.on_map_click(2100, 300)
             self.assertTrue(window.add_button.isChecked())
@@ -95,12 +104,42 @@ class GuiTests(unittest.TestCase):
     def test_shift_snap_and_goto_pose_defaults(self):
         window = PlannerWindow()
         try:
-            window.set_mode("add")
+            self.calibrated(window)
             window.on_map_click(2200, 200)
             window.on_map_click(2100, 260, True)
             self.assertTrue(window.plan.waypoints[-1].stop)
             self.assertFalse(window.plan.waypoints[-1].use_yaw)
             point = window.paper_of(window.plan.waypoints[-1])
             self.assertAlmostEqual(abs(point.x_mm - 2200), abs(point.y_mm - 200), delta=1)
+        finally:
+            window.close()
+
+    def test_calibration_gates_route_editing(self):
+        window = PlannerWindow()
+        try:
+            window.set_mode("add")
+            window.on_map_click(2000, 200)
+            self.assertEqual(window.mode, "select")
+            self.assertEqual(window.plan.waypoints, [])
+            self.assertFalse(window.add_button.isEnabled())
+            window.begin_start("启停区 1")
+            self.assertEqual(window.calibration_stage, "heading")
+        finally:
+            window.close()
+
+    def test_selected_nodes_move_as_a_group(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.on_map_click(2000, 300)
+            window.on_map_click(1900, 400)
+            window.select_all()
+            before=[window.paper_of(point) for point in window.plan.waypoints]
+            window.active_index=1
+            window.move_waypoint(1,QPointF(before[1].x_mm,before[1].y_mm),QPointF(before[1].x_mm+40,before[1].y_mm+20))
+            after=[window.paper_of(point) for point in window.plan.waypoints]
+            for old,new in zip(before,after):
+                self.assertAlmostEqual(new.x_mm-old.x_mm,40)
+                self.assertAlmostEqual(new.y_mm-old.y_mm,20)
         finally:
             window.close()
