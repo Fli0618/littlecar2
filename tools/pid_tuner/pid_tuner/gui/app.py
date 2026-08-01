@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
                                QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
                                QPushButton, QSpinBox, QSplitter, QVBoxLayout, QWidget, QInputDialog)
 
@@ -16,7 +16,7 @@ from .plots import TelemetryPlots
 from .session import SessionController
 
 
-GOTO_VMAX_MM_S = 600.0
+GOTO_VMAX_MM_S = 1200.0
 GOTO_WMAX_DEG_S = 120.0
 GOTO_TIMEOUT_MS = 15000
 HEARTBEAT_INTERVAL_MS = 250
@@ -35,6 +35,7 @@ MOTION_STATE_TEXT = {
 
 def number(value: float = 0.0, minimum: float = -100000.0, maximum: float = 100000.0) -> QDoubleSpinBox:
     box = QDoubleSpinBox(); box.setRange(minimum, maximum); box.setDecimals(4); box.setValue(value); box.setSingleStep(0.1)
+    box.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
     return box
 
 
@@ -42,7 +43,7 @@ def validate_motion_goal(goal: MotionGoal) -> str | None:
     if not all(math.isfinite(value) for value in (goal.x_mm, goal.y_mm, goal.yaw_deg, goal.vmax_mm_s, goal.wmax_deg_s)):
         return "GOTO 参数必须是有限数值"
     if not 0.0 < goal.vmax_mm_s <= GOTO_VMAX_MM_S:
-        return "vmax 必须在 0-600 mm/s 之间"
+        return "vmax 必须在 0-1200 mm/s 之间"
     if not 0.0 < goal.wmax_deg_s <= GOTO_WMAX_DEG_S:
         return "wmax 必须在 0-120 deg/s 之间"
     if not 0 < goal.timeout_ms <= GOTO_TIMEOUT_MS:
