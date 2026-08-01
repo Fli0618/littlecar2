@@ -61,3 +61,29 @@ class GuiTests(unittest.TestCase):
             self.assertIn("rough_label", markers)
         finally:
             window.close()
+
+    def test_toolbar_is_exclusive_and_ctrl_a_selects_nodes(self):
+        window = PlannerWindow()
+        try:
+            window.set_mode("add")
+            window.on_map_click(2200, 200)
+            window.on_map_click(2100, 300)
+            self.assertTrue(window.add_button.isChecked())
+            self.assertFalse(window.select_button.isChecked())
+            window.select_all()
+            self.assertEqual(len([item for item in window.scene.selectedItems() if hasattr(item, "index")]), 2)
+        finally:
+            window.close()
+
+    def test_shift_snap_and_goto_pose_defaults(self):
+        window = PlannerWindow()
+        try:
+            window.set_mode("add")
+            window.on_map_click(2200, 200)
+            window.on_map_click(2100, 260, True)
+            self.assertTrue(window.plan.waypoints[-1].stop)
+            self.assertFalse(window.plan.waypoints[-1].use_yaw)
+            point = window.paper_of(window.plan.waypoints[-1])
+            self.assertAlmostEqual(abs(point.x_mm - 2200), abs(point.y_mm - 200), delta=1)
+        finally:
+            window.close()

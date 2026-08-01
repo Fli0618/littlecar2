@@ -24,9 +24,15 @@ class Waypoint:
     x_mm: float
     y_mm: float
     yaw_deg: float = 0.0
-    stop: bool = False
-    dwell_s: float = 0.0
+    # GOTO Pose 默认只约束位置；拖动旋转手柄后才约束航向。
+    stop: bool = True
+    dwell_s: float = 0.5
     name: str = ""
+    use_position: bool = True
+    use_yaw: bool = False
+    vmax_mm_s: float = 200.0
+    wmax_deg_s: float = 90.0
+    timeout_s: float = 15.0
 
 
 @dataclass

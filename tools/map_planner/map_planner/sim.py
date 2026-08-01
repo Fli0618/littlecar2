@@ -48,6 +48,8 @@ class Simulation:
     def __post_init__(self) -> None:
         if self.route:
             self.actual = Pose(self.route[0].x_mm, self.route[0].y_mm, self.route[0].yaw_deg)
+            # 路线的第一个元素是当前位姿，后续元素依次是 GOTO Pose 目标。
+            self.route_index = 1 if len(self.route) > 1 else 0
 
     def step(self) -> SimulationFrame:
         if not self.route:
@@ -59,7 +61,7 @@ class Simulation:
             self.dwell_remaining_s = max(0.0, self.dwell_remaining_s - dt)
             self.elapsed_s += dt
             return self._frame(self.route[self.route_index], True)
-        reference = self.route[min(len(self.route) - 1, self.route_index + max(1, int(self.settings.lookahead_mm / 10.0)))]
+        reference = self.route[self.route_index]
         self.sensor_history.append(Pose(self.actual.x_mm, self.actual.y_mm, self.actual.yaw_deg))
         delay_steps = int(self.settings.sensor_delay_s / dt)
         sensed = self.sensor_history[max(0, len(self.sensor_history) - 1 - delay_steps)]
@@ -82,10 +84,10 @@ class Simulation:
         self.vy += (command_vy - self.vy) * min(1.0, dt / max(0.001, self.settings.linear_response_s))
         self.wz += (command_wz - self.wz) * min(1.0, dt / max(0.001, self.settings.yaw_response_s))
         self.actual.x_mm += self.vx * dt; self.actual.y_mm += self.vy * dt; self.actual.yaw_deg = wrap_deg(self.actual.yaw_deg + self.wz * dt)
-        if math.hypot(self.route[self.route_index].x_mm - self.actual.x_mm, self.route[self.route_index].y_mm - self.actual.y_mm) < 25.0:
-            self.route_index += 1
-            if self.route_index - 1 in self.stop_indices:
+        if math.hypot(reference.x_mm - self.actual.x_mm, reference.y_mm - self.actual.y_mm) < 25.0:
+            if self.route_index in self.stop_indices:
                 self.dwell_remaining_s = 0.5
+            self.route_index += 1
             if self.route_index >= len(self.route):
                 self.route_index = len(self.route) - 1; self.finished = True
         self.elapsed_s += dt
