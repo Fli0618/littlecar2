@@ -7,7 +7,7 @@ import time
 
 import cv2
 
-from vision import advance_detect_circle, advance_detect_color, reset_advance_tracking
+from vision import advance_detect_circle, advance_detect_color, configure_model_backend, reset_advance_tracking
 
 
 CAMERA_DEVICE = "/dev/video0"
@@ -25,6 +25,7 @@ def _print_result(name: str, result: dict[str, object], inference_ms: float) -> 
 
 
 def main() -> None:
+    configure_model_backend("engine")
     camera = cv2.VideoCapture(CAMERA_DEVICE, cv2.CAP_V4L2)
     if not camera.isOpened():
         camera.release()

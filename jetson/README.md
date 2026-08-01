@@ -22,12 +22,24 @@ MODEL_BACKEND = "pt"       # 使用 .pt
 MODEL_BACKEND = "engine"   # 使用 TensorRT .engine
 ```
 
+比赛服务和维护中的视觉测试均以 `engine` 为默认后端。Jetson 的 `.pt` / PyTorch CUDA 推理可能因 CMA 连续共享内存不足而报 `NvMapMemAlloc error 12` 或 `CUBLAS_STATUS_ALLOC_FAILED`；这不代表 CUDA 安装损坏。优先使用 TensorRT engine，不要为此重装 CUDA 或 PyTorch。
+
+先执行无相机、无串口的只读诊断与两模型预热：
+
+```bash
+PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python scripts/check_yolo_runtime.py
+```
+
+若诊断仍出现 NvMap/CMA 分配失败，请先关闭使用 `/dev/nvmap` 的桌面、浏览器或远程图形程序后重试；连续内存未恢复时重启 Jetson。常规运行必须固定使用项目 `yolo_env` 并加上 `PYTHONNOUSERSITE=1`，以避免 `~/.local` 中的 Python 包覆盖已验证的运行环境。
+
 TensorRT engine 需要在当前 Jetson 上先生成：
 
 ```bash
 PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python scripts/tensorrt推理测试/export_models.py
 PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python scripts/tensorrt推理测试/jetson_test_vision.py
 ```
+
+只有更换 Jetson、JetPack/CUDA/TensorRT 版本或模型权重时，才需要运行 `export_models.py` 重建 engine。该导出步骤会走 `.pt` CUDA 路径，可能需要在关闭桌面图形程序或重启后的低内存状态执行；生成的 engine 仅保证与当前设备和 JetPack 兼容。
 
 Jetson 上可使用以下无图形界面测试脚本。脚本顶部的 `CAMERA_DEVICE` 可以分别修改为目标设备路径，按 `Ctrl+C` 退出：
 
