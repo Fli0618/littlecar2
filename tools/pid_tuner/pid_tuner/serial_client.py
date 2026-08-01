@@ -11,8 +11,9 @@ from typing import Protocol
 from .models import BoardError, MotionGoal, PidConfig, RequestTimeout, Telemetry
 from .protocol import (
     CMD_ACK, CMD_ERROR, CMD_GET_PID, CMD_GOTO_POSE, CMD_HEARTBEAT, CMD_PID,
-    CMD_RESTORE_PID, CMD_SET_PID, CMD_STOP, CMD_TELEMETRY, Frame, ProtocolError,
-    StreamDecoder, decode_pid, decode_telemetry, encode_frame, encode_goal, encode_pid,
+    CMD_RESET_ORIGIN, CMD_RESTORE_PID, CMD_SET_PID, CMD_SET_YAW_SOURCE, CMD_STOP,
+    CMD_TELEMETRY, Frame, ProtocolError, StreamDecoder, decode_pid, decode_telemetry,
+    encode_frame, encode_goal, encode_pid, encode_yaw_source,
 )
 
 
@@ -104,6 +105,12 @@ class SerialClient:
 
     def goto(self, goal: MotionGoal) -> None:
         self.request(CMD_GOTO_POSE, encode_goal(goal))
+
+    def set_yaw_source(self, source: str) -> None:
+        self.request(CMD_SET_YAW_SOURCE, encode_yaw_source(source))
+
+    def reset_origin(self) -> None:
+        self.request(CMD_RESET_ORIGIN)
 
     def heartbeat(self) -> None:
         self.request(CMD_HEARTBEAT)

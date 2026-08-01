@@ -2,7 +2,7 @@ import struct
 import unittest
 
 from pid_tuner.protocol import (
-    CMD_TELEMETRY,
+    CMD_TELEMETRY, encode_goal, encode_yaw_source,
     Frame,
     StreamDecoder,
     crc16_ccitt_false,
@@ -33,16 +33,25 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual([(item.command, item.sequence) for item in frames], [(0x12, 2)])
 
     def test_telemetry_layout(self) -> None:
-        payload = struct.pack("<IIIBBH18f", 100, 3, 5, 1, 0x1F, 0xC12C, *range(18))
+        payload = struct.pack("<IIIBBH20f", 100, 3, 5, 1, 0x9F, 0xC12C, *range(20))
         telemetry = decode_telemetry(Frame(CMD_TELEMETRY, 9, payload))
         self.assertEqual(telemetry.tick, 100)
         self.assertEqual(telemetry.pid_revision, 3)
         self.assertEqual(telemetry.overwritten_count, 5)
         self.assertEqual(telemetry.target, (0.0, 1.0, 2.0))
         self.assertEqual(telemetry.integrals, (15.0, 16.0, 17.0))
+        self.assertEqual((telemetry.wit_yaw_deg, telemetry.ops_yaw_deg), (18.0, 19.0))
+        self.assertEqual(telemetry.yaw_source, "OPS")
         self.assertTrue(telemetry.remote_goal_active)
         self.assertTrue(telemetry.heartbeat_timed_out)
         self.assertEqual(telemetry.heartbeat_age_ms, 300)
+
+    def test_goal_flags_and_yaw_source_encoding(self) -> None:
+        from pid_tuner.models import MotionGoal
+        self.assertEqual(encode_goal(MotionGoal(0, 0, 0, 1, 1, 1))[-1], 0x03)
+        self.assertEqual(encode_goal(MotionGoal(0, 0, 0, 1, 1, 1, use_yaw=False))[-1], 0x02)
+        self.assertEqual(encode_goal(MotionGoal(0, 0, 0, 1, 1, 1, use_position=False))[-1], 0x01)
+        self.assertEqual(encode_yaw_source("ops"), b"\x01")
 
 
 if __name__ == "__main__":

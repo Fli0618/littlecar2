@@ -18,12 +18,13 @@ class TelemetryPlotsTests(unittest.TestCase):
     def test_pose_and_diagnostics_are_split_by_axis(self) -> None:
         plots = TelemetryPlots()
 
-        self.assertEqual(len(plots.plots), 6)
+        self.assertEqual(len(plots.plots), 8)
         self.assertIsNot(plots.position_x, plots.position_y)
-        self.assertEqual(len(plots.diag), 3)
+        self.assertEqual(len(plots.diag), 4)
         self.assertIn("X 误差", plots.error_x.titleLabel.text)
         self.assertIn("Y 误差", plots.error_y.titleLabel.text)
-        self.assertIn("航向误差", plots.error_yaw.titleLabel.text)
+        self.assertIn("WIT 航向误差", plots.error_wit_yaw.titleLabel.text)
+        self.assertIn("OPS 航向误差", plots.error_ops_yaw.titleLabel.text)
 
     def test_diagnostic_mode_updates_each_axis_title(self) -> None:
         plots = TelemetryPlots()
@@ -35,7 +36,7 @@ class TelemetryPlotsTests(unittest.TestCase):
 
         self.assertIn("X 命令-实际速度", plots.error_x.titleLabel.text)
         self.assertIn("Y 命令-实际速度", plots.error_y.titleLabel.text)
-        self.assertIn("航向命令-实际速度", plots.error_yaw.titleLabel.text)
+        self.assertIn("WIT 航向误差", plots.error_wit_yaw.titleLabel.text)
 
     def test_normal_pose_and_error_ranges_are_fixed(self) -> None:
         plots = TelemetryPlots()
@@ -46,9 +47,9 @@ class TelemetryPlotsTests(unittest.TestCase):
 
         self.assertEqual(plots.position_x.viewRange()[1], [-500.0, 500.0])
         self.assertEqual(plots.position_y.viewRange()[1], [-500.0, 500.0])
-        self.assertEqual(plots.yaw.viewRange()[1], [-180.0, 180.0])
+        self.assertEqual(plots.wit_yaw.viewRange()[1], [-180.0, 180.0])
         self.assertEqual(plots.error_x.viewRange()[1], [-500.0, 500.0])
-        self.assertEqual(plots.error_yaw.viewRange()[1], [-180.0, 180.0])
+        self.assertEqual(plots.error_wit_yaw.viewRange()[1], [-180.0, 180.0])
 
     def test_out_of_range_pose_expands_y_range(self) -> None:
         plots = TelemetryPlots()

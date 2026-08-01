@@ -31,6 +31,14 @@ extern "C"
 #define ADVANCE_WORLD_OPS_OFFSET_X_MM (0.0f) /*!< OPS 相对车体中心 X 偏移，单位为 mm。 */
 #define ADVANCE_WORLD_OPS_OFFSET_Y_MM (0.0f) /*!< OPS 相对车体中心 Y 偏移，单位为 mm。 */
 
+typedef enum
+{
+  ADVANCE_WORLD_YAW_SOURCE_WIT = 0,
+  ADVANCE_WORLD_YAW_SOURCE_OPS
+} AdvanceWorld_YawSource_t;
+
+#define ADVANCE_WORLD_DEFAULT_YAW_SOURCE ADVANCE_WORLD_YAW_SOURCE_WIT /*!< 上电默认航向 PID 数据源。 */
+
   typedef enum
   {
     ADVANCE_WORLD_STATUS_OK = 0,
@@ -45,10 +53,16 @@ extern "C"
     float x_mm; /*!< X 坐标，单位为 mm。 */
     float y_mm; /*!< Y 坐标，单位为 mm。 */
     float yaw_deg; /*!< 航向角，单位为度。 */
+    float wit_yaw_deg; /*!< WIT 标定后相对航向角，单位为度。 */
+    float ops_yaw_deg; /*!< OPS 标定后相对 Z 航向角，单位为度。 */
     uint32_t updated_tick; /*!< 位姿更新时间，单位为 ms。 */
     uint32_t yaw_updated_tick; /*!< 航向角更新时间，单位为 ms。 */
+    uint32_t wit_yaw_updated_tick; /*!< WIT 航向更新时间，单位为 ms。 */
+    uint32_t ops_yaw_updated_tick; /*!< OPS 航向更新时间，单位为 ms。 */
     uint8_t valid; /*!< 位姿有效标志：1-有效，0-无效。 */
     uint8_t origin_ready; /*!< 原点是否已建立：1-是，0-否。 */
+    uint8_t wit_yaw_valid; /*!< WIT 相对航向有效标志。 */
+    uint8_t ops_yaw_valid; /*!< OPS 相对航向有效标志。 */
   } WorldPose2D_t;
 
 #ifdef ADVANCE_WORLD_INTERNAL
@@ -78,6 +92,12 @@ extern "C"
   void AdvanceWorld_Update(void);
   /** @brief 获取当前世界位姿副本。 @param pose 输出位姿结构体。 @return 获取结果状态。 */
   AdvanceWorld_Status_t AdvanceWorld_GetPoseCopy(WorldPose2D_t *pose);
+  /** @brief 设置航向 PID 数据源。切换后下一控制周期生效。 */
+  AdvanceWorld_Status_t AdvanceWorld_SetYawSource(AdvanceWorld_YawSource_t source);
+  /** @brief 获取当前航向 PID 数据源。 */
+  AdvanceWorld_YawSource_t AdvanceWorld_GetYawSource(void);
+  /** @brief 获取当前所选航向源的相对航向，不要求 OPS 位置有效。 */
+  AdvanceWorld_Status_t AdvanceWorld_GetYawCopy(float *yaw_deg, uint32_t *updated_tick);
 
   /** @brief 将角度归一化到标准范围。 @param angle_deg 输入角度，单位为度。 @return 归一化后的角度。 */
   float AdvanceWorld_WrapAngleDeg(float angle_deg);

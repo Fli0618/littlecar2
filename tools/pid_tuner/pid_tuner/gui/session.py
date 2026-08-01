@@ -14,7 +14,9 @@ class SessionController(QObject):
     status = Signal(str)
     failure = Signal(str)
     pid_read = Signal(int, object)
-    pid_applied = Signal(int)
+    pid_applied = Signal(int, object)
+    yaw_source_changed = Signal(str)
+    origin_reset = Signal()
     motion_changed = Signal(bool)
 
     def __init__(self) -> None:
@@ -79,10 +81,16 @@ class SessionController(QObject):
         self._submit(lambda client: client.get_pid(), lambda value: self.pid_read.emit(value[0], value[1]))
 
     def apply_pid(self, pid: PidConfig) -> None:
-        self._submit(lambda client: client.set_pid(pid), lambda value: self.pid_applied.emit(value))
+        self._submit(lambda client: client.set_pid(pid), lambda value: self.pid_applied.emit(value, pid))
 
     def restore_pid(self) -> None:
-        self._submit(lambda client: client.restore_pid(), lambda value: self.pid_applied.emit(value))
+        self._submit(lambda client: client.restore_pid(), lambda value: self.status.emit(f"PID 已恢复默认，修订号 {value}"))
+
+    def set_yaw_source(self, source: str) -> None:
+        self._submit(lambda client: client.set_yaw_source(source), lambda _: self.yaw_source_changed.emit(source))
+
+    def reset_origin(self) -> None:
+        self._submit(lambda client: client.reset_origin(), lambda _: self.origin_reset.emit())
 
     def start_motion(self, goal: MotionGoal) -> None:
         self._motion_generation += 1

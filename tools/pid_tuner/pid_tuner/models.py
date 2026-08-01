@@ -27,6 +27,7 @@ class MotionGoal:
     wmax_deg_s: float
     timeout_ms: int
     use_yaw: bool = True
+    use_position: bool = True
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,8 @@ class Telemetry:
     measured_velocity: tuple[float, float, float]
     integrals: tuple[float, float, float]
     remote_link_status: int = 0
+    wit_yaw_deg: float = 0.0
+    ops_yaw_deg: float = 0.0
 
     @property
     def remote_goal_active(self) -> bool:
@@ -55,6 +58,10 @@ class Telemetry:
     @property
     def heartbeat_age_ms(self) -> int:
         return self.remote_link_status & 0x3FFF
+
+    @property
+    def yaw_source(self) -> str:
+        return "OPS" if (self.flags & 0x80) else "WIT"
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
