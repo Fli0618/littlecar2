@@ -1,5 +1,3 @@
-import os
-import sys
 import glob
 import time
 import random
@@ -14,49 +12,14 @@ import matplotlib.pyplot as plt
 # 脚本位于: scripts/圆形检测/yolo检测/yolo同心圆推理测试.py
 # 深度为4层父目录：yolo同心圆推理测试.py -> yolo检测/ -> 圆形检测/ -> scripts/ -> PROJECT_ROOT
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-try:
-    from vision import load_yolo_model, detect_yolo
-except ImportError:
-    from ultralytics import YOLO
-    
-    def load_yolo_model(model_path: str | Path):
-        return YOLO(str(model_path))
-
-    def detect_yolo(
-        frame_bgr: np.ndarray,
-        model: Any,
-        conf_thres: float = 0.5,
-        iou_thres: float = 0.45,
-        device: str | None = None,
-    ) -> list[dict[str, Any]]:
-        result = model.predict(source=frame_bgr, conf=conf_thres, iou=iou_thres, device=device, verbose=False)[0]
-        if result.boxes is None:
-            return []
-        names = model.names
-        detections: list[dict[str, Any]] = []
-        for box in result.boxes:
-            class_id = int(box.cls[0])
-            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-            detections.append({
-                "class_id": class_id,
-                "class_name": names.get(class_id, str(class_id)),
-                "confidence": float(box.conf[0]),
-                "x1": int(x1),
-                "y1": int(y1),
-                "x2": int(x2),
-                "y2": int(y2),
-                "center_x": int((x1 + x2) / 2),
-                "center_y": int((y1 + y2) / 2),
-            })
-        return detections
+from vision.yolo import detect_yolo, load_yolo_model
 
 
 # ==================== 配置区域 ====================
 # 1. 尝试加载相对路径，若不存在则降级加载指定的绝对路径
-RELATIVE_MODEL_PATH = PROJECT_ROOT / "assets" / "models" / "circle-with-number-v3.pt"
-ABSOLUTE_MODEL_PATH = Path(r"F:\Project\littleCar2\zhengdian\4-29\jetson\assets\models\circle-with-number-v3.pt")
+RELATIVE_MODEL_PATH = PROJECT_ROOT / "assets" / "models" / "circle-with-number-v3.engine"
+ABSOLUTE_MODEL_PATH = Path(r"F:\Project\littleCar2\zhengdian\4-29\jetson\assets\models\circle-with-number-v3.engine")
 
 if RELATIVE_MODEL_PATH.exists():
     MODEL_PATH = RELATIVE_MODEL_PATH
@@ -64,7 +27,7 @@ else:
     MODEL_PATH = ABSOLUTE_MODEL_PATH
 
 DATASET_DIR = PROJECT_ROOT / "assets" / "circle_with_number_v3"
-DEVICE = "cuda:0" if cv2.ocl.haveOpenCL() else "cpu"
+DEVICE = None  # TensorRT engine selects its CUDA device internally.
 CONF_THRES = 0.5
 IOU_THRES = 0.45
 NUM_TEST_IMAGES = 200  # 压测样本数

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import time
 from pathlib import Path
 
@@ -11,7 +10,6 @@ import Jetson.GPIO as GPIO
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from vision.yolo import detect_yolo, load_yolo_model
 
@@ -23,8 +21,8 @@ PWM_DUTY_CYCLE_PERCENT = 50.0
 LIGHT_SETTLE_SECONDS = 0.3
 
 VISION_MODE = "circle"  # 可选 circle 或 color
-CIRCLE_MODEL_PATH = PROJECT_ROOT / "assets" / "models" / "circle-with-number-v3.pt"
-COLOR_MODEL_PATH = PROJECT_ROOT / "assets" / "models" / "6color-circle-v3.pt"
+CIRCLE_MODEL_PATH = PROJECT_ROOT / "assets" / "models" / "circle-with-number-v3.engine"
+COLOR_MODEL_PATH = PROJECT_ROOT / "assets" / "models" / "6color-circle-v3.engine"
 
 CAMERA_SOURCE = 0
 CONF_THRESHOLD = 0.5

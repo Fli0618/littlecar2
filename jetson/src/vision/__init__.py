@@ -10,13 +10,14 @@ from .advance_yolo import (
 from .materials import advance_detect_disk_center, detect_disk_center
 from .preview import render_camera_preview
 from .qr import QR_CONFIRM_COUNT, QR_MISSING_THRESHOLD, QR_WINDOW_SIZE, advance_detect_qr, detect_qr, reset_qr_tracking
-from .yolo import configure_model_backend, detect_circle, detect_color, get_model_backend
+from .yolo import configure_model_backend, detect_circle, detect_color, get_model_backend, validate_engine_runtime
 
 __all__ = [
     "detect_circle",
     "detect_color",
     "configure_model_backend",
     "get_model_backend",
+    "validate_engine_runtime",
     "detect_disk_center",
     "render_camera_preview",
     "advance_detect_circle",
