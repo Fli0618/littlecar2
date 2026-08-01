@@ -6,7 +6,7 @@ import math
 import sys
 
 from PySide6.QtCore import QPointF, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
                                QGraphicsEllipseItem, QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem,
                                QGraphicsRectItem, QGraphicsScene, QGraphicsView, QHBoxLayout, QInputDialog,
@@ -17,6 +17,10 @@ from .geometry import paper_to_world, sample_route, world_to_paper
 from .models import CAR_SIZE_MM, FIELD_SIZE_MM, Plan, Pose, Segment, Waypoint
 from .sim import Simulation
 from .storage import list_plans, load_plan, save_plan
+
+MATERIAL_STORAGE_SLOTS = ((75.0, 1050.0), (75.0, 1200.0), (75.0, 1350.0))
+ROUGH_PROCESSING_SLOTS = ((1050.0, 2325.0), (1200.0, 2325.0), (1350.0, 2325.0))
+RAW_TURNTABLE_CENTER = (1200.0, 0.0)
 
 
 def spin(value: float = 0.0, minimum: float = -10000.0, maximum: float = 10000.0, step: float = 10.0) -> QDoubleSpinBox:
@@ -35,7 +39,8 @@ class MapView(QGraphicsView):
         self.scale(factor, factor)
 
     def mousePressEvent(self, event):  # type: ignore[no-untyped-def]
-        if event.button() == Qt.MouseButton.LeftButton and self.itemAt(event.position().toPoint()) is None:
+        item = self.itemAt(event.position().toPoint())
+        if event.button() == Qt.MouseButton.LeftButton and not isinstance(item, WaypointItem):
             point = self.mapToScene(event.position().toPoint()); self.clicked.emit(point.x(), point.y()); event.accept(); return
         super().mousePressEvent(event)
 
@@ -134,13 +139,46 @@ class PlannerWindow(QMainWindow):
         self.scene.clear(); self.scene.setSceneRect(-250, -250, 2900, 2900); self._draw_field(); self._draw_start(); self._draw_route(); self._draw_car(self.simulation.actual if self.simulation else None)
 
     def _draw_field(self) -> None:
-        self.scene.addRect(0, 0, FIELD_SIZE_MM, FIELD_SIZE_MM, QPen(QColor("#666666"), 5), QColor("#dcdcdc"))
-        for x, y in ((550, 500), (1400, 500), (550, 1450), (1400, 1450)): self.scene.addRect(x, y, 450, 450, QPen(Qt.PenStyle.NoPen), QColor("#fffce2"))
-        self.scene.addLine(1200, 0, 1200, 2400, QPen(QColor("#5b5b5b"), 3, Qt.PenStyle.DashLine)); self.scene.addLine(0, 1200, 2400, 1200, QPen(QColor("#5b5b5b"), 3, Qt.PenStyle.DashLine))
+        self._static_rect(0, 0, FIELD_SIZE_MM, FIELD_SIZE_MM, QPen(QColor("#666666"), 5), QColor("#dcdcdc"), "field")
+        for x, y in ((550, 500), (1400, 500), (550, 1450), (1400, 1450)): self._static_rect(x, y, 450, 450, QPen(Qt.PenStyle.NoPen), QColor("#fffce2"), "platform")
+        self._static_line(1200, 0, 1200, 2400, QPen(QColor("#5b5b5b"), 3, Qt.PenStyle.DashLine), "center_line"); self._static_line(0, 1200, 2400, 1200, QPen(QColor("#5b5b5b"), 3, Qt.PenStyle.DashLine), "center_line")
         for x, y, name in ((2250, 150, "启停区1"), (2250, 2250, "启停区2")):
-            self.scene.addRect(x - 150, y - 150, 300, 300, QPen(Qt.PenStyle.NoPen), QColor("#1239d6")); label = self.scene.addText(name); label.setDefaultTextColor(QColor("#202020")); label.setPos(x - 100, y + 165)
-        for x in range(0, 2401, 200): self.scene.addLine(x, 0, x, 2400, QPen(QColor(0, 0, 0, 25), 1))
-        for y in range(0, 2401, 200): self.scene.addLine(0, y, 2400, y, QPen(QColor(0, 0, 0, 25), 1))
+            self._static_rect(x - 150, y - 150, 300, 300, QPen(Qt.PenStyle.NoPen), QColor("#1239d6"), "start_zone"); self._static_text(x - 100, y + 165, name, "start_zone_label")
+        for x in range(0, 2401, 200): self._static_line(x, 0, x, 2400, QPen(QColor(0, 0, 0, 25), 1), "grid")
+        for y in range(0, 2401, 200): self._static_line(0, y, 2400, y, QPen(QColor(0, 0, 0, 25), 1), "grid")
+        self._draw_material_areas()
+
+    def _draw_material_areas(self) -> None:
+        """绘制与 Jetson 比赛界面一致的转盘、物料位和功能区标注。"""
+        self._static_rect(0, 950, 155, 500, QPen(Qt.PenStyle.NoPen), QColor("#ffffff"), "storage_base")
+        self._static_rect(960, 2250, 480, 150, QPen(Qt.PenStyle.NoPen), QColor("#ffffff"), "rough_base")
+        center_x, center_y = RAW_TURNTABLE_CENTER
+        self._static_ellipse(center_x - 140, center_y - 140, 280, 280, QPen(QColor("#444444"), 5), QColor("#f7f7f7"), "raw_turntable")
+        for x, y in ((1130, 20), (1270, 20), (1200, 110)):
+            self._static_ellipse(x - 12, y - 12, 24, 24, QPen(QColor("#444444"), 3), QColor("#ffffff"), "raw_pick_hole")
+        for x, y in MATERIAL_STORAGE_SLOTS + ROUGH_PROCESSING_SLOTS:
+            self._static_ellipse(x - 40, y - 40, 80, 80, QPen(QColor("#222222"), 4), QColor("#ffffff"), "material_slot_outer")
+            self._static_ellipse(x - 40 / 3, y - 40 / 3, 80 / 3, 80 / 3, QPen(Qt.PenStyle.NoPen), QColor("#222222"), "material_slot_inner")
+        self._static_text(720, 110, "原料区", "raw_label", 22)
+        self._static_text(180, 1260, "暂存区", "storage_label", 20, 90)
+        self._static_text(1350, 2200, "粗加工区", "rough_label", 22)
+        self._static_text(2300, 1320, "二次编码区", "coding_label", 20, 90)
+
+    def _static_rect(self, x: float, y: float, width: float, height: float, pen: QPen, brush: QColor, marker: str):
+        item = self.scene.addRect(x, y, width, height, pen, brush); self._mark_static(item, marker); return item
+
+    def _static_ellipse(self, x: float, y: float, width: float, height: float, pen: QPen, brush: QColor, marker: str):
+        item = self.scene.addEllipse(x, y, width, height, pen, brush); self._mark_static(item, marker); return item
+
+    def _static_line(self, x1: float, y1: float, x2: float, y2: float, pen: QPen, marker: str):
+        item = self.scene.addLine(x1, y1, x2, y2, pen); self._mark_static(item, marker); return item
+
+    def _static_text(self, x: float, y: float, value: str, marker: str, size: int = 18, rotation: float = 0.0):
+        item = self.scene.addText(value); item.setDefaultTextColor(QColor("#202020")); item.setFont(QFont("Microsoft YaHei", size)); item.setPos(x, y); item.setRotation(rotation); self._mark_static(item, marker); return item
+
+    @staticmethod
+    def _mark_static(item: QGraphicsItem, marker: str) -> None:
+        item.setData(0, marker); item.setZValue(-10); item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
     def _draw_start(self) -> None:
         x, y = self.plan.start_paper_x_mm, self.plan.start_paper_y_mm; self.scene.addEllipse(x - 12, y - 12, 24, 24, QPen(QColor("#1256a8"), 3), QColor("#ffffff"))

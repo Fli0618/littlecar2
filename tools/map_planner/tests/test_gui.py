@@ -26,3 +26,16 @@ class GuiTests(unittest.TestCase):
             self.assertNotEqual(window.plan.waypoints[0].y_mm, 0)
         finally:
             window.close()
+
+    def test_complete_material_map_items_are_drawn(self):
+        window = PlannerWindow()
+        try:
+            markers = [item.data(0) for item in window.scene.items()]
+            self.assertIn("raw_turntable", markers)
+            self.assertEqual(markers.count("raw_pick_hole"), 3)
+            self.assertEqual(markers.count("material_slot_outer"), 6)
+            self.assertEqual(markers.count("material_slot_inner"), 6)
+            self.assertIn("storage_label", markers)
+            self.assertIn("rough_label", markers)
+        finally:
+            window.close()
