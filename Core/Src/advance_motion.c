@@ -34,12 +34,27 @@ typedef struct
   uint16_t point_count;
   uint16_t nearest_index;
   uint16_t target_index;
-  uint16_t progress_index;
   uint32_t progress_tick;
+  uint32_t reference_tick;
+  uint32_t timeout_ms;
   float progress_on_segment;
+  float completed_length_mm;
+  float total_length_mm;
+  float progress_mm;
+  float progress_reference_mm;
+  float remaining_mm;
+  float projection_x_mm;
+  float projection_y_mm;
   float cross_track_mm;
   float lookahead_mm;
-  float last_cross_track_mm;
+  float curvature_preview_1_mm;
+  float yaw_gradient_deg_per_mm;
+  float yaw_gradient_preview_deg_per_mm;
+  float reference_speed_mm_s;
+  float feedforward_vx_mm_s;
+  float feedforward_vy_mm_s;
+  float feedforward_wz_deg_s;
+  uint8_t final_stage;
   uint8_t active;
 } AdvanceMotion_PathContext_t;
 
@@ -151,18 +166,18 @@ static void AdvanceMotion_UpdateDebugSnapshot(uint32_t now_tick, uint8_t flags)
   g_motion_debug.integral_yaw_deg_s = g_motion_control.pid_integral_yaw_deg_s;
   g_motion_debug.nearest_segment_index = g_path.nearest_index;
   g_motion_debug.target_segment_index = g_path.target_index;
-  g_motion_debug.path_progress_mm = g_path.progress_on_segment;
-  g_motion_debug.path_remaining_mm = 0.0f;
-  g_motion_debug.path_projection_x_mm = 0.0f;
-  g_motion_debug.path_projection_y_mm = 0.0f;
-  g_motion_debug.path_curvature_preview_1_mm = 0.0f;
-  g_motion_debug.path_yaw_gradient_deg_per_mm = 0.0f;
-  g_motion_debug.path_reference_speed_mm_s = 0.0f;
+  g_motion_debug.path_progress_mm = g_path.progress_mm;
+  g_motion_debug.path_remaining_mm = g_path.remaining_mm;
+  g_motion_debug.path_projection_x_mm = g_path.projection_x_mm;
+  g_motion_debug.path_projection_y_mm = g_path.projection_y_mm;
+  g_motion_debug.path_curvature_preview_1_mm = g_path.curvature_preview_1_mm;
+  g_motion_debug.path_yaw_gradient_deg_per_mm = g_path.yaw_gradient_deg_per_mm;
+  g_motion_debug.path_reference_speed_mm_s = g_path.reference_speed_mm_s;
   g_motion_debug.path_lookahead_mm = g_path.lookahead_mm;
-  g_motion_debug.path_feedforward_vx_mm_s = 0.0f;
-  g_motion_debug.path_feedforward_vy_mm_s = 0.0f;
-  g_motion_debug.path_feedforward_wz_deg_s = 0.0f;
-  g_motion_debug.path_final_stage = (g_path.target_index == (uint16_t)(g_path.point_count - 1U)) ? 1U : 0U;
+  g_motion_debug.path_feedforward_vx_mm_s = g_path.feedforward_vx_mm_s;
+  g_motion_debug.path_feedforward_vy_mm_s = g_path.feedforward_vy_mm_s;
+  g_motion_debug.path_feedforward_wz_deg_s = g_path.feedforward_wz_deg_s;
+  g_motion_debug.path_final_stage = g_path.final_stage;
 }
 
 static uint8_t AdvanceMotion_IsPidConfigValid(const AdvanceMotion_PidConfig_t *config)
@@ -303,15 +318,16 @@ static void AdvanceMotion_UpdatePidIntegral(float vx_world_mm_s, float vy_world_
 /* 以位置误差的下降量校验外部闭环是否仍在取得进展。 */
 static uint8_t AdvanceMotion_HasNoProgress(uint32_t now_tick, float command_magnitude)
 {
-  if (g_path.active != 0U)
+  if ((g_path.active != 0U) && (g_path.final_stage == 0U))
   {
     if (command_magnitude < ADVANCE_MOTION_NO_PROGRESS_MIN_COMMAND_MM_S)
     {
       return 0U;
     }
-    if (g_path.nearest_index > g_path.progress_index)
+    if ((g_path.progress_mm - g_path.progress_reference_mm) >=
+        ADVANCE_MOTION_NO_PROGRESS_MIN_REDUCTION_MM)
     {
-      g_path.progress_index = g_path.nearest_index;
+      g_path.progress_reference_mm = g_path.progress_mm;
       g_path.progress_tick = now_tick;
       return 0U;
     }
@@ -412,68 +428,298 @@ static uint8_t AdvanceMotion_IsGoalValid(const WorldGoalPose2D_t *goal)
   return 1U;
 }
 
-static void AdvanceMotion_UpdatePathReference(void)
+static float AdvanceMotion_GetPathSegmentLength(uint16_t index)
 {
-  uint16_t index;
-  uint16_t end_index;
-  float best_t = 0.0f;
-  float best_distance_squared = 0.0f;
-  float lookahead;
+  float dx = g_path.points[index + 1U].x_mm - g_path.points[index].x_mm;
+  float dy = g_path.points[index + 1U].y_mm - g_path.points[index].y_mm;
 
-  end_index = g_path.nearest_index + ADVANCE_MOTION_PATH_SEARCH_SEGMENTS;
-  if ((end_index < g_path.nearest_index) || (end_index >= (uint16_t)(g_path.point_count - 1U)))
+  return sqrtf((dx * dx) + (dy * dy));
+}
+
+/* 三点外接圆曲率；共线点返回零，折返退化点返回保守的大曲率。 */
+static float AdvanceMotion_GetPathVertexCurvature(uint16_t index)
+{
+  const AdvanceMotion_PathPoint_t *a = &g_path.points[index - 1U];
+  const AdvanceMotion_PathPoint_t *b = &g_path.points[index];
+  const AdvanceMotion_PathPoint_t *c = &g_path.points[index + 1U];
+  float abx = b->x_mm - a->x_mm;
+  float aby = b->y_mm - a->y_mm;
+  float bcx = c->x_mm - b->x_mm;
+  float bcy = c->y_mm - b->y_mm;
+  float acx = c->x_mm - a->x_mm;
+  float acy = c->y_mm - a->y_mm;
+  float ab = sqrtf((abx * abx) + (aby * aby));
+  float bc = sqrtf((bcx * bcx) + (bcy * bcy));
+  float ac = sqrtf((acx * acx) + (acy * acy));
+  float cross = (abx * bcy) - (aby * bcx);
+
+  if (ac < ADVANCE_MOTION_PATH_MIN_SEGMENT_MM)
+  {
+    return 1.0f / ADVANCE_MOTION_PATH_MIN_SEGMENT_MM;
+  }
+  return AdvanceMotion_AbsFloat((2.0f * cross) / (ab * bc * ac));
+}
+
+static void AdvanceMotion_UpdatePathPreview(void)
+{
+  uint16_t segment_index;
+  uint16_t vertex_index;
+  float distance_to_segment_start_mm = 0.0f;
+  float distance_to_vertex_mm;
+  float current_length = AdvanceMotion_GetPathSegmentLength(g_path.nearest_index);
+
+  g_path.curvature_preview_1_mm = 0.0f;
+  g_path.yaw_gradient_preview_deg_per_mm = 0.0f;
+  for (segment_index = g_path.nearest_index;
+       segment_index < (uint16_t)(g_path.point_count - 1U);
+       ++segment_index)
+  {
+    float length = AdvanceMotion_GetPathSegmentLength(segment_index);
+    float gradient = AdvanceMotion_AbsFloat(AdvanceWorld_WrapAngleDeg(
+                         g_path.points[segment_index + 1U].yaw_deg -
+                         g_path.points[segment_index].yaw_deg)) /
+                     length;
+
+    if (distance_to_segment_start_mm > ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM)
+    {
+      break;
+    }
+    g_path.yaw_gradient_preview_deg_per_mm =
+        fmaxf(g_path.yaw_gradient_preview_deg_per_mm, gradient);
+    distance_to_segment_start_mm += (segment_index == g_path.nearest_index)
+                                        ? ((1.0f - g_path.progress_on_segment) * current_length)
+                                        : length;
+  }
+
+  distance_to_vertex_mm = (1.0f - g_path.progress_on_segment) * current_length;
+  for (vertex_index = (uint16_t)(g_path.nearest_index + 1U);
+       vertex_index < (uint16_t)(g_path.point_count - 1U);
+       ++vertex_index)
+  {
+    if (distance_to_vertex_mm > ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM)
+    {
+      break;
+    }
+    g_path.curvature_preview_1_mm = fmaxf(
+        g_path.curvature_preview_1_mm,
+        AdvanceMotion_GetPathVertexCurvature(vertex_index));
+    distance_to_vertex_mm += AdvanceMotion_GetPathSegmentLength(vertex_index);
+  }
+}
+
+static float AdvanceMotion_GetPathSpeedLimit(void)
+{
+  float curvature_speed = sqrtf(
+      ADVANCE_MOTION_PATH_MAX_LATERAL_ACC_MM_S2 /
+      fmaxf(g_path.curvature_preview_1_mm,
+            ADVANCE_MOTION_PATH_CURVATURE_EPSILON_1_MM));
+  float yaw_speed = ADVANCE_MOTION_PATH_MAX_WZ_DEG_S /
+                    fmaxf(g_path.yaw_gradient_preview_deg_per_mm,
+                          ADVANCE_MOTION_PATH_YAW_GRADIENT_EPSILON_DEG_PER_MM);
+  float braking_distance = fmaxf(
+      g_path.remaining_mm - ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM, 0.0f);
+  float final_speed = sqrtf(
+      (ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S *
+       ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S) +
+      (2.0f * ADVANCE_MOTION_PATH_DECEL_MM_S2 * braking_distance));
+
+  return fminf(ADVANCE_MOTION_PATH_CRUISE_SPEED_MM_S,
+               fminf(curvature_speed, fminf(yaw_speed, final_speed)));
+}
+
+static void AdvanceMotion_UpdatePathLookahead(float dt_s)
+{
+  float curvature_ratio = AdvanceWorld_LimitFloat(
+      g_path.curvature_preview_1_mm * ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM,
+      0.0f, 1.0f);
+  float target = ADVANCE_MOTION_PATH_LOOKAHEAD_BASE_MM +
+                 (ADVANCE_MOTION_PATH_LOOKAHEAD_SPEED_GAIN_S *
+                  g_path.reference_speed_mm_s) -
+                 (ADVANCE_MOTION_PATH_LOOKAHEAD_CURVE_GAIN_MM * curvature_ratio);
+  float max_delta = ADVANCE_MOTION_PATH_LOOKAHEAD_RATE_MM_S * dt_s;
+
+  target = AdvanceWorld_LimitFloat(target,
+                                   ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM,
+                                   ADVANCE_MOTION_PATH_LOOKAHEAD_MAX_MM);
+  g_path.lookahead_mm = AdvanceWorld_LimitFloat(
+      target, g_path.lookahead_mm - max_delta, g_path.lookahead_mm + max_delta);
+}
+
+static void AdvanceMotion_SetPathLookaheadGoal(void)
+{
+  uint16_t index = g_path.nearest_index;
+  float segment_length = AdvanceMotion_GetPathSegmentLength(index);
+  float distance_mm = g_path.lookahead_mm;
+  float available_mm = (1.0f - g_path.progress_on_segment) * segment_length;
+  float t;
+
+  if (distance_mm <= available_mm)
+  {
+    t = g_path.progress_on_segment + (distance_mm / segment_length);
+  }
+  else
+  {
+    distance_mm -= available_mm;
+    ++index;
+    while (index < (uint16_t)(g_path.point_count - 1U))
+    {
+      segment_length = AdvanceMotion_GetPathSegmentLength(index);
+      if (distance_mm <= segment_length)
+      {
+        break;
+      }
+      distance_mm -= segment_length;
+      ++index;
+    }
+    if (index >= (uint16_t)(g_path.point_count - 1U))
+    {
+      index = (uint16_t)(g_path.point_count - 2U);
+      segment_length = AdvanceMotion_GetPathSegmentLength(index);
+      t = 1.0f;
+    }
+    else
+    {
+      t = distance_mm / segment_length;
+    }
+  }
+
+  g_path.target_index = index;
+  g_motion.goal.x_mm = g_path.points[index].x_mm +
+                       (t * (g_path.points[index + 1U].x_mm - g_path.points[index].x_mm));
+  g_motion.goal.y_mm = g_path.points[index].y_mm +
+                       (t * (g_path.points[index + 1U].y_mm - g_path.points[index].y_mm));
+  g_path.feedforward_vx_mm_s =
+      ((g_path.points[index + 1U].x_mm - g_path.points[index].x_mm) / segment_length) *
+      g_path.reference_speed_mm_s;
+  g_path.feedforward_vy_mm_s =
+      ((g_path.points[index + 1U].y_mm - g_path.points[index].y_mm) / segment_length) *
+      g_path.reference_speed_mm_s;
+}
+
+static void AdvanceMotion_UpdatePathReference(uint32_t now_tick)
+{
+  uint16_t search_start_index = g_path.nearest_index;
+  uint16_t end_index;
+  uint16_t index;
+  uint16_t best_index = search_start_index;
+  float best_t = g_path.progress_on_segment;
+  float best_distance_squared = 0.0f;
+  float reference_dt_s = (float)(now_tick - g_path.reference_tick) / 1000.0f;
+  float target_speed;
+  float speed_delta;
+  float measured_speed;
+
+  end_index = search_start_index + ADVANCE_MOTION_PATH_SEARCH_SEGMENTS;
+  if ((end_index < search_start_index) ||
+      (end_index >= (uint16_t)(g_path.point_count - 1U)))
   {
     end_index = (uint16_t)(g_path.point_count - 2U);
   }
-  for (index = g_path.nearest_index; index <= end_index; ++index)
+  for (index = search_start_index; index <= end_index; ++index)
   {
     const AdvanceMotion_PathPoint_t *a = &g_path.points[index];
     const AdvanceMotion_PathPoint_t *b = &g_path.points[index + 1U];
     float dx = b->x_mm - a->x_mm;
     float dy = b->y_mm - a->y_mm;
     float len2 = (dx * dx) + (dy * dy);
-    float t = ((g_motion.pose.x_mm - a->x_mm) * dx + (g_motion.pose.y_mm - a->y_mm) * dy) / len2;
+    float t = ((g_motion.pose.x_mm - a->x_mm) * dx +
+               (g_motion.pose.y_mm - a->y_mm) * dy) /
+              len2;
     float ex;
     float ey;
     float d2;
-    t = AdvanceWorld_LimitFloat(t, (index == g_path.nearest_index) ? g_path.progress_on_segment : 0.0f, 1.0f);
+
+    t = AdvanceWorld_LimitFloat(t,
+                                (index == search_start_index) ? g_path.progress_on_segment : 0.0f,
+                                1.0f);
     ex = g_motion.pose.x_mm - (a->x_mm + (t * dx));
     ey = g_motion.pose.y_mm - (a->y_mm + (t * dy));
     d2 = (ex * ex) + (ey * ey);
-    if ((index == g_path.nearest_index) || (d2 < best_distance_squared))
+    if ((index == search_start_index) || (d2 < best_distance_squared))
     {
-      g_path.nearest_index = index;
+      best_index = index;
       best_t = t;
       best_distance_squared = d2;
-      g_path.cross_track_mm = ((dx * ey) - (dy * ex)) / sqrtf(len2);
     }
   }
-  g_path.progress_on_segment = best_t;
-  lookahead = ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM +
-              (AdvanceMotion_AbsFloat(g_motion_control.command_vx_world_mm_s) +
-               AdvanceMotion_AbsFloat(g_motion_control.command_vy_world_mm_s)) *
-                  ADVANCE_MOTION_PATH_LOOKAHEAD_SPEED_GAIN_S;
-  g_path.lookahead_mm = AdvanceWorld_LimitFloat(lookahead, ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM,
-                                                 ADVANCE_MOTION_PATH_LOOKAHEAD_MAX_MM);
-  /* The final waypoint deliberately enters the existing Goto PID convergence path. */
-  if (g_path.nearest_index >= (uint16_t)(g_path.point_count - 2U))
+
+  for (index = g_path.nearest_index; index < best_index; ++index)
   {
-    g_path.target_index = (uint16_t)(g_path.point_count - 1U);
-    g_motion.goal.x_mm = g_path.points[g_path.target_index].x_mm;
-    g_motion.goal.y_mm = g_path.points[g_path.target_index].y_mm;
-    g_motion.goal.yaw_deg = g_path.points[g_path.target_index].yaw_deg;
+    g_path.completed_length_mm += AdvanceMotion_GetPathSegmentLength(index);
   }
-  else
+  g_path.nearest_index = best_index;
+  g_path.progress_on_segment = best_t;
   {
-    const AdvanceMotion_PathPoint_t *target = &g_path.points[g_path.nearest_index + 1U];
-    g_path.target_index = (uint16_t)(g_path.nearest_index + 1U);
-    g_motion.goal.x_mm = target->x_mm;
-    g_motion.goal.y_mm = target->y_mm;
-    g_motion.goal.yaw_deg = target->yaw_deg;
+    const AdvanceMotion_PathPoint_t *a = &g_path.points[best_index];
+    const AdvanceMotion_PathPoint_t *b = &g_path.points[best_index + 1U];
+    float dx = b->x_mm - a->x_mm;
+    float dy = b->y_mm - a->y_mm;
+    float length = sqrtf((dx * dx) + (dy * dy));
+    float ex;
+    float ey;
+
+    g_path.projection_x_mm = a->x_mm + (best_t * dx);
+    g_path.projection_y_mm = a->y_mm + (best_t * dy);
+    ex = g_motion.pose.x_mm - g_path.projection_x_mm;
+    ey = g_motion.pose.y_mm - g_path.projection_y_mm;
+    g_path.cross_track_mm = ((dx * ey) - (dy * ex)) / length;
+    g_path.progress_mm = g_path.completed_length_mm + (best_t * length);
+    g_path.remaining_mm = fmaxf(g_path.total_length_mm - g_path.progress_mm, 0.0f);
+    g_path.yaw_gradient_deg_per_mm =
+        AdvanceWorld_WrapAngleDeg(b->yaw_deg - a->yaw_deg) / length;
+    g_motion.goal.yaw_deg = AdvanceWorld_WrapAngleDeg(
+        a->yaw_deg + (best_t * AdvanceWorld_WrapAngleDeg(b->yaw_deg - a->yaw_deg)));
+  }
+
+  AdvanceMotion_UpdatePathPreview();
+  target_speed = AdvanceMotion_GetPathSpeedLimit();
+  speed_delta = ((target_speed >= g_path.reference_speed_mm_s)
+                     ? ADVANCE_MOTION_PATH_ACCEL_MM_S2
+                     : ADVANCE_MOTION_PATH_DECEL_MM_S2) *
+                reference_dt_s;
+  g_path.reference_speed_mm_s = AdvanceWorld_LimitFloat(
+      target_speed,
+      fmaxf(g_path.reference_speed_mm_s - speed_delta, 0.0f),
+      g_path.reference_speed_mm_s + speed_delta);
+  AdvanceMotion_UpdatePathLookahead(reference_dt_s);
+  AdvanceMotion_SetPathLookaheadGoal();
+  g_path.feedforward_wz_deg_s =
+      g_path.yaw_gradient_deg_per_mm * g_path.reference_speed_mm_s;
+  g_path.reference_tick = now_tick;
+
+  measured_speed = sqrtf(
+      (g_motion_control.measured_vx_world_mm_s * g_motion_control.measured_vx_world_mm_s) +
+      (g_motion_control.measured_vy_world_mm_s * g_motion_control.measured_vy_world_mm_s));
+  if ((g_path.final_stage == 0U) &&
+      (g_path.remaining_mm <= ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM) &&
+      (g_path.reference_speed_mm_s <= ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S) &&
+      (measured_speed <= ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S))
+  {
+    const AdvanceMotion_PathPoint_t *final_point = &g_path.points[g_path.point_count - 1U];
+
+    g_path.final_stage = 1U;
+    g_motion.goal.x_mm = final_point->x_mm;
+    g_motion.goal.y_mm = final_point->y_mm;
+    g_motion.goal.yaw_deg = final_point->yaw_deg;
+    g_motion_control.pid_integral_x_mm_s = 0.0f;
+    g_motion_control.pid_integral_y_mm_s = 0.0f;
+    g_motion_control.pid_integral_yaw_deg_s = 0.0f;
+    g_motion_control.no_progress_start_tick = 0U;
+  }
+  if (g_path.final_stage != 0U)
+  {
+    const AdvanceMotion_PathPoint_t *final_point = &g_path.points[g_path.point_count - 1U];
+
+    g_motion.goal.x_mm = final_point->x_mm;
+    g_motion.goal.y_mm = final_point->y_mm;
+    g_motion.goal.yaw_deg = final_point->yaw_deg;
+    g_path.feedforward_vx_mm_s = 0.0f;
+    g_path.feedforward_vy_mm_s = 0.0f;
+    g_path.feedforward_wz_deg_s = 0.0f;
   }
   g_motion.goal.vmax_mm_s = ADVANCE_MOTION_PATH_CRUISE_SPEED_MM_S;
   g_motion.goal.wmax_deg_s = ADVANCE_MOTION_PATH_MAX_WZ_DEG_S;
-  g_motion.goal.timeout_ms = ADVANCE_MOTION_PATH_TIMEOUT_MAX_MS;
+  g_motion.goal.timeout_ms = g_path.timeout_ms;
   g_motion.goal.goal_flags = ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW;
 }
 
@@ -706,6 +952,9 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_
   WorldPose2D_t pose;
   AdvanceMotion_Status_t pose_status;
   uint16_t index;
+  float total_length_mm = 0.0f;
+  float minimum_segment_squared = ADVANCE_MOTION_PATH_MIN_SEGMENT_MM *
+                                  ADVANCE_MOTION_PATH_MIN_SEGMENT_MM;
 
   if ((points == NULL) || (point_count < 2U))
   {
@@ -721,9 +970,17 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_
         (points[index].y_mm > ADVANCE_MOTION_WORLD_Y_MAX_MM) ||
         ((index > 0U) &&
          (((points[index].x_mm - points[index - 1U].x_mm) * (points[index].x_mm - points[index - 1U].x_mm)) +
-          ((points[index].y_mm - points[index - 1U].y_mm) * (points[index].y_mm - points[index - 1U].y_mm)) < 1.0f)))
+          ((points[index].y_mm - points[index - 1U].y_mm) * (points[index].y_mm - points[index - 1U].y_mm)) <
+          minimum_segment_squared)))
     {
       return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+    }
+    if (index > 0U)
+    {
+      float dx = points[index].x_mm - points[index - 1U].x_mm;
+      float dy = points[index].y_mm - points[index - 1U].y_mm;
+
+      total_length_mm += sqrtf((dx * dx) + (dy * dy));
     }
   }
   if (g_motion_state == ADVANCE_MOTION_STATE_RUNNING)
@@ -745,6 +1002,20 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_
   g_path.points = points;
   g_path.point_count = point_count;
   g_path.progress_tick = HAL_GetTick();
+  g_path.reference_tick = g_path.progress_tick;
+  g_path.total_length_mm = total_length_mm;
+  g_path.remaining_mm = total_length_mm;
+  g_path.progress_reference_mm = 0.0f;
+  g_path.lookahead_mm = ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM;
+  {
+    float timeout_ms = (float)ADVANCE_MOTION_PATH_TIMEOUT_BASE_MS +
+                       ((total_length_mm /
+                         ADVANCE_MOTION_PATH_TIMEOUT_EXPECTED_MIN_SPEED_MM_S) *
+                        1000.0f * ADVANCE_MOTION_PATH_TIMEOUT_SCALE);
+
+    g_path.timeout_ms = (uint32_t)fminf(timeout_ms,
+                                        (float)ADVANCE_MOTION_PATH_TIMEOUT_MAX_MS);
+  }
   g_path.active = 1U;
   g_motion.goal = (WorldGoalPose2D_t){0};
   g_motion.pose = pose;
@@ -753,7 +1024,7 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_
   g_motion_control.arrive_hold_start_tick = 0U;
   g_motion_control.arrival_stop_sent = 0U;
   AdvanceMotion_ResetPidAndProgress();
-  AdvanceMotion_UpdatePathReference();
+  AdvanceMotion_UpdatePathReference(g_path.progress_tick);
   g_motion.error_x_mm = 0.0f;
   g_motion.error_y_mm = 0.0f;
   g_motion.position_error_mm = 0.0f;
@@ -845,7 +1116,7 @@ void AdvanceMotion_Update(void)
     return;
   }
 
-  timeout_ms = (g_path.active != 0U) ? ADVANCE_MOTION_PATH_TIMEOUT_MAX_MS : g_motion.goal.timeout_ms;
+  timeout_ms = (g_path.active != 0U) ? g_path.timeout_ms : g_motion.goal.timeout_ms;
   if ((timeout_ms > 0U) && ((now_tick - g_motion.started_tick) >= timeout_ms))
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_TIMEOUT);
@@ -877,10 +1148,18 @@ void AdvanceMotion_Update(void)
     return;
   }
 
+  if ((g_motion_control.pid_history_valid != 0U) &&
+      ((now_tick - g_motion_control.pid_last_tick) > 0U) &&
+      ((now_tick - g_motion_control.pid_last_tick) <= ADVANCE_MOTION_PID_MAX_DT_MS))
+  {
+    dt_s = (float)(now_tick - g_motion_control.pid_last_tick) / 1000.0f;
+  }
+  AdvanceMotion_SavePidPose(&g_motion.pose, now_tick);
+
   if (g_path.active != 0U)
   {
-    AdvanceMotion_UpdatePathReference();
-    path_final_stage = (g_path.target_index == (uint16_t)(g_path.point_count - 1U)) ? 1U : 0U;
+    AdvanceMotion_UpdatePathReference(now_tick);
+    path_final_stage = g_path.final_stage;
     if (path_final_stage == 0U)
     {
       g_motion_control.pid_integral_x_mm_s = 0.0f;
@@ -962,34 +1241,12 @@ void AdvanceMotion_Update(void)
   g_motion_control.arrive_hold_start_tick = 0U;
   g_motion_control.arrival_stop_sent = 0U;
 
-  if ((g_motion_control.pid_history_valid != 0U) &&
-      ((now_tick - g_motion_control.pid_last_tick) > 0U) &&
-      ((now_tick - g_motion_control.pid_last_tick) <= ADVANCE_MOTION_PID_MAX_DT_MS))
-  {
-    dt_s = (float)(now_tick - g_motion_control.pid_last_tick) / 1000.0f;
-  }
-
-  AdvanceMotion_SavePidPose(&g_motion.pose, now_tick);
-
   vx_world_mm_s = 0.0f;
   vy_world_mm_s = 0.0f;
   raw_linear_magnitude = 0.0f;
   linear_saturated = 0U;
   if (position_control_enabled != 0U)
   {
-    vx_world_mm_s = (g_pid_active.kp_pos * g_motion.error_x_mm) +
-                    (g_pid_active.ki_pos * g_motion_control.pid_integral_x_mm_s) -
-                    (g_pid_active.kd_pos * g_motion_control.measured_vx_world_mm_s);
-    vy_world_mm_s = (g_pid_active.kp_pos * g_motion.error_y_mm) +
-                    (g_pid_active.ki_pos * g_motion_control.pid_integral_y_mm_s) -
-                    (g_pid_active.kd_pos * g_motion_control.measured_vy_world_mm_s);
-    vmax_mm_s = AdvanceMotion_GetGoalVmax(&g_motion.goal);
-    if ((g_motion_control.large_yaw_align_enabled != 0U) && (yaw_required != 0U))
-    {
-      vmax_mm_s *= AdvanceMotion_GetLargeYawAlignLinearScale(g_motion.yaw_error_deg);
-    }
-    raw_linear_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
-                                  (vy_world_mm_s * vy_world_mm_s));
     if ((g_path.active != 0U) && (path_final_stage == 0U))
     {
       const AdvanceMotion_PathPoint_t *a = &g_path.points[g_path.nearest_index];
@@ -997,29 +1254,66 @@ void AdvanceMotion_Update(void)
       float tx = b->x_mm - a->x_mm;
       float ty = b->y_mm - a->y_mm;
       float length = sqrtf((tx * tx) + (ty * ty));
-      float yaw_gradient;
-      float cross_track_rate;
+      float normal_velocity;
+      float correction;
+
       tx /= length;
       ty /= length;
-      yaw_gradient = AdvanceWorld_WrapAngleDeg(b->yaw_deg - a->yaw_deg) / length;
-      cross_track_rate = (g_path.cross_track_mm - g_path.last_cross_track_mm) / (dt_s + 0.001f);
-      vmax_mm_s = fminf(vmax_mm_s, ADVANCE_MOTION_PATH_MAX_WZ_DEG_S /
-                         fmaxf(AdvanceMotion_AbsFloat(yaw_gradient), ADVANCE_MOTION_PATH_YAW_GRADIENT_EPSILON_DEG_PER_MM));
-      vx_world_mm_s += tx * vmax_mm_s - ty * (ADVANCE_MOTION_PATH_KP_POS * g_path.cross_track_mm + ADVANCE_MOTION_PATH_KD_VEL * cross_track_rate);
-      vy_world_mm_s += ty * vmax_mm_s + tx * (ADVANCE_MOTION_PATH_KP_POS * g_path.cross_track_mm + ADVANCE_MOTION_PATH_KD_VEL * cross_track_rate);
-      wz_ccw_deg_s += yaw_gradient * vmax_mm_s;
-      g_path.last_cross_track_mm = g_path.cross_track_mm;
+      normal_velocity = (-ty * g_motion_control.measured_vx_world_mm_s) +
+                        (tx * g_motion_control.measured_vy_world_mm_s);
+      correction = (ADVANCE_MOTION_PATH_KP_POS * g_path.cross_track_mm) +
+                   (ADVANCE_MOTION_PATH_KD_VEL * normal_velocity);
+      vx_world_mm_s = g_path.feedforward_vx_mm_s + (ty * correction);
+      vy_world_mm_s = g_path.feedforward_vy_mm_s - (tx * correction);
+      vmax_mm_s = g_path.reference_speed_mm_s;
+      raw_linear_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
+                                    (vy_world_mm_s * vy_world_mm_s));
+      if (vmax_mm_s > 0.0f)
+      {
+        (void)AdvanceMotion_LimitVector(&vx_world_mm_s, &vy_world_mm_s, vmax_mm_s);
+      }
+      else
+      {
+        vx_world_mm_s = 0.0f;
+        vy_world_mm_s = 0.0f;
+      }
+      linear_saturated = (raw_linear_magnitude > vmax_mm_s) ? 1U : 0U;
     }
-    (void)AdvanceMotion_LimitVector(&vx_world_mm_s, &vy_world_mm_s, vmax_mm_s);
-    linear_saturated = (raw_linear_magnitude > vmax_mm_s) ? 1U : 0U;
+    else
+    {
+      vx_world_mm_s = (g_pid_active.kp_pos * g_motion.error_x_mm) +
+                      (g_pid_active.ki_pos * g_motion_control.pid_integral_x_mm_s) -
+                      (g_pid_active.kd_pos * g_motion_control.measured_vx_world_mm_s);
+      vy_world_mm_s = (g_pid_active.kp_pos * g_motion.error_y_mm) +
+                      (g_pid_active.ki_pos * g_motion_control.pid_integral_y_mm_s) -
+                      (g_pid_active.kd_pos * g_motion_control.measured_vy_world_mm_s);
+      vmax_mm_s = AdvanceMotion_GetGoalVmax(&g_motion.goal);
+      if ((g_motion_control.large_yaw_align_enabled != 0U) && (yaw_required != 0U))
+      {
+        vmax_mm_s *= AdvanceMotion_GetLargeYawAlignLinearScale(g_motion.yaw_error_deg);
+      }
+      raw_linear_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
+                                    (vy_world_mm_s * vy_world_mm_s));
+      (void)AdvanceMotion_LimitVector(&vx_world_mm_s, &vy_world_mm_s, vmax_mm_s);
+      linear_saturated = (raw_linear_magnitude > vmax_mm_s) ? 1U : 0U;
+    }
   }
 
   if (yaw_required != 0U)
   {
     wmax_deg_s = AdvanceMotion_GetGoalWmax(&g_motion.goal);
-    raw_wz_ccw_deg_s = (g_pid_active.kp_yaw * g_motion.yaw_error_deg) +
-                        (g_pid_active.ki_yaw * g_motion_control.pid_integral_yaw_deg_s) -
-                        (g_pid_active.kd_yaw * g_motion_control.measured_wz_deg_s);
+    if ((g_path.active != 0U) && (path_final_stage == 0U))
+    {
+      raw_wz_ccw_deg_s = g_path.feedforward_wz_deg_s +
+                         (ADVANCE_MOTION_PATH_KP_YAW * g_motion.yaw_error_deg) -
+                         (ADVANCE_MOTION_PATH_KD_YAW * g_motion_control.measured_wz_deg_s);
+    }
+    else
+    {
+      raw_wz_ccw_deg_s = (g_pid_active.kp_yaw * g_motion.yaw_error_deg) +
+                          (g_pid_active.ki_yaw * g_motion_control.pid_integral_yaw_deg_s) -
+                          (g_pid_active.kd_yaw * g_motion_control.measured_wz_deg_s);
+    }
     wz_ccw_deg_s = AdvanceWorld_LimitFloat(
         raw_wz_ccw_deg_s,
         -wmax_deg_s,

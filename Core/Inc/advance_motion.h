@@ -49,10 +49,6 @@ extern "C"
 #define ADVANCE_MOTION_YAW_TIMEOUT_MS ((uint32_t)100U) /*!< 航向角数据超时时间，单位为 ms。 */
 #define ADVANCE_MOTION_ARRIVE_HOLD_MS ((uint32_t)150U) /*!< 到达判定保持时间，单位为 ms。 */
 
-/* 连续路径跟踪配置。路径点由调用方长期持有，控制器不复制数组。 */
-#define ADVANCE_MOTION_PATH_LOOKAHEAD_MM (80.0f) /*!< 路径前视距离，单位为 mm。 */
-#define ADVANCE_MOTION_PATH_SEARCH_POINTS ((uint16_t)12U) /*!< 每个控制周期向前搜索的最大路径点数，单位为点。 */
-
 /* PID 公共限制。 */
 #define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
 
