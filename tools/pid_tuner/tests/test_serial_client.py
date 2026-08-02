@@ -3,8 +3,10 @@ import time
 import unittest
 
 from pid_tuner.models import BoardError, MotionGoal, PidConfig
-from pid_tuner.protocol import (CMD_ACK, CMD_ERROR, CMD_GET_PID, CMD_PID, CMD_RESET_ORIGIN,
-                                CMD_SET_YAW_SOURCE, CMD_TELEMETRY, StreamDecoder, encode_frame)
+from pid_tuner.protocol import (CMD_ACK, CMD_ERROR, CMD_GET_GOTO_STRATEGY, CMD_GET_PID,
+                                CMD_GOTO_STRATEGY, CMD_PID, CMD_RESET_ORIGIN,
+                                CMD_SET_GOTO_STRATEGY, CMD_SET_YAW_SOURCE, CMD_TELEMETRY,
+                                StreamDecoder, encode_frame)
 from pid_tuner.serial_client import SerialClient
 
 from fake_transport import FakeTransport
@@ -86,6 +88,22 @@ class SerialClientTests(unittest.TestCase):
             client.reset_origin()
         self.assertEqual((captured[0].command, captured[0].payload), (CMD_SET_YAW_SOURCE, b"\x01"))
         self.assertEqual((captured[1].command, captured[1].payload), (CMD_RESET_ORIGIN, b""))
+
+    def test_goto_strategy_commands(self) -> None:
+        captured = []
+
+        def on_write(raw, _attempt):
+            request = StreamDecoder().feed(raw)[0]
+            captured.append(request)
+            if request.command == CMD_GET_GOTO_STRATEGY:
+                return [encode_frame(CMD_GOTO_STRATEGY, request.sequence, b"\x01")]
+            return [encode_frame(CMD_ACK, request.sequence, bytes([request.command]))]
+
+        with SerialClient(FakeTransport(on_write)) as client:
+            self.assertTrue(client.get_goto_strategy())
+            client.set_goto_strategy(False)
+        self.assertEqual((captured[0].command, captured[0].payload), (CMD_GET_GOTO_STRATEGY, b""))
+        self.assertEqual((captured[1].command, captured[1].payload), (CMD_SET_GOTO_STRATEGY, b"\x00"))
 
     def test_board_error_is_exposed(self) -> None:
         def on_write(raw, _attempt):

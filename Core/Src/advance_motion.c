@@ -23,6 +23,8 @@ typedef struct
   uint8_t arrival_stop_sent;
   uint8_t terminal_stop_pending;
   uint8_t pid_history_valid;
+  uint8_t large_yaw_align_enabled;
+  uint8_t yaw_aligning;
   uint8_t acc;
 } AdvanceMotion_Control_t;
 
@@ -36,6 +38,7 @@ static volatile uint8_t g_pid_pending_valid;
 static volatile uint32_t g_pid_active_revision;
 static volatile uint32_t g_pid_pending_revision;
 static volatile uint32_t g_pid_next_revision;
+static uint8_t g_large_yaw_align_enabled;
 
 static const AdvanceMotion_PidConfig_t g_pid_default = {
     ADVANCE_MOTION_DEFAULT_KP_POS,
@@ -72,6 +75,29 @@ static void AdvanceMotion_ResetPidAndProgress(void)
   g_motion_control.command_wz_ccw_deg_s = 0.0f;
   g_motion_control.no_progress_reference_error_mm = 0.0f;
   g_motion_control.pid_history_valid = 0U;
+  g_motion_control.yaw_aligning = 0U;
+}
+
+/* Reset the linear loop when crossing between alignment and coupled motion. */
+static void AdvanceMotion_ResetLinearPid(void)
+{
+  g_motion_control.no_progress_start_tick = 0U;
+  g_motion_control.pid_integral_x_mm_s = 0.0f;
+  g_motion_control.pid_integral_y_mm_s = 0.0f;
+  g_motion_control.pid_last_x_mm = 0.0f;
+  g_motion_control.pid_last_y_mm = 0.0f;
+  g_motion_control.measured_vx_world_mm_s = 0.0f;
+  g_motion_control.measured_vy_world_mm_s = 0.0f;
+  g_motion_control.pid_history_valid = 0U;
+}
+
+static float AdvanceMotion_GetLargeYawAlignLinearScale(float yaw_error_deg)
+{
+  float ratio = AdvanceMotion_AbsFloat(yaw_error_deg) /
+                ADVANCE_MOTION_LARGE_YAW_ALIGN_ENTER_DEG;
+
+  ratio = AdvanceWorld_LimitFloat(ratio, 0.0f, 1.0f);
+  return 1.0f - ((1.0f - ADVANCE_MOTION_LARGE_YAW_ALIGN_LINEAR_MIN_SCALE) * ratio);
 }
 
 static void AdvanceMotion_UpdateDebugSnapshot(uint32_t now_tick, uint8_t flags)
@@ -482,6 +508,7 @@ void AdvanceMotion_Init(void)
   g_pid_active_revision = 0U;
   g_pid_pending_revision = 0U;
   g_pid_next_revision = 0U;
+  g_large_yaw_align_enabled = ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE;
   AdvanceMotion_UpdateDebugSnapshot(HAL_GetTick(), 0U);
 }
 
@@ -539,6 +566,13 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
   g_motion.position_error_mm = 0.0f;
   g_motion.yaw_error_deg = 0.0f;
   g_motion_control.acc = acc;
+  g_motion_control.large_yaw_align_enabled = g_large_yaw_align_enabled;
+  g_motion_control.yaw_aligning =
+      ((g_motion_control.large_yaw_align_enabled != 0U) &&
+       ((goal->goal_flags & (ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW)) ==
+        (ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW)) &&
+       (AdvanceMotion_AbsFloat(AdvanceWorld_WrapAngleDeg(goal->yaw_deg - pose.yaw_deg)) >=
+        ADVANCE_MOTION_LARGE_YAW_ALIGN_ENTER_DEG)) ? 1U : 0U;
   AdvanceMotion_SavePidPose(&g_motion.pose, g_motion.started_tick);
   g_motion_state = ADVANCE_MOTION_STATE_RUNNING;
   return ADVANCE_MOTION_STATUS_OK;
@@ -593,6 +627,7 @@ void AdvanceMotion_Update(void)
   float raw_wz_ccw_deg_s;
   float command_magnitude;
   uint8_t position_required;
+  uint8_t position_control_enabled;
   uint8_t yaw_required;
   uint8_t linear_saturated;
   uint8_t yaw_saturated = 0U;
@@ -646,6 +681,25 @@ void AdvanceMotion_Update(void)
   }
   g_motion.yaw_error_deg = yaw_required ? AdvanceWorld_WrapAngleDeg(g_motion.goal.yaw_deg - g_motion.pose.yaw_deg) : 0.0f;
 
+  if ((g_motion_control.large_yaw_align_enabled != 0U) &&
+      (position_required != 0U) && (yaw_required != 0U))
+  {
+    if ((g_motion_control.yaw_aligning != 0U) &&
+        (AdvanceMotion_AbsFloat(g_motion.yaw_error_deg) <= ADVANCE_MOTION_LARGE_YAW_ALIGN_EXIT_DEG))
+    {
+      g_motion_control.yaw_aligning = 0U;
+      AdvanceMotion_ResetLinearPid();
+    }
+    else if ((g_motion_control.yaw_aligning == 0U) &&
+             (AdvanceMotion_AbsFloat(g_motion.yaw_error_deg) >= ADVANCE_MOTION_LARGE_YAW_ALIGN_ENTER_DEG))
+    {
+      g_motion_control.yaw_aligning = 1U;
+      AdvanceMotion_ResetLinearPid();
+    }
+  }
+  position_control_enabled = ((position_required != 0U) &&
+                              (g_motion_control.yaw_aligning == 0U)) ? 1U : 0U;
+
   if (((position_required == 0U) || (g_motion.position_error_mm <= ADVANCE_MOTION_POS_TOLERANCE_MM)) &&
       ((yaw_required == 0U) || (AdvanceMotion_AbsFloat(g_motion.yaw_error_deg) <= ADVANCE_MOTION_YAW_TOLERANCE_DEG)))
   {
@@ -693,7 +747,7 @@ void AdvanceMotion_Update(void)
   vy_world_mm_s = 0.0f;
   raw_linear_magnitude = 0.0f;
   linear_saturated = 0U;
-  if (position_required != 0U)
+  if (position_control_enabled != 0U)
   {
     vx_world_mm_s = (g_pid_active.kp_pos * g_motion.error_x_mm) +
                     (g_pid_active.ki_pos * g_motion_control.pid_integral_x_mm_s) -
@@ -702,6 +756,10 @@ void AdvanceMotion_Update(void)
                     (g_pid_active.ki_pos * g_motion_control.pid_integral_y_mm_s) -
                     (g_pid_active.kd_pos * g_motion_control.measured_vy_world_mm_s);
     vmax_mm_s = AdvanceMotion_GetGoalVmax(&g_motion.goal);
+    if ((g_motion_control.large_yaw_align_enabled != 0U) && (yaw_required != 0U))
+    {
+      vmax_mm_s *= AdvanceMotion_GetLargeYawAlignLinearScale(g_motion.yaw_error_deg);
+    }
     raw_linear_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
                                   (vy_world_mm_s * vy_world_mm_s));
     (void)AdvanceMotion_LimitVector(&vx_world_mm_s, &vy_world_mm_s, vmax_mm_s);
@@ -722,10 +780,10 @@ void AdvanceMotion_Update(void)
   }
 
   AdvanceMotion_UpdatePidIntegral(vx_world_mm_s, vy_world_mm_s, wz_ccw_deg_s, dt_s,
-                                   linear_saturated, yaw_saturated, position_required, yaw_required);
+                                    linear_saturated, yaw_saturated, position_control_enabled, yaw_required);
   command_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
                              (vy_world_mm_s * vy_world_mm_s));
-  if ((position_required != 0U) && (AdvanceMotion_HasNoProgress(now_tick, command_magnitude) != 0U))
+  if ((position_control_enabled != 0U) && (AdvanceMotion_HasNoProgress(now_tick, command_magnitude) != 0U))
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED);
     AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
@@ -746,9 +804,10 @@ void AdvanceMotion_Update(void)
   AdvanceMotion_UpdateDebugSnapshot(now_tick,
                                     ADVANCE_MOTION_DEBUG_FLAG_VALID |
                                         ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH |
-                                        ((yaw_required != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH : 0U) |
-                                        ((linear_saturated != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_LINEAR_SATURATED : 0U) |
-                                        ((yaw_saturated != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_SATURATED : 0U));
+                                         ((yaw_required != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH : 0U) |
+                                         ((linear_saturated != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_LINEAR_SATURATED : 0U) |
+                                         ((yaw_saturated != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_SATURATED : 0U) |
+                                         ((g_motion_control.yaw_aligning != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_ALIGNING : 0U));
 }
 
 void AdvanceMotion_ResetYawControl(void)
@@ -868,4 +927,28 @@ AdvanceMotion_Status_t AdvanceMotion_RequestPidConfig(const AdvanceMotion_PidCon
 AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultPid(uint32_t *revision)
 {
   return AdvanceMotion_RequestPidConfig(&g_pid_default, revision);
+}
+
+AdvanceMotion_Status_t AdvanceMotion_SetLargeYawAlignEnabled(uint8_t enabled)
+{
+  if (enabled > 1U)
+  {
+    return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+  }
+  if (g_motion_state == ADVANCE_MOTION_STATE_RUNNING)
+  {
+    return ADVANCE_MOTION_STATUS_BUSY;
+  }
+  g_large_yaw_align_enabled = enabled;
+  return ADVANCE_MOTION_STATUS_OK;
+}
+
+AdvanceMotion_Status_t AdvanceMotion_GetLargeYawAlignEnabled(uint8_t *enabled)
+{
+  if (enabled == NULL)
+  {
+    return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+  }
+  *enabled = g_large_yaw_align_enabled;
+  return ADVANCE_MOTION_STATUS_OK;
 }

@@ -63,6 +63,10 @@ class Telemetry:
     def yaw_source(self) -> str:
         return "OPS" if (self.flags & 0x80) else "WIT"
 
+    @property
+    def yaw_aligning(self) -> bool:
+        return bool(self.flags & 0x20)
+
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
 

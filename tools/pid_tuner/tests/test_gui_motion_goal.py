@@ -24,6 +24,8 @@ class GuiMotionGoalTests(unittest.TestCase):
             self.assertEqual((goal.x_mm, goal.y_mm, goal.yaw_deg), (0.0, 0.0, 0.0))
             self.assertEqual((goal.vmax_mm_s, goal.wmax_deg_s, goal.timeout_ms), (600.0, 120.0, 15000))
             self.assertTrue(window.use_yaw.isChecked())
+            self.assertFalse(window.large_yaw_align.isChecked())
+            self.assertFalse(window.large_yaw_align.isEnabled())
             self.assertIsNone(validate_motion_goal(goal))
         finally:
             window.close()
@@ -86,6 +88,19 @@ class GuiMotionGoalTests(unittest.TestCase):
                                   (0.0, 0.0, 0.0), remote_link_status=0x4000)
             window.on_telemetry(telemetry)
             self.assertIn("心跳超时停车", window.status.text())
+        finally:
+            window.close()
+
+    def test_goto_strategy_control_is_disabled_while_motion_is_active(self) -> None:
+        window = MainWindow()
+        try:
+            window.session.connected = True
+            window.on_goto_strategy_changed(True)
+            self.assertTrue(window.large_yaw_align.isEnabled())
+            window.on_motion_changed(True)
+            self.assertFalse(window.large_yaw_align.isEnabled())
+            window.on_motion_changed(False)
+            self.assertTrue(window.large_yaw_align.isEnabled())
         finally:
             window.close()
 
