@@ -41,6 +41,8 @@ conda run -n low_numpy pid-tuner goto --port COM4 --x 200 --y 0 --yaw 0 --vmax 6
 
 ## 实时 GUI
 
+GUI 的 GOTO 区域提供“航向误差大时先对准”开关。它通过 USART1 临时修改板端策略，仅在位置和航向同时启用的 GOTO 中生效；板端复位后恢复 `advance_motion.h` 的编译期默认值。运动进行时开关不可修改。
+
 安装依赖后运行：
 
 ```powershell

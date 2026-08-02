@@ -10,10 +10,12 @@ from typing import Protocol
 
 from .models import BoardError, MotionGoal, PidConfig, RequestTimeout, Telemetry
 from .protocol import (
-    CMD_ACK, CMD_ERROR, CMD_GET_PID, CMD_GOTO_POSE, CMD_HEARTBEAT, CMD_PID,
-    CMD_RESET_ORIGIN, CMD_RESTORE_PID, CMD_SET_PID, CMD_SET_YAW_SOURCE, CMD_STOP,
-    CMD_TELEMETRY, Frame, ProtocolError, StreamDecoder, decode_pid, decode_telemetry,
-    encode_frame, encode_goal, encode_pid, encode_yaw_source,
+    CMD_ACK, CMD_ERROR, CMD_GET_GOTO_STRATEGY, CMD_GET_PID, CMD_GOTO_POSE,
+    CMD_GOTO_STRATEGY, CMD_HEARTBEAT, CMD_PID, CMD_RESET_ORIGIN, CMD_RESTORE_PID,
+    CMD_SET_GOTO_STRATEGY, CMD_SET_PID, CMD_SET_YAW_SOURCE, CMD_STOP, CMD_TELEMETRY,
+    Frame, ProtocolError, StreamDecoder, decode_goto_strategy, decode_pid,
+    decode_telemetry, encode_frame, encode_goal, encode_goto_strategy, encode_pid,
+    encode_yaw_source,
 )
 
 
@@ -108,6 +110,13 @@ class SerialClient:
 
     def set_yaw_source(self, source: str) -> None:
         self.request(CMD_SET_YAW_SOURCE, encode_yaw_source(source))
+
+    def get_goto_strategy(self) -> bool:
+        return decode_goto_strategy(
+            self.request(CMD_GET_GOTO_STRATEGY, expected_command=CMD_GOTO_STRATEGY).payload)
+
+    def set_goto_strategy(self, large_yaw_align_enabled: bool) -> None:
+        self.request(CMD_SET_GOTO_STRATEGY, encode_goto_strategy(large_yaw_align_enabled))
 
     def reset_origin(self) -> None:
         self.request(CMD_RESET_ORIGIN)

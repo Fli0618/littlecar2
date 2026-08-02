@@ -20,9 +20,12 @@ CMD_STOP = 0x11
 CMD_HEARTBEAT = 0x12
 CMD_SET_YAW_SOURCE = 0x13
 CMD_RESET_ORIGIN = 0x14
+CMD_GET_GOTO_STRATEGY = 0x15
+CMD_SET_GOTO_STRATEGY = 0x16
 CMD_ACK = 0x80
 CMD_PID = 0x81
 CMD_TELEMETRY = 0x82
+CMD_GOTO_STRATEGY = 0x83
 CMD_ERROR = 0xE0
 
 TELEMETRY_PAYLOAD_SIZE = 96
@@ -82,6 +85,16 @@ def encode_yaw_source(source: str) -> bytes:
         return bytes([values[source.upper()]])
     except (AttributeError, KeyError) as error:
         raise ProtocolError("yaw source must be WIT or OPS") from error
+
+
+def encode_goto_strategy(large_yaw_align_enabled: bool) -> bytes:
+    return bytes([1 if large_yaw_align_enabled else 0])
+
+
+def decode_goto_strategy(payload: bytes) -> bool:
+    if len(payload) != 1 or payload[0] not in (0, 1):
+        raise ProtocolError("GOTO strategy payload must be one boolean byte")
+    return bool(payload[0])
 
 
 def decode_pid(payload: bytes) -> tuple[int, PidConfig]:

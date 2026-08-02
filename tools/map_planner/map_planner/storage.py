@@ -27,6 +27,22 @@ def save_plan(plan: Plan, name: str | None = None, directory: Path = DEFAULT_PLA
     return path
 
 
+def rename_plan(old_name: str, new_name: str, directory: Path = DEFAULT_PLANS_DIR) -> Path:
+    """Rename a saved plan and update the name stored inside its JSON document."""
+
+    old_path = plan_path(old_name, directory)
+    new_path = plan_path(new_name, directory)
+    if not old_path.exists():
+        raise ValueError("原方案不存在")
+    if old_path != new_path and new_path.exists():
+        raise ValueError("目标方案名称已存在")
+    plan = load_plan(old_name, directory)
+    save_plan(plan, new_name, directory)
+    if old_path != new_path:
+        old_path.unlink()
+    return new_path
+
+
 def load_plan(name: str, directory: Path = DEFAULT_PLANS_DIR) -> Plan:
     try:
         return Plan.from_dict(json.loads(plan_path(name, directory).read_text(encoding="utf-8")))
