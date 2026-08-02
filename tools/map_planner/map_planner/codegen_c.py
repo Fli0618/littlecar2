@@ -183,7 +183,6 @@ def generate_task_function(plan: Plan, function_name: str) -> str:
             block = [
                 "    /*",
                 f"     * {index}. 原地转向至 {format_c_float(action.yaw_deg)[:-1]} deg。",
-                "     * 原地转向：保持上一目标位置并更新绝对航向。",
                 f"     * 保持上一目标位置 ({format_c_float(previous_x)[:-1]}, "
                 f"{format_c_float(previous_y)[:-1]})。",
                 "     */",
