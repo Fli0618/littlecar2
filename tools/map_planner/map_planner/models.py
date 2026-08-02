@@ -31,7 +31,7 @@ class Waypoint:
     dwell_s: float = 0.5
     name: str = ""
     use_yaw: bool = False
-    vmax_mm_s: float = 200.0
+    vmax_mm_s: float = 820.0
     wmax_deg_s: float = 90.0
     timeout_s: float = 15.0
 

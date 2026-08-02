@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
 from PySide6.QtTest import QTest
 
-from map_planner.gui import PlannerWindow
+from map_planner.gui import PlannerWindow, StartItem
 
 
 class GuiTests(unittest.TestCase):
@@ -143,6 +143,30 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(window.calibration_stage, "complete")
             self.assertEqual(window.mode, "select")
             self.assertTrue(window.confirm_start_button.isHidden())
+        finally:
+            window.close()
+
+    def test_right_click_on_start_arrow_rotates_heading(self):
+        window = PlannerWindow()
+        try:
+            window.begin_start("启停区 1")
+            window.show()
+            self.app.processEvents()
+            start = next(item for item in window.scene.items() if isinstance(item, StartItem))
+            initial_heading = window.plan.start_heading_deg
+            position = window.view.mapFromScene(start.scenePos())
+            QTest.mouseClick(window.view.viewport(), Qt.MouseButton.RightButton, pos=position)
+            self.assertEqual(window.plan.start_heading_deg, ((initial_heading - 90 + 180) % 360) - 180)
+        finally:
+            window.close()
+
+    def test_new_waypoint_uses_820_mm_per_second_default(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.on_map_click(2200, 200)
+            self.assertEqual(window.plan.waypoints[0].vmax_mm_s, 820)
+            self.assertEqual(window.node_vmax.value(), 820)
         finally:
             window.close()
 

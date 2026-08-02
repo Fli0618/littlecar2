@@ -67,6 +67,8 @@ class MapView(QGraphicsView):
             self._pan_scroll = QPoint(self.horizontalScrollBar().value(), self.verticalScrollBar().value())
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor); event.accept(); return
         item = self.itemAt(event.position().toPoint())
+        if event.button() == Qt.MouseButton.RightButton and isinstance(item, StartItem):
+            item.rotated(); event.accept(); return
         editable = isinstance(item, (WaypointItem, RotationHandleItem, StartItem))
         if event.button() == Qt.MouseButton.LeftButton and self.mode in ("add", "calibrate", "measure") and not editable:
             point = self.mapToScene(event.position().toPoint()); self.clicked.emit(point.x(), point.y(), bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)); event.accept(); return
@@ -163,7 +165,7 @@ class StartItem(QGraphicsPolygonItem):
     """起点箭头通过右击以 90 度为单位设置初始朝向。"""
     def __init__(self, heading, rotated):  # type: ignore[no-untyped-def]
         poly = QPolygonF([QPointF(-28, -18), QPointF(10, -18), QPointF(10, -34), QPointF(42, 0), QPointF(10, 34), QPointF(10, 18), QPointF(-28, 18)])
-        super().__init__(poly); self.setRotation(-heading); self.setBrush(QColor("#1976d2")); self.setPen(QPen(QColor("#0d47a1"), 3)); self.setZValue(12)
+        super().__init__(poly); self.setRotation(-heading); self.setBrush(QColor("#1976d2")); self.setPen(QPen(QColor("#0d47a1"), 3)); self.setZValue(30)
         self.rotated = rotated; self.setToolTip("右击顺时针旋转 90 度")
 
     def mousePressEvent(self, event):  # type: ignore[no-untyped-def]
@@ -204,8 +206,8 @@ class PlannerWindow(QMainWindow):
         box.addWidget(QLabel("节点（绿色为当前可编辑节点；橙色节点右键切换）")); self.waypoint_list = QListWidget(); self.waypoint_list.currentRowChanged.connect(self.activate_node); self.waypoint_list.setMinimumHeight(105); box.addWidget(self.waypoint_list)
         delete = QPushButton("删除选中节点"); delete.clicked.connect(self.remove_waypoint); box.addWidget(delete)
         form = QFormLayout(); self.x=spin(); self.y=spin(); self.yaw=spin(0,-360,360,5); self.use_yaw=QCheckBox("启用航向约束（GOTO Pose）")
-        self.stop=QCheckBox("到点停止"); self.stop.setChecked(True); self.dwell=spin(.5,0,120,.1); self.node_vmax=spin(200,1,1500,10); self.vmax=self.node_vmax; self.node_wmax=spin(90,1,360,5); self.timeout=spin(15, .1, 300, 1)
-        for label, widget in (("X (mm)",self.x),("Y (mm)",self.y),("目标航向 (deg)",self.yaw),("停留 (s)",self.dwell),("最大线速度",self.node_vmax),("最大角速度",self.node_wmax),("超时 (s)",self.timeout)): form.addRow(label,widget)
+        self.stop=QCheckBox("到点停止"); self.stop.setChecked(True); self.dwell=spin(.5,0,120,.1); self.node_vmax=spin(820,1,1500,10); self.vmax=self.node_vmax; self.node_wmax=spin(90,1,360,5); self.timeout=spin(15, .1, 300, 1)
+        for label, widget in (("X (mm)",self.x),("Y (mm)",self.y),("目标航向 (deg)",self.yaw),("停留 (s)",self.dwell),("最大线速度 (mm/s)",self.node_vmax),("最大角速度 (deg/s)",self.node_wmax),("超时 (s)",self.timeout)): form.addRow(label,widget)
         form.addRow(self.use_yaw); form.addRow(self.stop); update=QPushButton("更新当前节点"); update.clicked.connect(self.update_waypoint); form.addRow(update); box.addLayout(form)
         box.addWidget(QLabel("仿真")); simrow=QHBoxLayout()
         for label, fn in (("播放",self.play),("暂停",self.pause),("重置",self.reset_simulation)):
@@ -411,7 +413,7 @@ class PlannerWindow(QMainWindow):
         previous=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm)
         for i,p in enumerate(self.plan.waypoints):
             paper=self.paper_of(p); current=QPointF(paper.x_mm,paper.y_mm); self.scene.addLine(previous.x(),previous.y(),current.x(),current.y(),QPen(QColor("#d27800"),8))
-            mid=(previous+current)/2; badge=self.scene.addEllipse(mid.x()-18,mid.y()-18,36,36,QPen(QColor("#8a5500"),2),QColor("#ffffff")); badge.setZValue(4); label=self.scene.addText(str(i+1),QFont("Microsoft YaHei",14)); label.setPos(mid.x()-6,mid.y()-13); label.setZValue(5); previous=current
+            previous=current
             item=WaypointItem(i,paper.x_mm,paper.y_mm,i==self.active_index,i in invalid,lambda index,before,after,shift=False:self.move_waypoint(index,before,after,shift),lambda handle: self.rotate_waypoint(handle.parentItem().index,handle),self.set_active_from_context); self.scene.addItem(item)
         if self.actual_trace:
             path=QPainterPath(QPointF(*world_to_paper(self.actual_trace[0],self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)))
