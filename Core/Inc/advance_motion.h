@@ -19,6 +19,10 @@ extern "C"
 #define ADVANCE_MOTION_YAW_TIMEOUT_MS ((uint32_t)100U) /*!< 航向角数据超时时间，单位为 ms。 */
 #define ADVANCE_MOTION_ARRIVE_HOLD_MS ((uint32_t)150U) /*!< 到达判定保持时间，单位为 ms。 */
 
+/* 连续路径跟踪配置。路径点由调用方长期持有，控制器不复制数组。 */
+#define ADVANCE_MOTION_PATH_LOOKAHEAD_MM (80.0f) /*!< 路径前视距离，单位为 mm。 */
+#define ADVANCE_MOTION_PATH_SEARCH_POINTS ((uint16_t)12U) /*!< 每个控制周期向前搜索的最大路径点数，单位为点。 */
+
 /* PID 公共限制。 */
 #define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
 
@@ -151,6 +155,7 @@ extern "C"
 #define ADVANCE_MOTION_DEBUG_FLAG_LINEAR_SATURATED ((uint8_t)0x08U)
 #define ADVANCE_MOTION_DEBUG_FLAG_YAW_SATURATED ((uint8_t)0x10U)
 #define ADVANCE_MOTION_DEBUG_FLAG_YAW_ALIGNING ((uint8_t)0x20U)
+#define ADVANCE_MOTION_DEBUG_FLAG_PATH_ACTIVE ((uint8_t)0x40U)
 #define ADVANCE_MOTION_DEBUG_FLAG_YAW_SOURCE_OPS ((uint8_t)0x80U)
 
   /** @brief 初始化运动控制模块。 */
@@ -159,6 +164,17 @@ extern "C"
   AdvanceMotion_Status_t AdvanceMotion_SetWorldVelocityEx(float vx_world_mm_s, float vy_world_mm_s, float wz_ccw_deg_s, uint8_t acc);
   /** @brief 启动带加速度参数的位姿导航。 @param goal 目标位姿指针。 @return 启动结果状态。 */
   AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, uint8_t acc);
+  /**
+   * @brief 异步启动连续路径跟踪。
+   * @details points 必须指向调用方长期持有的只读数组；任务结束、取消或进入异常终态前，
+   * 调用方不得释放、覆盖或修改该数组。所有点必须启用位置约束，最后一个点为精确收敛并停车的终点。
+   * @param points 路径离散采样点数组。
+   * @param point_count 路径点数量，至少为 2。
+   * @param acc 底盘加速度参数。
+   * @return 启动结果状态。
+   */
+  AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const WorldGoalPose2D_t *points,
+                                                     uint16_t point_count, uint8_t acc);
   /**
    * @brief 阻塞执行位姿导航，返回前不会继续执行调用方后续代码。
    * @details UART/DMA 中断在阻塞期间仍可运行，但本函数不处理上位机协议队列。
