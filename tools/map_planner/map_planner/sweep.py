@@ -68,3 +68,10 @@ def build_rotation_sweep(start: Pose, target_yaw_deg: float, wmax_deg_s: float, 
         frame = simulation.step()
         poses.extend(_interpolate_poses(poses[-1], frame.actual))
     return SweepGeometry(poses, [car_polygon(pose) for pose in poses])
+
+
+def build_continuous_segment_sweep(start: Pose, target: Pose) -> SweepGeometry:
+    """连续路径的纯几何扫掠；不复用停点动作的加减速模型。"""
+
+    poses = [start, *_interpolate_poses(start, target)]
+    return SweepGeometry(poses, [car_polygon(pose) for pose in poses])

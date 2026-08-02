@@ -60,6 +60,20 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_empty_mode_switch_exposes_continuous_editor_and_adds_pose_point(self):
+        window = PlannerWindow()
+        try:
+            window.plan_mode_combo.setCurrentIndex(window.plan_mode_combo.findData("continuous"))
+            self.assertEqual(window.plan.mode, "continuous")
+            self.assertFalse(window.continuous_panel.isHidden())
+            self.calibrated(window)
+            window.on_map_click(2200, 200)
+            self.assertEqual(len(window.plan.path_points), 1)
+            self.assertEqual(len(window.plan.waypoints), 0)
+            self.assertTrue(any(item.data(0) == "continuous_path_point" for item in window.scene.items()))
+        finally:
+            window.close()
+
     def test_plan_toolbar_has_rename_button(self):
         window = PlannerWindow()
         try:

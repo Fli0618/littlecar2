@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 
-from .models import Plan, RotateInPlace, Waypoint
+from .models import PathPosePoint, Plan, RotateInPlace, Waypoint
 
 
 class CodeGenerationError(ValueError):
@@ -66,6 +66,8 @@ def _finite(value: float, label: str, step: int) -> None:
 def validate_plan_for_blocking_codegen(plan: Plan) -> list[str]:
     """Validate blocking-codegen semantics and return non-blocking warnings."""
 
+    if plan.mode == "continuous":
+        return _validate_continuous_plan(plan)
     if not plan.waypoints:
         raise CodeGenerationError("当前方案没有任何运动动作。")
 
@@ -108,6 +110,16 @@ def validate_plan_for_blocking_codegen(plan: Plan) -> list[str]:
             raise CodeGenerationError(f"步骤 {index} 使用了不支持的动作类型。")
 
     return [_DEFAULT_PARAMETER_WARNING] if has_non_default else []
+
+
+def _validate_continuous_plan(plan: Plan) -> list[str]:
+    if not plan.path_points:
+        raise CodeGenerationError("当前连续路径没有任何位姿点。")
+    for index, point in enumerate(plan.path_points, start=1):
+        _finite(point.x_mm, "X 坐标", index)
+        _finite(point.y_mm, "Y 坐标", index)
+        _finite(point.yaw_deg, "航向角", index)
+    return []
 
 
 def format_c_float(value: float) -> str:
@@ -161,6 +173,9 @@ def generate_task_function(plan: Plan, function_name: str) -> str:
         "{",
     ]
 
+    if plan.mode == "continuous":
+        return _generate_continuous_task_function(plan, function_name)
+
     previous_x = 0.0
     previous_y = 0.0
     blocks: list[list[str]] = []
@@ -196,4 +211,42 @@ def generate_task_function(plan: Plan, function_name: str) -> str:
             lines.append("")
         lines.extend(block)
     lines.extend(["}", ""])
+    return "\n".join(lines)
+
+
+def _generate_continuous_task_function(plan: Plan, function_name: str) -> str:
+    """Generate one FollowPathBlocking call backed by a static pose array."""
+
+    points = plan.path_points
+    lines = [
+        "/*",
+        f" * 方案：{_safe_comment(plan.name)}（连续路径）",
+        " * 由 LittleCar2 地图路径规划工具生成。",
+        " * 连续路径由 AdvanceMotion_FollowPathBlocking 一次执行；不在中间位姿点停车。",
+        " */",
+        f"void {function_name}(void)",
+        "{",
+        "    static const AdvancePathPose path[] = {",
+    ]
+    for index, point in enumerate(points, start=1):
+        name = _safe_comment(point.name).strip()
+        suffix = f" /* {index}. {name} */" if name else f" /* {index}. */"
+        lines.append(
+            "        {"
+            f"{format_c_float(point.x_mm)}, {format_c_float(point.y_mm)}, {format_c_float(point.yaw_deg)}"
+            f"}},{suffix}"
+        )
+    lines.extend(
+        [
+            "    };",
+            "",
+            "    if (AdvanceMotion_FollowPathBlocking(path, sizeof(path) / sizeof(path[0]), CHASSIS_DEFAULT_ACC) != ADVANCE_MOTION_STATE_ARRIVED)",
+            "    {",
+            "        AdvanceMotion_Cancel();",
+            "        return;",
+            "    }",
+            "}",
+            "",
+        ]
+    )
     return "\n".join(lines)

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from map_planner.models import MAP_VERSION, Obstacle, Plan, RotateInPlace, Waypoint
+from map_planner.models import MAP_VERSION, PathPosePoint, Obstacle, Plan, RotateInPlace, Waypoint, convert_plan_mode
 from map_planner.storage import list_plans, load_plan, rename_plan, save_plan
 
 
@@ -54,6 +54,26 @@ class StorageTests(unittest.TestCase):
     def test_v4_is_rejected_instead_of_migrated(self):
         with self.assertRaisesRegex(ValueError, "版本"):
             Plan.from_dict({"map_version": 4})
+
+    def test_v5_is_migrated_to_stop_point_with_explicit_warning(self):
+        value = Plan(waypoints=[Waypoint(1, 2)]).to_dict()
+        value["map_version"] = 5
+        value.pop("mode")
+        value.pop("path_points")
+        loaded = Plan.from_dict(value)
+        self.assertEqual(loaded.mode, "stop_point")
+        self.assertTrue(loaded.migration_warnings)
+        self.assertIn("停点路径", loaded.migration_warnings[0])
+
+    def test_v6_continuous_path_round_trip_and_mode_conversion(self):
+        plan = Plan(mode="continuous", path_points=[PathPosePoint(12, 34, 56)])
+        loaded = Plan.from_dict(plan.to_dict())
+        self.assertEqual(loaded.mode, "continuous")
+        self.assertEqual(loaded.path_points, [PathPosePoint(12, 34, 56)])
+        convert_plan_mode(loaded, "stop_point")
+        self.assertEqual(loaded.waypoints[0], Waypoint(12, 34, 56, name=""))
+        convert_plan_mode(loaded, "continuous")
+        self.assertEqual(loaded.path_points[0], PathPosePoint(12, 34, 56))
 
     def test_unknown_command_type_is_rejected(self):
         value = Plan().to_dict()

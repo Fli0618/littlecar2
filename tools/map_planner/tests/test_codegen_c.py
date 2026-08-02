@@ -10,7 +10,7 @@ from map_planner.codegen_c import (
     validate_task_function_name,
     validate_plan_for_blocking_codegen,
 )
-from map_planner.models import Plan, RotateInPlace, Waypoint
+from map_planner.models import PathPosePoint, Plan, RotateInPlace, Waypoint
 
 
 def test_default_function_names_are_ascii_and_stable():
@@ -108,3 +108,11 @@ def test_non_default_firmware_parameters_return_warning():
     )
     assert len(warnings) == 1
     assert "默认参数" in warnings[0]
+
+
+def test_continuous_plan_generates_one_static_path_call():
+    plan = Plan(mode="continuous", path_points=[PathPosePoint(1, 2, 3), PathPosePoint(4, 5, 6)])
+    code = generate_task_function(plan, "Task_Continuous")
+    assert "static const AdvancePathPose path[]" in code
+    assert code.count("AdvanceMotion_FollowPathBlocking(") == 1
+    assert "AdvanceMotion_GotoPoseBlocking" not in code

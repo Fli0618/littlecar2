@@ -11,14 +11,14 @@ from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, Q
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDoubleSpinBox, QFormLayout,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsPolygonItem, QGraphicsRectItem,
     QGraphicsScene, QGraphicsTextItem, QGraphicsView, QHBoxLayout, QInputDialog, QLabel, QListWidget,
-    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSlider, QSplitter, QVBoxLayout, QWidget, QRubberBand)
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSlider, QSplitter, QVBoxLayout, QWidget, QRubberBand, QComboBox)
 
 from .geometry import paper_to_world, world_to_paper
 from .codegen_c import CodeGenerationError, validate_plan_for_blocking_codegen
 from .codegen_dialog import CodeGenerationDialog
-from .models import CAR_SIZE_MM, FIELD_SIZE_MM, Obstacle, Plan, Pose, RotateInPlace, Waypoint
-from .sim import SimulationFrame, build_timeline
-from .sweep import SweepGeometry, build_goto_sweep, build_rotation_sweep
+from .models import CAR_SIZE_MM, FIELD_SIZE_MM, Obstacle, PathPosePoint, Plan, Pose, RotateInPlace, Waypoint, convert_plan_mode
+from .sim import SimulationFrame, build_continuous_timeline, build_timeline
+from .sweep import SweepGeometry, build_continuous_segment_sweep, build_goto_sweep, build_rotation_sweep
 from .storage import list_plans, load_plan, rename_plan, save_plan
 
 PLATFORMS = ((550, 550), (1400, 550), (550, 1400), (1400, 1400))
@@ -235,7 +235,7 @@ class PlannerWindow(QMainWindow):
         self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
         self.view.clicked.connect(self.on_map_click); self.view.hovered.connect(self.update_preview); self.view.released.connect(self.on_map_release); self.view.preview_rotated.connect(self.rotate_preview_clockwise); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
         self._build(); self._build_layout_sliders(); self.view.view_changed.connect(self.position_layout_sliders); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_waypoint)
-        self.redraw(); self.refresh_plans(); QTimer.singleShot(0,self.fit_map); QShortcut(QKeySequence(Qt.Key.Key_Home),self,activated=self.fit_map)
+        self.refresh_mode_ui(); self.redraw(); self.refresh_plans(); QTimer.singleShot(0,self.fit_map); QShortcut(QKeySequence(Qt.Key.Key_Home),self,activated=self.fit_map)
 
     def fit_map(self):
         self.view.fitInView(QRectF(-260,-260,2920,2920),Qt.AspectRatioMode.KeepAspectRatio); self.position_layout_sliders()
@@ -286,6 +286,9 @@ class PlannerWindow(QMainWindow):
             button.setCheckable(True); self.tool_group.addButton(button)
             button.toggled.connect(lambda checked=False, mode=value: checked and self.set_mode(mode)); toolbar.addWidget(button)
         self.select_button.setChecked(True); box.addLayout(toolbar)
+        mode_row = QHBoxLayout(); mode_row.addWidget(QLabel("规划模式")); self.plan_mode_combo = QComboBox()
+        self.plan_mode_combo.addItem("停点路径", "stop_point"); self.plan_mode_combo.addItem("连续路径", "continuous")
+        self.plan_mode_combo.currentIndexChanged.connect(self.on_plan_mode_changed); mode_row.addWidget(self.plan_mode_combo); box.addLayout(mode_row)
         box.addWidget(QLabel("方案")); self.plan_list = QListWidget(); self.plan_list.itemDoubleClicked.connect(self.load_selected); self.plan_list.setMinimumHeight(76); box.addWidget(self.plan_list)
         row = QHBoxLayout()
         for label, fn in (("新建", self.new_plan), ("保存", self.save), ("另存", self.save_as), ("重命名", self.rename_selected), ("加载", self.load_selected)):
@@ -296,10 +299,11 @@ class PlannerWindow(QMainWindow):
         self.codegen_button.clicked.connect(self.open_code_generator)
         row.addWidget(self.codegen_button)
         box.addLayout(row)
-        box.addWidget(QLabel("动作（绿色为当前 GOTO；橙色动作右键切换）")); self.waypoint_list = QListWidget(); self.waypoint_list.currentRowChanged.connect(self.activate_node); self.waypoint_list.setMinimumHeight(105); box.addWidget(self.waypoint_list)
+        self.stop_point_label=QLabel("动作（绿色为当前 GOTO；橙色动作右键切换）"); box.addWidget(self.stop_point_label); self.waypoint_list = QListWidget(); self.waypoint_list.currentRowChanged.connect(self.activate_node); self.waypoint_list.setMinimumHeight(105); box.addWidget(self.waypoint_list)
         action_row=QHBoxLayout(); self.append_rotation_button=QPushButton("追加原地转向"); self.insert_rotation_button=QPushButton("插入当前后")
         self.append_rotation_button.clicked.connect(self.append_rotation); self.insert_rotation_button.clicked.connect(self.insert_rotation_after_active); action_row.addWidget(self.append_rotation_button); action_row.addWidget(self.insert_rotation_button); box.addLayout(action_row)
-        delete = QPushButton("删除选中动作"); delete.clicked.connect(self.remove_waypoint); box.addWidget(delete)
+        self.stop_point_action_row = action_row
+        self.delete_button = QPushButton("删除选中动作"); self.delete_button.clicked.connect(self.remove_waypoint); box.addWidget(self.delete_button)
         form = QFormLayout(); self.x=spin(); self.y=spin(); self.yaw=spin(0,-360,360,5); self.use_yaw=QCheckBox("启用航向约束（GOTO Pose）")
         self.stop=QCheckBox("到点停止"); self.stop.setChecked(True); self.dwell=spin(.5,0,120,.1); self.node_vmax=spin(820,1,1500,10); self.vmax=self.node_vmax; self.node_wmax=spin(90,1,360,5); self.timeout=spin(15, .1, 300, 1)
         self.goto_form_widgets=[]
@@ -309,6 +313,14 @@ class PlannerWindow(QMainWindow):
             form.addRow(label,widget)
         form.addRow(self.use_yaw); form.addRow(self.stop); update=QPushButton("更新当前节点"); update.clicked.connect(self.update_waypoint); form.addRow(update); box.addLayout(form)
         self.goto_form_widgets.extend((self.use_yaw,self.stop)); self.update_action_button=update
+        self.stop_point_form = form
+        self.continuous_label = QLabel("连续位姿点（几何路径，不代表中途停车）"); self.continuous_list = QListWidget(); self.continuous_list.setMinimumHeight(105)
+        self.continuous_list.currentRowChanged.connect(self.activate_continuous_point)
+        self.continuous_x=spin(); self.continuous_y=spin(); self.continuous_yaw=spin(0,-360,360,5)
+        self.update_continuous_button=QPushButton("更新连续位姿点"); self.update_continuous_button.clicked.connect(self.update_continuous_point)
+        self.delete_continuous_button=QPushButton("删除连续位姿点"); self.delete_continuous_button.clicked.connect(self.remove_continuous_point)
+        self.continuous_panel=QWidget(); continuous_box=QVBoxLayout(self.continuous_panel); continuous_box.setContentsMargins(0,0,0,0); continuous_box.addWidget(self.continuous_label); continuous_box.addWidget(self.continuous_list)
+        continuous_form=QFormLayout(); continuous_form.addRow("X (mm)",self.continuous_x); continuous_form.addRow("Y (mm)",self.continuous_y); continuous_form.addRow("目标航向 (deg)",self.continuous_yaw); continuous_form.addRow(self.update_continuous_button); continuous_box.addLayout(continuous_form); continuous_box.addWidget(self.delete_continuous_button); box.addWidget(self.continuous_panel)
         box.addWidget(QLabel("仿真")); simrow=QHBoxLayout()
         for label, fn in (("播放",self.play),("暂停",self.pause),("重置",self.reset_simulation)):
             button=QPushButton(label); button.clicked.connect(fn); simrow.addWidget(button)
@@ -328,6 +340,24 @@ class PlannerWindow(QMainWindow):
         self.confirm_start_button=QPushButton("确认朝向"); self.confirm_start_button.clicked.connect(self.confirm_start_heading); guide.addWidget(self.confirm_start_button)
         map_box.addWidget(self.calibration_bar); map_box.addWidget(self.view)
         root.addWidget(scroll); root.addWidget(map_panel); root.setSizes([360,1060]); self.setCentralWidget(root); self.update_calibration_ui()
+
+    def on_plan_mode_changed(self, _index):
+        if not hasattr(self, "plan"):
+            return
+        target=self.plan_mode_combo.currentData()
+        if target == self.plan.mode:
+            return
+        source_count=len(self.plan.waypoints) if self.plan.mode == "stop_point" else len(self.plan.path_points)
+        if source_count and QMessageBox.question(self,"转换规划模式","切换模式会转换现有路径：停点动作会变为连续位姿点，或连续位姿点会变为到点停止的 GOTO。是否继续？") != QMessageBox.StandardButton.Yes:
+            self.plan_mode_combo.blockSignals(True); self.plan_mode_combo.setCurrentIndex(self.plan_mode_combo.findData(self.plan.mode)); self.plan_mode_combo.blockSignals(False); return
+        self.push_undo(); convert_plan_mode(self.plan,target); self.active_index=-1; self.selected_indices.clear(); self.refresh_waypoints(); self.refresh_mode_ui(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def refresh_mode_ui(self):
+        continuous=self.plan.mode == "continuous"
+        self.stop_point_label.setVisible(not continuous); self.waypoint_list.setVisible(not continuous); self.append_rotation_button.setVisible(not continuous); self.insert_rotation_button.setVisible(not continuous); self.delete_button.setVisible(not continuous)
+        for widget in self.goto_form_widgets: widget.setVisible(not continuous)
+        self.yaw.setVisible(not continuous); self.node_wmax.setVisible(not continuous); self.timeout.setVisible(not continuous); self.update_action_button.setVisible(not continuous)
+        self.continuous_panel.setVisible(continuous)
 
     def set_mode(self, mode):
         if mode != "add": self.clear_preview()
@@ -365,7 +395,7 @@ class PlannerWindow(QMainWindow):
         self.confirm_start_button.setVisible(heading_ready); self.confirm_start_button.setEnabled(heading_ready)
         enabled=not self.calibration_pending
         for widget in (self.add_button,self.obstacle_button,self.save_button,self.save_as_button,self.play_button): widget.setEnabled(enabled)
-        self.codegen_button.setEnabled(enabled and bool(self.plan.waypoints))
+        self.codegen_button.setEnabled(enabled and bool(self.plan.path_points if self.plan.mode == "continuous" else self.plan.waypoints))
 
     def on_map_click(self, x, y, shift=False):
         if math.isnan(x):
@@ -388,6 +418,10 @@ class PlannerWindow(QMainWindow):
 
     def _preview_anchor(self) -> tuple[QPointF, float, int]:
         position=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm); yaw=0.0; index=-1
+        if self.plan.mode == "continuous":
+            for index, point in enumerate(self.plan.path_points):
+                paper=self.paper_of(point); position=QPointF(paper.x_mm,paper.y_mm); yaw=point.yaw_deg
+            return position, yaw, index
         for command_index, command in enumerate(self.plan.waypoints):
             if isinstance(command,Waypoint):
                 position=QPointF(self.paper_of(command).x_mm,self.paper_of(command).y_mm)
@@ -416,13 +450,17 @@ class PlannerWindow(QMainWindow):
         self.update_preview(x, y, shift)
         if self.preview_paper is None or self.preview_yaw_deg is None: return
         anchor, anchor_yaw, _=self._preview_anchor()
-        if not self.is_valid_route_segment(anchor,self.preview_paper,anchor_yaw,self.preview_yaw_deg):
+        valid=(self.is_valid_continuous_segment(anchor,self.preview_paper,anchor_yaw,self.preview_yaw_deg) if self.plan.mode == "continuous" else self.is_valid_route_segment(anchor,self.preview_paper,anchor_yaw,self.preview_yaw_deg))
+        if not valid:
             self.status.setText("车体扫掠区域进入黄色禁行区或超出场地边界。")
             return
         pose=paper_to_world(self.preview_paper.x(),self.preview_paper.y(),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
         self.push_undo()
-        self.plan.waypoints.append(Waypoint(pose.x_mm,pose.y_mm,yaw_deg=self.preview_yaw_deg,use_yaw=True,name=f"节点 {len(self.plan.waypoints)+1}"))
-        self.active_index=len(self.plan.waypoints)-1; self.clear_preview(redraw=False); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+        if self.plan.mode == "continuous":
+            self.plan.path_points.append(PathPosePoint(pose.x_mm,pose.y_mm,self.preview_yaw_deg,f"位姿点 {len(self.plan.path_points)+1}")); self.active_index=len(self.plan.path_points)-1
+        else:
+            self.plan.waypoints.append(Waypoint(pose.x_mm,pose.y_mm,yaw_deg=self.preview_yaw_deg,use_yaw=True,name=f"节点 {len(self.plan.waypoints)+1}")); self.active_index=len(self.plan.waypoints)-1
+        self.clear_preview(redraw=False); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
     def rotate_preview_clockwise(self):
         if self.preview_yaw_deg is not None:
@@ -435,6 +473,13 @@ class PlannerWindow(QMainWindow):
         x,y=world_to_paper(Pose(waypoint.x_mm, waypoint.y_mm, waypoint.yaw_deg),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg); return Pose(x,y,waypoint.yaw_deg+self.plan.start_heading_deg)
 
     def refresh_waypoints(self):
+        if self.plan.mode == "continuous":
+            self.continuous_list.blockSignals(True); self.continuous_list.clear()
+            for index, point in enumerate(self.plan.path_points): self.continuous_list.addItem(f"{'* ' if index == self.active_index else ''}{index+1}. ({point.x_mm:.0f}, {point.y_mm:.0f})  航向 {point.yaw_deg:.0f}°")
+            self.continuous_list.blockSignals(False)
+            if 0 <= self.active_index < len(self.plan.path_points): self.continuous_list.setCurrentRow(self.active_index); self.show_continuous_point(self.active_index)
+            if hasattr(self,"codegen_button"): self.codegen_button.setEnabled(not self.calibration_pending and bool(self.plan.path_points))
+            return
         self.waypoint_list.blockSignals(True); self.waypoint_list.clear()
         for i,p in enumerate(self.plan.waypoints):
             value=f"原地转向 -> {p.yaw_deg:.0f}°" if isinstance(p,RotateInPlace) else f"GOTO ({p.x_mm:.0f}, {p.y_mm:.0f}){'  航向' if p.use_yaw else ''}"
@@ -444,6 +489,21 @@ class PlannerWindow(QMainWindow):
         if 0<=self.active_index<len(self.plan.waypoints): self.waypoint_list.setCurrentRow(self.active_index); self.show_node(self.active_index)
         if hasattr(self, "codegen_button"):
             self.codegen_button.setEnabled(not self.calibration_pending and bool(self.plan.waypoints))
+
+    def show_continuous_point(self, index):
+        if 0 <= index < len(self.plan.path_points):
+            point=self.plan.path_points[index]; self.continuous_x.setValue(point.x_mm); self.continuous_y.setValue(point.y_mm); self.continuous_yaw.setValue(point.yaw_deg)
+
+    def activate_continuous_point(self, index):
+        if self.plan.mode == "continuous" and 0 <= index < len(self.plan.path_points): self.active_index=index; self.show_continuous_point(index); self.redraw()
+
+    def update_continuous_point(self):
+        if self.plan.mode != "continuous" or not 0 <= self.active_index < len(self.plan.path_points): return
+        self.push_undo(); point=self.plan.path_points[self.active_index]; point.x_mm=self.continuous_x.value(); point.y_mm=self.continuous_y.value(); point.yaw_deg=self.continuous_yaw.value(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def remove_continuous_point(self):
+        if self.plan.mode != "continuous" or not 0 <= self.active_index < len(self.plan.path_points): return
+        self.push_undo(); del self.plan.path_points[self.active_index]; self.active_index=min(self.active_index,len(self.plan.path_points)-1); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
     def show_node(self,index):
         if not 0<=index<len(self.plan.waypoints): return
@@ -545,6 +605,12 @@ class PlannerWindow(QMainWindow):
 
     def invalid_waypoints(self):
         invalid=[]; previous=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm); previous_yaw=0.0
+        if self.plan.mode == "continuous":
+            for index, point in enumerate(self.plan.path_points):
+                paper=self.paper_of(point); current=QPointF(paper.x_mm,paper.y_mm)
+                if not self.is_valid_continuous_segment(previous,current,previous_yaw,point.yaw_deg): invalid.append(index)
+                previous=current; previous_yaw=point.yaw_deg
+            return invalid
         for index,waypoint in enumerate(self.plan.waypoints):
             if isinstance(waypoint,RotateInPlace):
                 if not self.is_valid_rotation(previous,previous_yaw,waypoint.yaw_deg,waypoint.wmax_deg_s,waypoint.timeout_s): invalid.append(index)
@@ -564,6 +630,10 @@ class PlannerWindow(QMainWindow):
     def route_sweep(self, start, end, start_yaw=0.0, end_yaw=0.0, vmax=820.0, wmax=90.0, timeout=15.0) -> SweepGeometry:
         heading=self.plan.start_heading_deg
         return build_goto_sweep(Pose(start.x(),start.y(),start_yaw+heading),Pose(end.x(),end.y(),end_yaw+heading),vmax,wmax,timeout)
+
+    def continuous_sweep(self, start, end, start_yaw=0.0, end_yaw=0.0) -> SweepGeometry:
+        heading=self.plan.start_heading_deg
+        return build_continuous_segment_sweep(Pose(start.x(),start.y(),start_yaw+heading),Pose(end.x(),end.y(),end_yaw+heading))
 
     def rotation_sweep(self, position, start_yaw, end_yaw, wmax=90.0, timeout=15.0) -> SweepGeometry:
         heading=self.plan.start_heading_deg
@@ -593,6 +663,10 @@ class PlannerWindow(QMainWindow):
 
     def is_valid_route_segment(self, start, end, start_yaw=0.0, end_yaw=0.0, vmax=820.0, wmax=90.0, timeout=15.0):
         out_of_bounds, hit_platform=self.sweep_violations(self.route_sweep(start,end,start_yaw,end_yaw,vmax,wmax,timeout))
+        return not out_of_bounds and hit_platform.isEmpty()
+
+    def is_valid_continuous_segment(self, start, end, start_yaw=0.0, end_yaw=0.0):
+        out_of_bounds, hit_platform=self.sweep_violations(self.continuous_sweep(start,end,start_yaw,end_yaw))
         return not out_of_bounds and hit_platform.isEmpty()
 
     def is_valid_rotation(self, position, start_yaw, end_yaw, wmax=90.0, timeout=15.0):
@@ -659,6 +733,14 @@ class PlannerWindow(QMainWindow):
         item=StartItem(self.plan.start_heading_deg,self.rotate_start_clockwise); item.setPos(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm); self.scene.addItem(item)
 
     def draw_route(self):
+        if self.plan.mode == "continuous":
+            invalid=set(self.invalid_waypoints()); previous=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm)
+            for index, point in enumerate(self.plan.path_points):
+                paper=self.paper_of(point); current=QPointF(paper.x_mm,paper.y_mm); color=QColor("#c62828") if index in invalid else QColor("#00897b")
+                line=self.scene.addLine(previous.x(),previous.y(),current.x(),current.y(),QPen(color,6)); line.setData(0,"continuous_path_segment")
+                marker=self.scene.addEllipse(current.x()-11,current.y()-11,22,22,QPen(color,3),QColor("#e0f2f1")); marker.setData(0,"continuous_path_point"); marker.setZValue(11)
+                previous=current
+            return
         invalid=set(self.invalid_waypoints())
         previous=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm)
         for i,p in enumerate(self.plan.waypoints):
@@ -677,7 +759,7 @@ class PlannerWindow(QMainWindow):
     def draw_preview(self):
         if self.preview_paper is None or self.preview_yaw_deg is None: return
         anchor, anchor_yaw, _=self._preview_anchor()
-        sweep=self.route_sweep(anchor,self.preview_paper,anchor_yaw,self.preview_yaw_deg)
+        sweep=self.continuous_sweep(anchor,self.preview_paper,anchor_yaw,self.preview_yaw_deg) if self.plan.mode == "continuous" else self.route_sweep(anchor,self.preview_paper,anchor_yaw,self.preview_yaw_deg)
         out_of_bounds, hit_platform=self.sweep_violations(sweep)
         valid=not out_of_bounds and hit_platform.isEmpty()
         path=self.sweep_path(sweep)
@@ -776,8 +858,9 @@ class PlannerWindow(QMainWindow):
     def rebuild_timeline_after_edit(self):
         """动作编辑提交后预先生成暂停时间轴，供进度条直接定位。"""
         self._invalidate_timeline()
-        if self.calibration_pending or not self.plan.waypoints or not self.is_valid_start_pose() or self.invalid_waypoints(): return
-        self.timeline=build_timeline(copy.deepcopy(self.plan.waypoints),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
+        commands=self.plan.path_points if self.plan.mode == "continuous" else self.plan.waypoints
+        if self.calibration_pending or not commands or not self.is_valid_start_pose() or self.invalid_waypoints(): return
+        self.timeline=(build_continuous_timeline(copy.deepcopy(self.plan.path_points),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg) if self.plan.mode == "continuous" else build_timeline(copy.deepcopy(self.plan.waypoints),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg))
         self.progress.blockSignals(True); self.progress.setRange(0,len(self.timeline)); self.progress.setValue(0); self.progress.blockSignals(False)
         self.progress.setEnabled(bool(self.timeline)); self._update_progress_ui()
 
@@ -796,7 +879,7 @@ class PlannerWindow(QMainWindow):
         if not self.is_valid_start_pose(): self.status.setText("起点车体进入黄色禁行区或超出场地边界。"); return
         invalid=self.invalid_waypoints()
         if invalid: self.status.setText("以下步骤超出车体中心可移动范围："+"、".join(str(i+1) for i in invalid)); return
-        if not self.plan.waypoints: self.status.setText("至少添加一个节点后才能仿真。 "); return
+        if not (self.plan.path_points if self.plan.mode == "continuous" else self.plan.waypoints): self.status.setText("至少添加一个节点后才能仿真。 "); return
         if not self.timeline: self.rebuild_timeline_after_edit()
         if not self.timeline: return
         if self.timeline_position >= len(self.timeline): self.progress.setValue(0)
@@ -811,7 +894,7 @@ class PlannerWindow(QMainWindow):
         if self.timeline_position >= len(self.timeline): self.pause()
     def refresh_plans(self): self.plan_list.clear(); self.plan_list.addItems(list_plans())
     def new_plan(self):
-        self._invalidate_timeline(); self.plan=Plan(); self.active_index=-1; self.undo_stack=[]; self.redo_stack=[]; self.selected_indices=set(); self.calibration_pending=True; self.calibration_stage="choose"; self.set_mode("select"); self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
+        self._invalidate_timeline(); self.plan=Plan(); self.plan_mode_combo.blockSignals(True); self.plan_mode_combo.setCurrentIndex(0); self.plan_mode_combo.blockSignals(False); self.active_index=-1; self.undo_stack=[]; self.redo_stack=[]; self.selected_indices=set(); self.calibration_pending=True; self.calibration_stage="choose"; self.set_mode("select"); self.update_calibration_ui(); self.refresh_mode_ui(); self.refresh_waypoints(); self.redraw()
     def save(self):
         if self.calibration_pending: self.status.setText("请先完成起点标定。"); return
         if not self.is_valid_start_pose(): self.status.setText("无法保存：起点车体进入黄色禁行区或超出场地边界。"); return
@@ -828,7 +911,9 @@ class PlannerWindow(QMainWindow):
     def load_selected(self):
         item=self.plan_list.currentItem()
         if item is None:return
-        try: self._invalidate_timeline(); self.plan=load_plan(item.text()); self.active_index=-1; self.calibration_pending=False; self.calibration_stage="complete"; self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
+        try:
+            self._invalidate_timeline(); self.plan=load_plan(item.text()); self.plan_mode_combo.blockSignals(True); self.plan_mode_combo.setCurrentIndex(self.plan_mode_combo.findData(self.plan.mode)); self.plan_mode_combo.blockSignals(False); self.active_index=-1; self.calibration_pending=False; self.calibration_stage="complete"; self.update_calibration_ui(); self.refresh_mode_ui(); self.refresh_waypoints(); self.redraw()
+            if self.plan.migration_warnings: self.status.setText("\n".join(self.plan.migration_warnings))
         except ValueError as error: QMessageBox.warning(self,"加载失败",str(error))
 
     def rename_selected(self):
@@ -861,7 +946,7 @@ class PlannerWindow(QMainWindow):
         if not self.is_valid_start_pose():
             self.status.setText("起点姿态不合法，修正起点位置或朝向后才能生成代码。")
             return
-        if not self.plan.waypoints:
+        if not (self.plan.path_points if self.plan.mode == "continuous" else self.plan.waypoints):
             self.status.setText("当前方案没有任何运动动作。")
             return
         invalid = self.invalid_waypoints()
