@@ -180,20 +180,20 @@ extern "C"
     float integral_x_mm_s;
     float integral_y_mm_s;
     float integral_yaw_deg_s;
-    uint16_t nearest_segment_index;
-    uint16_t target_segment_index;
-    float path_progress_mm;
-    float path_remaining_mm;
-    float path_projection_x_mm;
-    float path_projection_y_mm;
-    float path_curvature_preview_1_mm;
-    float path_yaw_gradient_deg_per_mm;
-    float path_reference_speed_mm_s;
-    float path_lookahead_mm;
-    float path_feedforward_vx_mm_s;
-    float path_feedforward_vy_mm_s;
-    float path_feedforward_wz_deg_s;
-    uint8_t path_final_stage;
+    uint16_t nearest_segment_index; /*!< 当前投影点所在的路径段索引。 */
+    uint16_t target_segment_index; /*!< 动态前视点所在的路径段索引。 */
+    float path_progress_mm; /*!< 从路径起点到投影点的累计弧长，单位为 mm。 */
+    float path_remaining_mm; /*!< 从投影点到最终点的剩余弧长，单位为 mm。 */
+    float path_projection_x_mm; /*!< 当前路径投影点 world X，单位为 mm。 */
+    float path_projection_y_mm; /*!< 当前路径投影点 world Y，单位为 mm。 */
+    float path_curvature_preview_1_mm; /*!< 预览窗口内的最大绝对曲率，单位为 1/mm。 */
+    float path_yaw_gradient_deg_per_mm; /*!< 投影段的有符号航向梯度，单位为 deg/mm。 */
+    float path_reference_speed_mm_s; /*!< 加减速约束后的路径参考速度，单位为 mm/s。 */
+    float path_lookahead_mm; /*!< 当前动态前视距离，单位为 mm。 */
+    float path_feedforward_vx_mm_s; /*!< 路径切向 X 速度前馈，单位为 mm/s。 */
+    float path_feedforward_vy_mm_s; /*!< 路径切向 Y 速度前馈，单位为 mm/s。 */
+    float path_feedforward_wz_deg_s; /*!< 路径航向变化率前馈，单位为 deg/s。 */
+    uint8_t path_final_stage; /*!< 非零表示已进入最终 Goto PID 捕获阶段。 */
   } AdvanceMotion_DebugSnapshot_t;
 
 #define ADVANCE_MOTION_DEBUG_FLAG_VALID ((uint8_t)0x01U)
@@ -214,14 +214,14 @@ extern "C"
   /**
    * @brief 异步启动连续路径跟踪。
    * @details points 必须指向调用方长期持有的只读数组；任务结束、取消或进入异常终态前，
-   * 调用方不得释放、覆盖或修改该数组。所有点必须启用位置约束，最后一个点为精确收敛并停车的终点。
+   * 调用方不得释放、覆盖或修改该数组。中间点是连续通过的软途经点，最后一个点是精确收敛并停车的终点。
    * @param points 路径离散采样点数组。
    * @param point_count 路径点数量，至少为 2。
-   * @param acc 底盘加速度参数。
    * @return 启动结果状态。
    */
   AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_t *points,
                                                      uint16_t point_count);
+  /** @brief 阻塞执行连续路径；等待期间仅执行 __WFI()，不得从中断上下文调用。 */
   AdvanceMotion_RunState_t AdvanceMotion_FollowPathBlocking(const AdvanceMotion_PathPoint_t *points,
                                                              uint16_t point_count);
   /**

@@ -19,9 +19,7 @@
 - 框选或 `Ctrl+A` 后可批量平移、删除节点，`Ctrl+Z`/`Ctrl+Shift+Z` 撤销或重做。
 - 虚线绿色框是 `300 mm × 300 mm` 车体中心可移动范围，即图纸坐标 `X/Y=150～2250 mm`；越界方案不能保存或播放。
 
-方案 JSON 使用 `map_version: 6`。`mode: "stop_point"` 保留原有的 `commands` 停点动作序列；`mode: "continuous"` 使用 `path_points` 保存连续路径的几何位姿点。加载 v5 方案时会自动迁移为停点路径，并在界面中明确提示；更早版本仍会拒绝加载。
-
-规划模式切换需要确认。停点路径转换为连续路径时，原地转向和 GOTO 会依次转换为几何位姿点；连续路径转换回来时，每个点会变为默认“到点停止”的 GOTO。连续路径的播放仅用于几何预览和碰撞检查，不表示实车动力学或实际跟踪效果。
+方案 JSON 使用 `map_version: 7`，仅通过有序 `steps` 保存 `goto_pose`、`rotate_in_place` 和 `continuous_path`。v5/v6 方案及旧 `mode`、`commands`、`path_points` 顶层结构不再加载。连续路径的播放仅用于几何预览和碰撞检查，不表示实车动力学或实际跟踪效果。
 
 ## 仿真模型
 
@@ -57,7 +55,7 @@ conda run -n low_numpy python -m pytest tools/map_planner/tests -q
 
 在方案操作区点击“生成业务函数”可打开代码预览窗口。方案必须完成起点与朝向标定，并至少包含一个动作；路径碰撞、越界和不支持的语义会被拒绝。
 
-生成函数格式为 `void Task_<Name>(void)`，函数名称可在窗口内编辑并严格校验。停点模式下每个 GOTO 和原地转向都使用 `AdvanceMotion_GotoPoseBlocking()`；连续模式生成 `static const AdvancePathPose path[]`，并只调用一次 `AdvanceMotion_FollowPathBlocking()`。两种模式均使用 `CHASSIS_DEFAULT_ACC` 并在失败时取消运动。停点模式的正数停留会转换为 `HAL_Delay()`。
+生成函数格式为 `void Task_<Name>(void)`，函数名称可在窗口内编辑并严格校验。生成器按步骤顺序为 GOTO 和原地转向调用 `AdvanceMotion_GotoPoseBlocking()`；每个连续路径步骤生成独立的 `static const AdvanceMotion_PathPoint_t` 数组并调用一次 `AdvanceMotion_FollowPathBlocking()`。GOTO 和原地转向使用 `CHASSIS_DEFAULT_ACC`，任一步骤失败都会取消运动；GOTO 的正数停留会转换为 `HAL_Delay()`。
 
 `Waypoint.x_mm`、`Waypoint.y_mm` 和 `yaw_deg` 已经是根据起点定义的世界坐标，生成时不会再次进行坐标转换。原地转向保持上一个最近的 GOTO 目标位置。当前不支持 `use_yaw=False` 和 `stop=False`；节点的速度、角速度和超时使用 STM32 固件默认值，不会写入生成代码。
 

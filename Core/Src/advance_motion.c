@@ -90,7 +90,7 @@ static void AdvanceMotion_ClearPathContext(void)
   g_path = (AdvanceMotion_PathContext_t){0};
 }
 
-/* 清除仅属于一轮 GotoPose 的 PID 与外部进展校验历史。 */
+/* 清除一轮位姿或路径任务的 PID、速度估计与进展校验历史。 */
 static void AdvanceMotion_ResetPidAndProgress(void)
 {
   g_motion_control.pid_last_tick = 0U;
@@ -315,7 +315,7 @@ static void AdvanceMotion_UpdatePidIntegral(float vx_world_mm_s, float vy_world_
   }
 }
 
-/* 以位置误差的下降量校验外部闭环是否仍在取得进展。 */
+/* 路径中段按累计弧长、Goto 阶段按位置误差校验运动进展。 */
 static uint8_t AdvanceMotion_HasNoProgress(uint32_t now_tick, float command_magnitude)
 {
   if ((g_path.active != 0U) && (g_path.final_stage == 0U))
@@ -879,7 +879,7 @@ void AdvanceMotion_Init(void)
   AdvanceMotion_UpdateDebugSnapshot(HAL_GetTick(), 0U);
 }
 
-/* 设置世界坐标系速度，并取消正在执行的到点任务。 */
+/* 设置世界坐标系速度，并取消正在执行的位姿或路径任务。 */
 AdvanceMotion_Status_t AdvanceMotion_SetWorldVelocityEx(float vx_world_mm_s, float vy_world_mm_s, float wz_ccw_deg_s, uint8_t acc)
 {
   if (g_motion_state == ADVANCE_MOTION_STATE_RUNNING)
@@ -1086,7 +1086,7 @@ AdvanceMotion_RunState_t AdvanceMotion_GotoPoseBlocking(float x_mm, float y_mm,
   return AdvanceMotion_GotoGoalBlocking(&goal, acc);
 }
 
-/* 周期性读取世界位姿，计算误差并驱动到点控制状态机。 */
+/* 周期性读取世界位姿，并推进 Goto 或连续路径控制状态机。 */
 void AdvanceMotion_Update(void)
 {
   uint32_t now_tick = HAL_GetTick();
