@@ -10,3 +10,4 @@ MDK-ARM/docs/temp/
 jetson/scripts/圆形检测/v2/circle/
 jetson/scripts/littlecar2.code-workspace
 MDK-ARM/eide配置.json
+tools/topology_planner/topology_planner/__pycache__/
