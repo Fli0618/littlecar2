@@ -87,13 +87,10 @@ class Simulation:
         dy = command.y_mm - self.actual.y_mm
         distance = math.hypot(dx, dy)
         speed = math.hypot(self.vx, self.vy)
-        if distance <= POSITION_TOLERANCE_MM and speed <= STOP_SPEED_MM_S:
-            self.actual.x_mm = command.x_mm
-            self.actual.y_mm = command.y_mm
-            self.vx = self.vy = 0.0
-            return True
-
-        if distance <= POSITION_TOLERANCE_MM:
+        if distance <= 1e-6:
+            if speed <= STOP_SPEED_MM_S:
+                self.vx = self.vy = 0.0
+                return True
             next_speed = self._approach(speed, 0.0, LINEAR_ACCELERATION_MM_S2 * DT_S)
             if speed:
                 self.vx *= next_speed / speed

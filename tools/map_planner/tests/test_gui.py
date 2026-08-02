@@ -263,8 +263,11 @@ class GuiTests(unittest.TestCase):
             self.assertIn("300.0 mm", window.measurement_label.text())
             self.assertIn("400.0 mm", window.measurement_label.text())
             self.assertIn("500.0 mm", window.measurement_label.text())
+            self.assertEqual(len([item for item in window.scene.items() if item.data(0) == "measurement_horizontal_guide"]), 1)
+            self.assertEqual(len([item for item in window.scene.items() if item.data(0) == "measurement_vertical_guide"]), 1)
             window.set_mode("select")
             self.assertEqual(window.measurement_points, [])
+            self.assertFalse(any(item.data(0) == "measurement_horizontal_guide" for item in window.scene.items()))
         finally:
             window.close()
 

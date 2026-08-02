@@ -13,18 +13,20 @@ from map_planner.sim import (
 class SimulationTests(unittest.TestCase):
     def test_linear_motion_accelerates_then_brakes_at_fixed_rate(self):
         simulation = Simulation([Waypoint(1000, 0, vmax_mm_s=100, timeout_s=30)])
+        positions = [simulation.actual.x_mm]
         simulation.step()
         self.assertAlmostEqual(simulation.vx, LINEAR_ACCELERATION_MM_S2 * DT_S)
         for _ in range(20):
-            simulation.step()
+            positions.append(simulation.step().actual.x_mm)
         self.assertLessEqual(abs(simulation.vx), 100)
         for _ in range(1000):
-            simulation.step()
+            positions.append(simulation.step().actual.x_mm)
             if simulation.finished:
                 break
         self.assertTrue(simulation.finished)
         self.assertEqual((simulation.actual.x_mm, simulation.actual.y_mm), (1000, 0))
         self.assertEqual((simulation.vx, simulation.vy), (0, 0))
+        self.assertLessEqual(max(b-a for a,b in zip(positions,positions[1:])), 100 * DT_S)
 
     def test_rotation_keeps_position_and_obeys_fixed_angular_acceleration(self):
         simulation = Simulation([RotateInPlace(90, wmax_deg_s=60, timeout_s=30)])

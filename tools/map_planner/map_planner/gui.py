@@ -270,7 +270,7 @@ class PlannerWindow(QMainWindow):
         if hasattr(self,"status"):
             message = "选择：框选、Ctrl 多选；中键或空格+左键平移地图。"
             if mode == "add": message = "添加节点：点击地图添加，按住 Shift 吸附水平、垂直或 45 度。"
-            elif mode == "measure": message = "测距：左键依次选择两点，Esc 或切换工具清除。"
+            elif mode == "measure": message = "测距：左键依次选择两点，生成水平和垂直对齐线；Esc 或切换工具清除。"
             self.status.setText(message)
         if mode == "select": self.select_button.setChecked(True)
         elif mode == "add": self.add_button.setChecked(True)
@@ -542,6 +542,9 @@ class PlannerWindow(QMainWindow):
             marker=self.scene.addEllipse(point.x()-13,point.y()-13,26,26,QPen(QColor("#4a148c"),3),QColor("#ffffff")); marker.setZValue(30)
         if len(self.measurement_points) == 2:
             first, second=self.measurement_points; line=self.scene.addLine(first.x(),first.y(),second.x(),second.y(),pen); line.setZValue(29)
+            guide=QPen(QColor(123,31,162,90),3,Qt.PenStyle.DashLine)
+            horizontal=self.scene.addLine(0,first.y(),FIELD_SIZE_MM,first.y(),guide); horizontal.setData(0,"measurement_horizontal_guide"); horizontal.setZValue(28)
+            vertical=self.scene.addLine(second.x(),0,second.x(),FIELD_SIZE_MM,guide); vertical.setData(0,"measurement_vertical_guide"); vertical.setZValue(28)
 
     def draw_car(self,pose):
         p=pose
