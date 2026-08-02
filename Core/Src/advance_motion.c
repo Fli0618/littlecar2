@@ -30,12 +30,16 @@ typedef struct
 
 typedef struct
 {
-  const WorldGoalPose2D_t *points;
+  const AdvanceMotion_PathPoint_t *points;
   uint16_t point_count;
   uint16_t nearest_index;
   uint16_t target_index;
   uint16_t progress_index;
   uint32_t progress_tick;
+  float progress_on_segment;
+  float cross_track_mm;
+  float lookahead_mm;
+  float last_cross_track_mm;
   uint8_t active;
 } AdvanceMotion_PathContext_t;
 
@@ -145,6 +149,20 @@ static void AdvanceMotion_UpdateDebugSnapshot(uint32_t now_tick, uint8_t flags)
   g_motion_debug.integral_x_mm_s = g_motion_control.pid_integral_x_mm_s;
   g_motion_debug.integral_y_mm_s = g_motion_control.pid_integral_y_mm_s;
   g_motion_debug.integral_yaw_deg_s = g_motion_control.pid_integral_yaw_deg_s;
+  g_motion_debug.nearest_segment_index = g_path.nearest_index;
+  g_motion_debug.target_segment_index = g_path.target_index;
+  g_motion_debug.path_progress_mm = g_path.progress_on_segment;
+  g_motion_debug.path_remaining_mm = 0.0f;
+  g_motion_debug.path_projection_x_mm = 0.0f;
+  g_motion_debug.path_projection_y_mm = 0.0f;
+  g_motion_debug.path_curvature_preview_1_mm = 0.0f;
+  g_motion_debug.path_yaw_gradient_deg_per_mm = 0.0f;
+  g_motion_debug.path_reference_speed_mm_s = 0.0f;
+  g_motion_debug.path_lookahead_mm = g_path.lookahead_mm;
+  g_motion_debug.path_feedforward_vx_mm_s = 0.0f;
+  g_motion_debug.path_feedforward_vy_mm_s = 0.0f;
+  g_motion_debug.path_feedforward_wz_deg_s = 0.0f;
+  g_motion_debug.path_final_stage = (g_path.target_index == (uint16_t)(g_path.point_count - 1U)) ? 1U : 0U;
 }
 
 static uint8_t AdvanceMotion_IsPidConfigValid(const AdvanceMotion_PidConfig_t *config)
@@ -394,136 +412,69 @@ static uint8_t AdvanceMotion_IsGoalValid(const WorldGoalPose2D_t *goal)
   return 1U;
 }
 
-static uint16_t AdvanceMotion_FindNearestPathPoint(const WorldPose2D_t *pose,
-                                                    uint16_t start_index)
-{
-  uint16_t end_index;
-  uint16_t index;
-  uint16_t nearest_index;
-  float dx;
-  float dy;
-  float distance_squared;
-  float nearest_distance_squared;
-
-  if ((pose == NULL) || (g_path.points == NULL) || (g_path.point_count == 0U))
-  {
-    return 0U;
-  }
-  if (start_index >= g_path.point_count)
-  {
-    start_index = (uint16_t)(g_path.point_count - 1U);
-  }
-  end_index = (uint16_t)(start_index + (ADVANCE_MOTION_PATH_SEARCH_POINTS - 1U));
-  if ((end_index < start_index) || (end_index >= g_path.point_count))
-  {
-    end_index = (uint16_t)(g_path.point_count - 1U);
-  }
-
-  nearest_index = start_index;
-  dx = g_path.points[start_index].x_mm - pose->x_mm;
-  dy = g_path.points[start_index].y_mm - pose->y_mm;
-  nearest_distance_squared = (dx * dx) + (dy * dy);
-  for (index = (uint16_t)(start_index + 1U); index <= end_index; ++index)
-  {
-    dx = g_path.points[index].x_mm - pose->x_mm;
-    dy = g_path.points[index].y_mm - pose->y_mm;
-    distance_squared = (dx * dx) + (dy * dy);
-    if (distance_squared < nearest_distance_squared)
-    {
-      nearest_distance_squared = distance_squared;
-      nearest_index = index;
-    }
-  }
-
-  return nearest_index;
-}
-
-static uint16_t AdvanceMotion_FindLookaheadPoint(uint16_t nearest_index)
-{
-  uint16_t index;
-  float accumulated_mm = 0.0f;
-  float dx;
-  float dy;
-  float segment_mm;
-
-  if ((g_path.points == NULL) || (g_path.point_count == 0U))
-  {
-    return 0U;
-  }
-  if (nearest_index >= (uint16_t)(g_path.point_count - 1U))
-  {
-    return (uint16_t)(g_path.point_count - 1U);
-  }
-
-  for (index = (uint16_t)(nearest_index + 1U); index < g_path.point_count; ++index)
-  {
-    dx = g_path.points[index].x_mm - g_path.points[index - 1U].x_mm;
-    dy = g_path.points[index].y_mm - g_path.points[index - 1U].y_mm;
-    segment_mm = sqrtf((dx * dx) + (dy * dy));
-    accumulated_mm += segment_mm;
-    if (accumulated_mm >= ADVANCE_MOTION_PATH_LOOKAHEAD_MM)
-    {
-      return index;
-    }
-  }
-
-  return (uint16_t)(g_path.point_count - 1U);
-}
-
 static void AdvanceMotion_UpdatePathReference(void)
 {
   uint16_t index;
-  uint16_t new_target_index;
-  float accumulated_mm = 0.0f;
-  float dx;
-  float dy;
-  float segment_mm;
-  float remaining_mm;
-  float ratio;
-  const WorldGoalPose2D_t *from;
-  const WorldGoalPose2D_t *to;
+  uint16_t end_index;
+  float best_t = 0.0f;
+  float best_distance_squared = 0.0f;
+  float lookahead;
 
-  g_path.nearest_index = AdvanceMotion_FindNearestPathPoint(&g_motion.pose, g_path.nearest_index);
-  new_target_index = AdvanceMotion_FindLookaheadPoint(g_path.nearest_index);
-  if ((new_target_index == (uint16_t)(g_path.point_count - 1U)) &&
-      (g_path.target_index != new_target_index))
+  end_index = g_path.nearest_index + ADVANCE_MOTION_PATH_SEARCH_SEGMENTS;
+  if ((end_index < g_path.nearest_index) || (end_index >= (uint16_t)(g_path.point_count - 1U)))
   {
-    g_motion_control.pid_integral_x_mm_s = 0.0f;
-    g_motion_control.pid_integral_y_mm_s = 0.0f;
-    g_motion_control.pid_integral_yaw_deg_s = 0.0f;
+    end_index = (uint16_t)(g_path.point_count - 2U);
   }
-  g_path.target_index = new_target_index;
-  if (new_target_index == (uint16_t)(g_path.point_count - 1U))
+  for (index = g_path.nearest_index; index <= end_index; ++index)
   {
-    g_motion.goal = g_path.points[new_target_index];
-    return;
-  }
-
-  for (index = (uint16_t)(g_path.nearest_index + 1U); index <= new_target_index; ++index)
-  {
-    from = &g_path.points[index - 1U];
-    to = &g_path.points[index];
-    dx = to->x_mm - from->x_mm;
-    dy = to->y_mm - from->y_mm;
-    segment_mm = sqrtf((dx * dx) + (dy * dy));
-    if ((segment_mm > 0.0f) && ((accumulated_mm + segment_mm) >= ADVANCE_MOTION_PATH_LOOKAHEAD_MM))
+    const AdvanceMotion_PathPoint_t *a = &g_path.points[index];
+    const AdvanceMotion_PathPoint_t *b = &g_path.points[index + 1U];
+    float dx = b->x_mm - a->x_mm;
+    float dy = b->y_mm - a->y_mm;
+    float len2 = (dx * dx) + (dy * dy);
+    float t = ((g_motion.pose.x_mm - a->x_mm) * dx + (g_motion.pose.y_mm - a->y_mm) * dy) / len2;
+    float ex;
+    float ey;
+    float d2;
+    t = AdvanceWorld_LimitFloat(t, (index == g_path.nearest_index) ? g_path.progress_on_segment : 0.0f, 1.0f);
+    ex = g_motion.pose.x_mm - (a->x_mm + (t * dx));
+    ey = g_motion.pose.y_mm - (a->y_mm + (t * dy));
+    d2 = (ex * ex) + (ey * ey);
+    if ((index == g_path.nearest_index) || (d2 < best_distance_squared))
     {
-      remaining_mm = ADVANCE_MOTION_PATH_LOOKAHEAD_MM - accumulated_mm;
-      ratio = AdvanceWorld_LimitFloat(remaining_mm / segment_mm, 0.0f, 1.0f);
-      g_motion.goal.x_mm = from->x_mm + (ratio * dx);
-      g_motion.goal.y_mm = from->y_mm + (ratio * dy);
-      g_motion.goal.yaw_deg = AdvanceWorld_WrapAngleDeg(
-          from->yaw_deg + (ratio * AdvanceWorld_WrapAngleDeg(to->yaw_deg - from->yaw_deg)));
-      g_motion.goal.vmax_mm_s = from->vmax_mm_s + (ratio * (to->vmax_mm_s - from->vmax_mm_s));
-      g_motion.goal.wmax_deg_s = from->wmax_deg_s + (ratio * (to->wmax_deg_s - from->wmax_deg_s));
-      g_motion.goal.timeout_ms = g_path.points[g_path.point_count - 1U].timeout_ms;
-      g_motion.goal.goal_flags = to->goal_flags;
-      return;
+      g_path.nearest_index = index;
+      best_t = t;
+      best_distance_squared = d2;
+      g_path.cross_track_mm = ((dx * ey) - (dy * ex)) / sqrtf(len2);
     }
-    accumulated_mm += segment_mm;
   }
-
-  g_motion.goal = g_path.points[new_target_index];
+  g_path.progress_on_segment = best_t;
+  lookahead = ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM +
+              (AdvanceMotion_AbsFloat(g_motion_control.command_vx_world_mm_s) +
+               AdvanceMotion_AbsFloat(g_motion_control.command_vy_world_mm_s)) *
+                  ADVANCE_MOTION_PATH_LOOKAHEAD_SPEED_GAIN_S;
+  g_path.lookahead_mm = AdvanceWorld_LimitFloat(lookahead, ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM,
+                                                 ADVANCE_MOTION_PATH_LOOKAHEAD_MAX_MM);
+  /* The final waypoint deliberately enters the existing Goto PID convergence path. */
+  if (g_path.nearest_index >= (uint16_t)(g_path.point_count - 2U))
+  {
+    g_path.target_index = (uint16_t)(g_path.point_count - 1U);
+    g_motion.goal.x_mm = g_path.points[g_path.target_index].x_mm;
+    g_motion.goal.y_mm = g_path.points[g_path.target_index].y_mm;
+    g_motion.goal.yaw_deg = g_path.points[g_path.target_index].yaw_deg;
+  }
+  else
+  {
+    const AdvanceMotion_PathPoint_t *target = &g_path.points[g_path.nearest_index + 1U];
+    g_path.target_index = (uint16_t)(g_path.nearest_index + 1U);
+    g_motion.goal.x_mm = target->x_mm;
+    g_motion.goal.y_mm = target->y_mm;
+    g_motion.goal.yaw_deg = target->yaw_deg;
+  }
+  g_motion.goal.vmax_mm_s = ADVANCE_MOTION_PATH_CRUISE_SPEED_MM_S;
+  g_motion.goal.wmax_deg_s = ADVANCE_MOTION_PATH_MAX_WZ_DEG_S;
+  g_motion.goal.timeout_ms = ADVANCE_MOTION_PATH_TIMEOUT_MAX_MS;
+  g_motion.goal.goal_flags = ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW;
 }
 
 static AdvanceMotion_Status_t AdvanceMotion_GetFreshYaw(WorldPose2D_t *pose)
@@ -749,8 +700,8 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
   return ADVANCE_MOTION_STATUS_OK;
 }
 
-AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const WorldGoalPose2D_t *points,
-                                                   uint16_t point_count, uint8_t acc)
+AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_t *points,
+                                                   uint16_t point_count)
 {
   WorldPose2D_t pose;
   AdvanceMotion_Status_t pose_status;
@@ -762,8 +713,15 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const WorldGoalPose2D_t *point
   }
   for (index = 0U; index < point_count; ++index)
   {
-    if ((AdvanceMotion_IsGoalValid(&points[index]) == 0U) ||
-        ((points[index].goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) == 0U))
+    if ((isfinite(points[index].x_mm) == 0) || (isfinite(points[index].y_mm) == 0) ||
+        (isfinite(points[index].yaw_deg) == 0) ||
+        (points[index].x_mm < ADVANCE_MOTION_WORLD_X_MIN_MM) ||
+        (points[index].x_mm > ADVANCE_MOTION_WORLD_X_MAX_MM) ||
+        (points[index].y_mm < ADVANCE_MOTION_WORLD_Y_MIN_MM) ||
+        (points[index].y_mm > ADVANCE_MOTION_WORLD_Y_MAX_MM) ||
+        ((index > 0U) &&
+         (((points[index].x_mm - points[index - 1U].x_mm) * (points[index].x_mm - points[index - 1U].x_mm)) +
+          ((points[index].y_mm - points[index - 1U].y_mm) * (points[index].y_mm - points[index - 1U].y_mm)) < 1.0f)))
     {
       return ADVANCE_MOTION_STATUS_INVALID_PARAM;
     }
@@ -788,7 +746,7 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const WorldGoalPose2D_t *point
   g_path.point_count = point_count;
   g_path.progress_tick = HAL_GetTick();
   g_path.active = 1U;
-  g_motion.goal = points[0];
+  g_motion.goal = (WorldGoalPose2D_t){0};
   g_motion.pose = pose;
   g_motion.started_tick = g_path.progress_tick;
   g_motion.updated_tick = g_motion.started_tick;
@@ -800,13 +758,27 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const WorldGoalPose2D_t *point
   g_motion.error_y_mm = 0.0f;
   g_motion.position_error_mm = 0.0f;
   g_motion.yaw_error_deg = 0.0f;
-  g_motion_control.acc = acc;
+  g_motion_control.acc = ADVANCE_MOTION_PATH_DRIVER_ACC;
   /* 路径任务必须持续平移与旋转并行，不继承单点 Goto 的先对准策略。 */
   g_motion_control.large_yaw_align_enabled = 0U;
   g_motion_control.yaw_aligning = 0U;
   AdvanceMotion_SavePidPose(&g_motion.pose, g_motion.started_tick);
   g_motion_state = ADVANCE_MOTION_STATE_RUNNING;
   return ADVANCE_MOTION_STATUS_OK;
+}
+
+AdvanceMotion_RunState_t AdvanceMotion_FollowPathBlocking(const AdvanceMotion_PathPoint_t *points,
+                                                           uint16_t point_count)
+{
+  if (AdvanceMotion_FollowPathEx(points, point_count) != ADVANCE_MOTION_STATUS_OK)
+  {
+    return ADVANCE_MOTION_STATE_CANCELED;
+  }
+  while (g_motion_state == ADVANCE_MOTION_STATE_RUNNING)
+  {
+    __WFI();
+  }
+  return g_motion_state;
 }
 
 /* 启动目标后仅等待 TIM6 将运动状态推进到终态。 */
@@ -873,9 +845,7 @@ void AdvanceMotion_Update(void)
     return;
   }
 
-  timeout_ms = (g_path.active != 0U)
-                   ? g_path.points[g_path.point_count - 1U].timeout_ms
-                   : g_motion.goal.timeout_ms;
+  timeout_ms = (g_path.active != 0U) ? ADVANCE_MOTION_PATH_TIMEOUT_MAX_MS : g_motion.goal.timeout_ms;
   if ((timeout_ms > 0U) && ((now_tick - g_motion.started_tick) >= timeout_ms))
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_TIMEOUT);
@@ -1020,6 +990,26 @@ void AdvanceMotion_Update(void)
     }
     raw_linear_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
                                   (vy_world_mm_s * vy_world_mm_s));
+    if ((g_path.active != 0U) && (path_final_stage == 0U))
+    {
+      const AdvanceMotion_PathPoint_t *a = &g_path.points[g_path.nearest_index];
+      const AdvanceMotion_PathPoint_t *b = &g_path.points[g_path.nearest_index + 1U];
+      float tx = b->x_mm - a->x_mm;
+      float ty = b->y_mm - a->y_mm;
+      float length = sqrtf((tx * tx) + (ty * ty));
+      float yaw_gradient;
+      float cross_track_rate;
+      tx /= length;
+      ty /= length;
+      yaw_gradient = AdvanceWorld_WrapAngleDeg(b->yaw_deg - a->yaw_deg) / length;
+      cross_track_rate = (g_path.cross_track_mm - g_path.last_cross_track_mm) / (dt_s + 0.001f);
+      vmax_mm_s = fminf(vmax_mm_s, ADVANCE_MOTION_PATH_MAX_WZ_DEG_S /
+                         fmaxf(AdvanceMotion_AbsFloat(yaw_gradient), ADVANCE_MOTION_PATH_YAW_GRADIENT_EPSILON_DEG_PER_MM));
+      vx_world_mm_s += tx * vmax_mm_s - ty * (ADVANCE_MOTION_PATH_KP_POS * g_path.cross_track_mm + ADVANCE_MOTION_PATH_KD_VEL * cross_track_rate);
+      vy_world_mm_s += ty * vmax_mm_s + tx * (ADVANCE_MOTION_PATH_KP_POS * g_path.cross_track_mm + ADVANCE_MOTION_PATH_KD_VEL * cross_track_rate);
+      wz_ccw_deg_s += yaw_gradient * vmax_mm_s;
+      g_path.last_cross_track_mm = g_path.cross_track_mm;
+    }
     (void)AdvanceMotion_LimitVector(&vx_world_mm_s, &vy_world_mm_s, vmax_mm_s);
     linear_saturated = (raw_linear_magnitude > vmax_mm_s) ? 1U : 0U;
   }
