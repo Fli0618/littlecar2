@@ -345,6 +345,45 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_rotation_sweep_rejects_boundary_and_accepts_safe_position(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.append_rotation()
+            window.plan.waypoints[0].yaw_deg = 45
+            window.redraw()
+            self.assertEqual(window.invalid_waypoints(), [0])
+            marker = next(item for item in window.scene.items() if item.data(0) == "rotate_in_place_marker")
+            self.assertEqual(marker.pen().color().name(), "#c62828")
+            window.plan.start_paper_x_mm, window.plan.start_paper_y_mm = 1200, 1200
+            self.assertEqual(window.invalid_waypoints(), [])
+        finally:
+            window.close()
+
+    def test_layout_sliders_stay_outside_the_competition_area(self):
+        window = PlannerWindow()
+        try:
+            window.show(); self.app.processEvents(); window.fit_map(); self.app.processEvents()
+            raw_corners = [window.view.mapToScene(point) for point in (window.raw_slider.geometry().topLeft(), window.raw_slider.geometry().bottomRight())]
+            qr_corners = [window.view.mapToScene(point) for point in (window.qr_slider.geometry().topLeft(), window.qr_slider.geometry().bottomRight())]
+            self.assertTrue(all(point.y() < 0 for point in raw_corners))
+            self.assertTrue(all(point.x() > 2400 for point in qr_corners))
+        finally:
+            window.close()
+
+    def test_action_edit_generates_a_paused_seekable_timeline(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.on_map_click(2200, 300)
+            self.assertTrue(window.timeline)
+            self.assertTrue(window.progress.isEnabled())
+            self.assertFalse(window.timer.isActive())
+            window.progress.setValue(max(1, window.progress.maximum() // 2))
+            self.assertGreater(window.timeline_position, 0)
+        finally:
+            window.close()
+
     def test_layout_sliders_update_at_one_millimeter_and_are_undoable(self):
         window = PlannerWindow()
         try:
@@ -360,7 +399,7 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(window.plan.layout.qr_center_y_mm, 1143)
             self.assertEqual(window.raw_slider.singleStep(), 1)
             self.assertEqual(window.qr_slider.singleStep(), 1)
-            self.assertEqual(window.timeline, [])
+            self.assertTrue(window.timeline)
             window.undo()
             self.assertEqual(window.plan.layout.raw_center_x_mm, 1200)
             self.assertEqual(window.plan.layout.qr_center_y_mm, 1200)

@@ -9,7 +9,7 @@ from map_planner.sim import (
     build_timeline,
 )
 from map_planner.models import Pose
-from map_planner.sweep import MAX_SAMPLE_DISTANCE_MM, MAX_SAMPLE_YAW_DEG, build_goto_sweep
+from map_planner.sweep import MAX_SAMPLE_DISTANCE_MM, MAX_SAMPLE_YAW_DEG, build_goto_sweep, build_rotation_sweep
 
 
 class SimulationTests(unittest.TestCase):
@@ -66,4 +66,12 @@ class SimulationTests(unittest.TestCase):
         self.assertGreater(len(sweep.polygons), 2)
         for first, second in zip(sweep.poses, sweep.poses[1:]):
             self.assertLessEqual(((second.x_mm-first.x_mm)**2 + (second.y_mm-first.y_mm)**2) ** .5, MAX_SAMPLE_DISTANCE_MM + 1e-6)
+            self.assertLessEqual(abs(((second.yaw_deg-first.yaw_deg+180) % 360)-180), MAX_SAMPLE_YAW_DEG + 1e-6)
+
+    def test_rotation_sweep_keeps_position_and_limits_heading_samples(self):
+        sweep = build_rotation_sweep(Pose(123, 456, 0), 90, 60, 30)
+        self.assertEqual(sweep.poses[0], Pose(123, 456, 0))
+        self.assertEqual(sweep.poses[-1], Pose(123, 456, 90))
+        for first, second in zip(sweep.poses, sweep.poses[1:]):
+            self.assertEqual((second.x_mm, second.y_mm), (123, 456))
             self.assertLessEqual(abs(((second.yaw_deg-first.yaw_deg+180) % 360)-180), MAX_SAMPLE_YAW_DEG + 1e-6)

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDoubleSpi
 from .geometry import paper_to_world, world_to_paper
 from .models import CAR_SIZE_MM, FIELD_SIZE_MM, Obstacle, Plan, Pose, RotateInPlace, Waypoint
 from .sim import SimulationFrame, build_timeline
-from .sweep import SweepGeometry, build_goto_sweep
+from .sweep import SweepGeometry, build_goto_sweep, build_rotation_sweep
 from .storage import list_plans, load_plan, save_plan
 
 PLATFORMS = ((550, 550), (1400, 550), (550, 1400), (1400, 1400))
@@ -253,15 +253,15 @@ class PlannerWindow(QMainWindow):
 
     def position_layout_sliders(self):
         if not hasattr(self, "raw_slider"): return
-        raw = self.view.mapFromScene(QPointF(self.plan.layout.raw_center_x_mm, 105))
-        qr = self.view.mapFromScene(QPointF(2265, self.plan.layout.qr_center_y_mm))
+        raw = self.view.mapFromScene(QPointF(self.plan.layout.raw_center_x_mm, -250))
+        qr = self.view.mapFromScene(QPointF(2475, self.plan.layout.qr_center_y_mm))
         self.raw_slider.move(raw.x() - self.raw_slider.width() // 2, raw.y())
         self.qr_slider.move(qr.x() - self.qr_slider.width(), qr.y() - self.qr_slider.height() // 2)
         self.raw_slider.setVisible(self.view.viewport().rect().intersects(self.raw_slider.geometry()))
         self.qr_slider.setVisible(self.view.viewport().rect().intersects(self.qr_slider.geometry()))
 
     def _begin_layout_slider_edit(self):
-        self._layout_slider_before = copy.deepcopy(self.plan); self._layout_slider_changed = False; self._invalidate_timeline()
+        self._layout_slider_before = copy.deepcopy(self.plan); self._layout_slider_changed = False
 
     def _set_raw_slider_value(self, value):
         if self.plan.layout.raw_center_x_mm == float(value): return
@@ -416,14 +416,14 @@ class PlannerWindow(QMainWindow):
         pose=paper_to_world(self.preview_paper.x(),self.preview_paper.y(),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
         self.push_undo()
         self.plan.waypoints.append(Waypoint(pose.x_mm,pose.y_mm,yaw_deg=self.preview_yaw_deg,use_yaw=True,name=f"节点 {len(self.plan.waypoints)+1}"))
-        self.active_index=len(self.plan.waypoints)-1; self.clear_preview(redraw=False); self.refresh_waypoints(); self.redraw()
+        self.active_index=len(self.plan.waypoints)-1; self.clear_preview(redraw=False); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
     def rotate_preview_clockwise(self):
         if self.preview_yaw_deg is not None:
             self.preview_yaw_deg=((self.preview_yaw_deg-90+180)%360)-180; self.redraw(); return
         if 0 <= self.active_index < len(self.plan.waypoints) and isinstance(self.plan.waypoints[self.active_index],RotateInPlace):
             self.push_undo(); action=self.plan.waypoints[self.active_index]; action.yaw_deg=((action.yaw_deg-90+180)%360)-180
-            self.show_node(self.active_index); self.refresh_waypoints(); self.redraw()
+            self.show_node(self.active_index); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
     def paper_of(self, waypoint):
         x,y=world_to_paper(Pose(waypoint.x_mm, waypoint.y_mm, waypoint.yaw_deg),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg); return Pose(x,y,waypoint.yaw_deg+self.plan.start_heading_deg)
@@ -456,13 +456,13 @@ class PlannerWindow(QMainWindow):
         if not 0<=self.active_index<len(self.plan.waypoints): return
         self.push_undo(); p=self.plan.waypoints[self.active_index]; p.yaw_deg=self.yaw.value(); p.wmax_deg_s=self.node_wmax.value(); p.timeout_s=self.timeout.value()
         if isinstance(p,Waypoint): p.x_mm=self.x.value(); p.y_mm=self.y.value(); p.use_yaw=self.use_yaw.isChecked(); p.stop=self.stop.isChecked(); p.dwell_s=self.dwell.value(); p.vmax_mm_s=self.node_vmax.value()
-        self.refresh_waypoints(); self.redraw()
+        self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
     def append_rotation(self): self.insert_rotation(len(self.plan.waypoints))
     def insert_rotation_after_active(self):
         if 0 <= self.active_index < len(self.plan.waypoints): self.insert_rotation(self.active_index+1)
     def insert_rotation(self,index):
-        self.push_undo(); self.plan.waypoints.insert(index,RotateInPlace()); self.active_index=index; self.refresh_waypoints(); self.redraw()
+        self.push_undo(); self.plan.waypoints.insert(index,RotateInPlace()); self.active_index=index; self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
     def move_waypoint(self,index,before,after,shift=False):
         if index != self.active_index or before==after: return
@@ -479,13 +479,13 @@ class PlannerWindow(QMainWindow):
         for selected in indices:
             current=self.paper_of(self.plan.waypoints[selected]); pose=paper_to_world(current.x_mm+delta.x(),current.y_mm+delta.y(),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
             self.plan.waypoints[selected].x_mm,self.plan.waypoints[selected].y_mm=pose.x_mm,pose.y_mm
-        self.selected_indices=set(indices); self.refresh_waypoints(); self.redraw()
+        self.selected_indices=set(indices); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
     def rotate_waypoint(self,index,item):
         if index != self.active_index: return
         if not isinstance(self.plan.waypoints[index],Waypoint): return
         self.push_undo(); delta=item.pos(); yaw=-math.degrees(math.atan2(delta.y(),delta.x()))-self.plan.start_heading_deg
-        p=self.plan.waypoints[index]; p.yaw_deg=yaw; p.use_yaw=True; self.show_node(index); self.redraw()
+        p=self.plan.waypoints[index]; p.yaw_deg=yaw; p.use_yaw=True; self.show_node(index); self.redraw(); self.rebuild_timeline_after_edit()
 
     def rotate_start_clockwise(self):
         if not (self.calibration_pending and self.calibration_stage == "heading"): return
@@ -513,7 +513,7 @@ class PlannerWindow(QMainWindow):
     def remove_waypoint(self):
         obstacle_indices=sorted((item.data(1) for item in self.scene.selectedItems() if item.data(0) == "obstacle"),reverse=True)
         if obstacle_indices:
-            self.push_undo()
+            self.push_layout_undo()
             for index in obstacle_indices: del self.plan.layout.obstacles[index]
             self.redraw(); return
         indices=sorted((i.index for i in self.scene.selectedItems() if isinstance(i,WaypointItem)),reverse=True)
@@ -524,20 +524,22 @@ class PlannerWindow(QMainWindow):
         if not indices: return
         self.push_undo()
         for index in indices: del self.plan.waypoints[index]
-        self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self.refresh_waypoints(); self.redraw()
+        self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
     def push_undo(self): self._invalidate_timeline(); self.undo_stack.append(copy.deepcopy(self.plan)); self.undo_stack=self.undo_stack[-100:]; self.redo_stack.clear()
+    def push_layout_undo(self): self.undo_stack.append(copy.deepcopy(self.plan)); self.undo_stack=self.undo_stack[-100:]; self.redo_stack.clear()
     def undo(self):
         if not self.undo_stack:return
-        self.redo_stack.append(copy.deepcopy(self.plan)); self.plan=self.undo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw()
+        self.redo_stack.append(copy.deepcopy(self.plan)); self.plan=self.undo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
     def redo(self):
         if not self.redo_stack:return
-        self.undo_stack.append(copy.deepcopy(self.plan)); self.plan=self.redo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw()
+        self.undo_stack.append(copy.deepcopy(self.plan)); self.plan=self.redo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
     def invalid_waypoints(self):
         invalid=[]; previous=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm); previous_yaw=0.0
         for index,waypoint in enumerate(self.plan.waypoints):
             if isinstance(waypoint,RotateInPlace):
+                if not self.is_valid_rotation(previous,previous_yaw,waypoint.yaw_deg,waypoint.wmax_deg_s,waypoint.timeout_s): invalid.append(index)
                 previous_yaw=waypoint.yaw_deg; continue
             paper=self.paper_of(waypoint)
             current=QPointF(paper.x_mm,paper.y_mm)
@@ -554,6 +556,10 @@ class PlannerWindow(QMainWindow):
     def route_sweep(self, start, end, start_yaw=0.0, end_yaw=0.0, vmax=820.0, wmax=90.0, timeout=15.0) -> SweepGeometry:
         heading=self.plan.start_heading_deg
         return build_goto_sweep(Pose(start.x(),start.y(),start_yaw+heading),Pose(end.x(),end.y(),end_yaw+heading),vmax,wmax,timeout)
+
+    def rotation_sweep(self, position, start_yaw, end_yaw, wmax=90.0, timeout=15.0) -> SweepGeometry:
+        heading=self.plan.start_heading_deg
+        return build_rotation_sweep(Pose(position.x(),position.y(),start_yaw+heading),end_yaw+heading,wmax,timeout)
 
     def is_valid_start_pose(self):
         start=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm)
@@ -579,6 +585,10 @@ class PlannerWindow(QMainWindow):
 
     def is_valid_route_segment(self, start, end, start_yaw=0.0, end_yaw=0.0, vmax=820.0, wmax=90.0, timeout=15.0):
         out_of_bounds, hit_platform=self.sweep_violations(self.route_sweep(start,end,start_yaw,end_yaw,vmax,wmax,timeout))
+        return not out_of_bounds and hit_platform.isEmpty()
+
+    def is_valid_rotation(self, position, start_yaw, end_yaw, wmax=90.0, timeout=15.0):
+        out_of_bounds, hit_platform=self.sweep_violations(self.rotation_sweep(position,start_yaw,end_yaw,wmax,timeout))
         return not out_of_bounds and hit_platform.isEmpty()
 
     @staticmethod
@@ -645,8 +655,9 @@ class PlannerWindow(QMainWindow):
         previous=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm)
         for i,p in enumerate(self.plan.waypoints):
             if isinstance(p,RotateInPlace):
-                marker=self.scene.addEllipse(previous.x()-24,previous.y()-24,48,48,QPen(QColor("#7b1fa2"),4),QColor("#f3e5f5")); marker.setData(0,"rotate_in_place_marker"); marker.setZValue(11)
-                label=self.scene.addText("↻",QFont("Microsoft YaHei",20)); label.setData(0,"rotate_in_place_label"); label.setDefaultTextColor(QColor("#7b1fa2")); label.setPos(previous.x()-12,previous.y()-18); label.setZValue(12); continue
+                invalid_rotation=i in invalid; color=QColor("#c62828") if invalid_rotation else QColor("#7b1fa2"); fill=QColor("#ffcdd2") if invalid_rotation else QColor("#f3e5f5")
+                marker=self.scene.addEllipse(previous.x()-24,previous.y()-24,48,48,QPen(color,4),fill); marker.setData(0,"rotate_in_place_marker"); marker.setZValue(11)
+                label=self.scene.addText("↻",QFont("Microsoft YaHei",20)); label.setData(0,"rotate_in_place_label"); label.setDefaultTextColor(color); label.setPos(previous.x()-12,previous.y()-18); label.setZValue(12); continue
             paper=self.paper_of(p); current=QPointF(paper.x_mm,paper.y_mm); self.scene.addLine(previous.x(),previous.y(),current.x(),current.y(),QPen(QColor("#d27800"),8))
             previous=current
             item=WaypointItem(i,paper.x_mm,paper.y_mm,i==self.active_index,i in invalid,lambda index,before,after,shift=False:self.move_waypoint(index,before,after,shift),lambda handle: self.rotate_waypoint(handle.parentItem().index,handle),self.set_active_from_context); self.scene.addItem(item)
@@ -682,7 +693,7 @@ class PlannerWindow(QMainWindow):
 
     def add_obstacle(self, point):
         if not (0 <= point.x() <= FIELD_SIZE_MM and 0 <= point.y() <= FIELD_SIZE_MM): return
-        self.push_undo(); self.plan.layout.obstacles.append(Obstacle(*self.clamp_obstacle(point)))
+        self.push_layout_undo(); self.plan.layout.obstacles.append(Obstacle(*self.clamp_obstacle(point)))
         self.redraw()
 
     @staticmethod
@@ -691,13 +702,13 @@ class PlannerWindow(QMainWindow):
 
     def move_obstacle(self, index, position):
         if not 0 <= index < len(self.plan.layout.obstacles): return
-        self.push_undo(); obstacle=self.plan.layout.obstacles[index]; obstacle.paper_x_mm,obstacle.paper_y_mm=self.clamp_obstacle(position); self.redraw()
+        self.push_layout_undo(); obstacle=self.plan.layout.obstacles[index]; obstacle.paper_x_mm,obstacle.paper_y_mm=self.clamp_obstacle(position); self.redraw()
 
     def move_raw_area(self, position):
-        self.push_undo(); self.plan.layout.raw_center_x_mm=max(RAW_CENTER_X_RANGE[0],min(RAW_CENTER_X_RANGE[1],position.x())); self.redraw()
+        self.push_layout_undo(); self.plan.layout.raw_center_x_mm=max(RAW_CENTER_X_RANGE[0],min(RAW_CENTER_X_RANGE[1],position.x())); self.redraw()
 
     def move_qr_board(self, position):
-        self.push_undo(); self.plan.layout.qr_center_y_mm=max(QR_CENTER_Y_RANGE[0],min(QR_CENTER_Y_RANGE[1],position.y())); self.redraw()
+        self.push_layout_undo(); self.plan.layout.qr_center_y_mm=max(QR_CENTER_Y_RANGE[0],min(QR_CENTER_Y_RANGE[1],position.y())); self.redraw()
 
     def clear_measurement(self):
         self.measurement_points=[]; self.update_measurement_ui(); self.redraw()
@@ -735,7 +746,8 @@ class PlannerWindow(QMainWindow):
             if isinstance(active,RotateInPlace) and location is None: p=Pose(0,0,active.yaw_deg)
             elif location is not None: p=Pose(location.x_mm,location.y_mm,active.yaw_deg if isinstance(active,RotateInPlace) else yaw)
         p=p or Pose(); x,y=world_to_paper(p,self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg); yaw=p.yaw_deg+self.plan.start_heading_deg
-        out=not (150 <= x <= 2250 and 150 <= y <= 2250); car=CarOutlineItem(self.rotate_car_clockwise); car.setPos(x,y); car.setRotation(-yaw); car.setPen(QPen(QColor("#c62828") if out else QColor("#455a64"),5)); car.setBrush(QColor(239,83,80,135) if out else QColor(120,144,156,105)); car.setZValue(15); self.scene.addItem(car)
+        invalid_active=0 <= self.active_index < len(self.plan.waypoints) and self.active_index in self.invalid_waypoints()
+        out=not (150 <= x <= 2250 and 150 <= y <= 2250); car=CarOutlineItem(self.rotate_car_clockwise); car.setPos(x,y); car.setRotation(-yaw); car.setPen(QPen(QColor("#c62828") if out or invalid_active else QColor("#455a64"),5)); car.setBrush(QColor(239,83,80,135) if out or invalid_active else QColor(120,144,156,105)); car.setZValue(15); self.scene.addItem(car)
         arrow=QGraphicsPolygonItem(QPolygonF([QPointF(-24,-24),QPointF(32,-24),QPointF(32,-44),QPointF(72,0),QPointF(32,44),QPointF(32,24),QPointF(-24,24)])); arrow.setPos(x,y); arrow.setRotation(-yaw); arrow.setBrush(QColor("#1565c0")); arrow.setPen(QPen(QColor("#0d47a1"),3)); arrow.setZValue(16); self.scene.addItem(arrow)
 
     def rotate_car_clockwise(self):
@@ -745,13 +757,21 @@ class PlannerWindow(QMainWindow):
         self.push_undo()
         waypoint.yaw_deg=((waypoint.yaw_deg-90+180)%360)-180
         if isinstance(waypoint,Waypoint): waypoint.use_yaw=True
-        self.show_node(self.active_index); self.refresh_waypoints(); self.redraw(); self.status.setText("当前节点航向已顺时针旋转 90 度。")
+        self.show_node(self.active_index); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit(); self.status.setText("当前节点航向已顺时针旋转 90 度。")
 
     def _invalidate_timeline(self):
         if not hasattr(self,"progress"): return
         self.pause(); self.timeline=[]; self.timeline_position=0; self.current_frame=None; self.actual_trace=[]
         self.progress.blockSignals(True); self.progress.setRange(0,0); self.progress.setValue(0); self.progress.blockSignals(False); self.progress.setEnabled(False)
         self.progress_label.setText("进度：0.00 / 0.00 s")
+
+    def rebuild_timeline_after_edit(self):
+        """动作编辑提交后预先生成暂停时间轴，供进度条直接定位。"""
+        self._invalidate_timeline()
+        if self.calibration_pending or not self.plan.waypoints or not self.is_valid_start_pose() or self.invalid_waypoints(): return
+        self.timeline=build_timeline(copy.deepcopy(self.plan.waypoints),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
+        self.progress.blockSignals(True); self.progress.setRange(0,len(self.timeline)); self.progress.setValue(0); self.progress.blockSignals(False)
+        self.progress.setEnabled(bool(self.timeline)); self._update_progress_ui()
 
     def _update_progress_ui(self):
         total=self.timeline[-1].time_s if self.timeline else 0.0
@@ -769,9 +789,8 @@ class PlannerWindow(QMainWindow):
         invalid=self.invalid_waypoints()
         if invalid: self.status.setText("以下步骤超出车体中心可移动范围："+"、".join(str(i+1) for i in invalid)); return
         if not self.plan.waypoints: self.status.setText("至少添加一个节点后才能仿真。 "); return
-        if not self.timeline:
-            self.timeline=build_timeline(copy.deepcopy(self.plan.waypoints),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
-            self.progress.blockSignals(True); self.progress.setRange(0,len(self.timeline)); self.progress.setEnabled(True); self.progress.blockSignals(False)
+        if not self.timeline: self.rebuild_timeline_after_edit()
+        if not self.timeline: return
         if self.timeline_position >= len(self.timeline): self.progress.setValue(0)
         self.timer.start()
     def pause(self): self.timer.stop()

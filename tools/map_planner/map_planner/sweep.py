@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import math
 
 from .geometry import wrap_deg
-from .models import CAR_SIZE_MM, Pose, Waypoint
+from .models import CAR_SIZE_MM, Pose, RotateInPlace, Waypoint
 from .sim import Simulation
 
 
@@ -51,6 +51,17 @@ def build_goto_sweep(start: Pose, target: Pose, vmax_mm_s: float, wmax_deg_s: fl
     """以正式仿真的同一固定加减速状态机生成 GOTO 的车体扫掠。"""
     command = Waypoint(target.x_mm, target.y_mm, target.yaw_deg, use_yaw=True, vmax_mm_s=vmax_mm_s, wmax_deg_s=wmax_deg_s, timeout_s=timeout_s)
     simulation = Simulation([command])
+    simulation.actual = Pose(start.x_mm, start.y_mm, start.yaw_deg)
+    poses = [Pose(start.x_mm, start.y_mm, start.yaw_deg)]
+    while not simulation.finished and not simulation.failed:
+        frame = simulation.step()
+        poses.extend(_interpolate_poses(poses[-1], frame.actual))
+    return SweepGeometry(poses, [car_polygon(pose) for pose in poses])
+
+
+def build_rotation_sweep(start: Pose, target_yaw_deg: float, wmax_deg_s: float, timeout_s: float) -> SweepGeometry:
+    """以正式仿真的同一状态机生成原地转向期间的车体扫掠。"""
+    simulation = Simulation([RotateInPlace(target_yaw_deg, wmax_deg_s, timeout_s)])
     simulation.actual = Pose(start.x_mm, start.y_mm, start.yaw_deg)
     poses = [Pose(start.x_mm, start.y_mm, start.yaw_deg)]
     while not simulation.finished and not simulation.failed:
