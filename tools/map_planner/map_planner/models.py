@@ -93,6 +93,19 @@ class Plan:
     layout: MapLayout = field(default_factory=MapLayout)
     migration_warnings: list[str] = field(default_factory=list, repr=False, compare=False)
 
+    # 临时兼容旧 GUI：v7 的持久化和代码生成只使用 steps。
+    @property
+    def mode(self) -> PlanMode:
+        return "stop_point"
+
+    @property
+    def waypoints(self) -> list[MotionStep]:
+        return self.steps
+
+    @property
+    def path_points(self) -> list[PathPosePoint]:
+        return []
+
     def normalize(self) -> None:
         self.updated_at = datetime.now(timezone.utc).isoformat()
 
@@ -174,3 +187,9 @@ def migrate_v5_plan(value: dict[str, object]) -> tuple[dict[str, object], list[s
 
 def migrate_v6_plan(value: dict[str, object]) -> tuple[dict[str, object], list[str]]:
     return _migrate_legacy(value, MAP_VERSION_V6)
+
+
+def convert_plan_mode(plan: Plan, mode: PlanMode) -> None:
+    """旧 GUI 的兼容入口；v7 新流程不再以全局模式切换。"""
+    if mode != "stop_point":
+        raise ValueError("请在流程列表中新增连续路径段，而非切换全局模式。")
