@@ -354,7 +354,7 @@ class PlannerWindow(QMainWindow):
     def begin_start(self, kind):
         self.push_undo(); self.calibration_pending=True
         if kind == "自定义":
-            self.plan.start_kind="custom"; self.calibration_stage="position"; self.mode="calibrate"; self.view.mode="calibrate"; self.calibration_label.setText("在地图上点击自定义起点位置"); self.redraw(); return
+            self.plan.start_kind="custom"; self.calibration_stage="position"; self.mode="calibrate"; self.view.mode="calibrate"; self.calibration_label.setText("在地图上点击自定义起点位置"); self.update_calibration_ui(); self.redraw(); return
         self.plan.start_kind="zone_1" if kind.endswith("1") else "zone_2"
         self.plan.start_paper_x_mm, self.plan.start_paper_y_mm = START_PRESETS[kind]; self.calibration_stage="heading"; self.mode="calibrate"; self.view.mode="calibrate"; self.update_calibration_ui(); self.redraw()
 

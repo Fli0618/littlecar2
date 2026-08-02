@@ -36,7 +36,11 @@ def default_task_function_name(plan_name: str) -> str:
     for character in str(plan_name):
         if character in "-_" or character.isspace():
             pieces.append("_")
-        elif ("A" <= character <= "Z") or ("a" <= character <= "z") or character.isdigit():
+        elif (
+            ("A" <= character <= "Z")
+            or ("a" <= character <= "z")
+            or ("0" <= character <= "9")
+        ):
             pieces.append(character)
     stem = re.sub(r"_+", "_", "".join(pieces)).strip("_") or "Plan"
     if stem[0].isdigit():
@@ -193,4 +197,3 @@ def generate_task_function(plan: Plan, function_name: str) -> str:
         lines.extend(block)
     lines.extend(["}", ""])
     return "\n".join(lines)
-
