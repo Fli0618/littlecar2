@@ -70,6 +70,7 @@ def test_multiple_actions_keep_order_and_rotate_at_last_goto():
     assert "100.0f,\n            200.0f,\n            90.0f" in code
     assert "100.0f,\n            200.0f,\n            -90.0f" in code
     assert "300.0f,\n            400.0f,\n            0.0f" in code
+    assert "/* 原地转向：保持上一目标位置并更新绝对航向。 */" in code
 
 
 def test_dwell_rounds_to_milliseconds():
