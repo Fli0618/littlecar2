@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from map_planner.models import MAP_VERSION, Obstacle, Plan, RotateInPlace, Waypoint
-from map_planner.storage import list_plans, load_plan, save_plan
+from map_planner.storage import list_plans, load_plan, rename_plan, save_plan
 
 
 class StorageTests(unittest.TestCase):
@@ -68,3 +68,21 @@ class StorageTests(unittest.TestCase):
     def test_rejects_bad_name(self):
         with self.assertRaises(ValueError):
             save_plan(Plan(name="bad name"), directory=Path("."))
+
+    def test_rename_plan_moves_file_and_updates_document_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            save_plan(Plan(name="旧方案"), directory=root)
+            renamed = rename_plan("旧方案", "新方案", directory=root)
+            self.assertEqual(renamed.name, "新方案.json")
+            self.assertFalse((root / "旧方案.json").exists())
+            self.assertEqual(load_plan("新方案", root).name, "新方案")
+            self.assertEqual(list_plans(root), ["新方案"])
+
+    def test_rename_plan_rejects_existing_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            save_plan(Plan(name="旧方案"), directory=root)
+            save_plan(Plan(name="新方案"), directory=root)
+            with self.assertRaisesRegex(ValueError, "存在"):
+                rename_plan("旧方案", "新方案", directory=root)

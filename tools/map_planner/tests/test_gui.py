@@ -3,7 +3,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
 from PySide6.QtTest import QTest
 
@@ -57,6 +57,13 @@ class GuiTests(unittest.TestCase):
         window = PlannerWindow()
         try:
             self.assertEqual(window.vmax.buttonSymbols().name, "NoButtons")
+        finally:
+            window.close()
+
+    def test_plan_toolbar_has_rename_button(self):
+        window = PlannerWindow()
+        try:
+            self.assertTrue(any(button.text() == "重命名" for button in window.findChildren(QPushButton)))
         finally:
             window.close()
 

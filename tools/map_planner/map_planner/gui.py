@@ -19,7 +19,7 @@ from .codegen_dialog import CodeGenerationDialog
 from .models import CAR_SIZE_MM, FIELD_SIZE_MM, Obstacle, Plan, Pose, RotateInPlace, Waypoint
 from .sim import SimulationFrame, build_timeline
 from .sweep import SweepGeometry, build_goto_sweep, build_rotation_sweep
-from .storage import list_plans, load_plan, save_plan
+from .storage import list_plans, load_plan, rename_plan, save_plan
 
 PLATFORMS = ((550, 550), (1400, 550), (550, 1400), (1400, 1400))
 MATERIAL_SLOTS = ((75, 1050), (75, 1200), (75, 1350), (1050, 2325), (1200, 2325), (1350, 2325))
@@ -288,7 +288,7 @@ class PlannerWindow(QMainWindow):
         self.select_button.setChecked(True); box.addLayout(toolbar)
         box.addWidget(QLabel("方案")); self.plan_list = QListWidget(); self.plan_list.itemDoubleClicked.connect(self.load_selected); self.plan_list.setMinimumHeight(76); box.addWidget(self.plan_list)
         row = QHBoxLayout()
-        for label, fn in (("新建", self.new_plan), ("保存", self.save), ("另存", self.save_as), ("加载", self.load_selected)):
+        for label, fn in (("新建", self.new_plan), ("保存", self.save), ("另存", self.save_as), ("重命名", self.rename_selected), ("加载", self.load_selected)):
             button = QPushButton(label); button.clicked.connect(fn); row.addWidget(button)
             if label == "保存": self.save_button = button
             elif label == "另存": self.save_as_button = button
@@ -830,6 +830,28 @@ class PlannerWindow(QMainWindow):
         if item is None:return
         try: self._invalidate_timeline(); self.plan=load_plan(item.text()); self.active_index=-1; self.calibration_pending=False; self.calibration_stage="complete"; self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
         except ValueError as error: QMessageBox.warning(self,"加载失败",str(error))
+
+    def rename_selected(self):
+        item = self.plan_list.currentItem()
+        if item is None:
+            self.status.setText("请先选择要重命名的方案。")
+            return
+        old_name = item.text()
+        new_name, ok = QInputDialog.getText(self, "重命名方案", "新方案名称", text=old_name)
+        new_name = new_name.strip()
+        if not ok or not new_name or new_name == old_name:
+            return
+        try:
+            rename_plan(old_name, new_name)
+            if self.plan.name == old_name:
+                self.plan.name = new_name
+            self.refresh_plans()
+            matches = self.plan_list.findItems(new_name, Qt.MatchFlag.MatchExactly)
+            if matches:
+                self.plan_list.setCurrentItem(matches[0])
+            self.status.setText(f"已重命名：{old_name} → {new_name}")
+        except ValueError as error:
+            QMessageBox.warning(self, "重命名失败", str(error))
 
     def open_code_generator(self) -> None:
         """Validate the editable plan and open the generated C preview dialog."""
