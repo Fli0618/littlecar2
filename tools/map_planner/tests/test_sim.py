@@ -8,6 +8,8 @@ from map_planner.sim import (
     Simulation,
     build_timeline,
 )
+from map_planner.models import Pose
+from map_planner.sweep import MAX_SAMPLE_DISTANCE_MM, MAX_SAMPLE_YAW_DEG, build_goto_sweep
 
 
 class SimulationTests(unittest.TestCase):
@@ -56,3 +58,12 @@ class SimulationTests(unittest.TestCase):
         second = build_timeline(commands, 1200, 1200, 0)
         self.assertEqual([frame.actual for frame in first], [frame.actual for frame in second])
         self.assertTrue(first[-1].stopped)
+
+    def test_goto_sweep_interpolates_position_and_heading_at_preview_resolution(self):
+        sweep = build_goto_sweep(Pose(0, 0, 0), Pose(300, 0, 90), 100, 60, 30)
+        self.assertEqual(sweep.poses[0], Pose(0, 0, 0))
+        self.assertEqual(sweep.poses[-1], Pose(300, 0, 90))
+        self.assertGreater(len(sweep.polygons), 2)
+        for first, second in zip(sweep.poses, sweep.poses[1:]):
+            self.assertLessEqual(((second.x_mm-first.x_mm)**2 + (second.y_mm-first.y_mm)**2) ** .5, MAX_SAMPLE_DISTANCE_MM + 1e-6)
+            self.assertLessEqual(abs(((second.yaw_deg-first.yaw_deg+180) % 360)-180), MAX_SAMPLE_YAW_DEG + 1e-6)

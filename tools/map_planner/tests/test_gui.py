@@ -132,14 +132,16 @@ class GuiTests(unittest.TestCase):
         window = PlannerWindow()
         try:
             self.calibrated(window)
-            window.update_preview(2200, 200, True)
+            window.plan.start_paper_x_mm, window.plan.start_paper_y_mm = 2000, 300
+            window.redraw()
+            window.update_preview(2100, 300, True)
             self.assertIsNotNone(window.preview_paper)
             self.assertTrue(window.preview_shift)
             self.assertTrue(any(item.data(0) == "snap_preview_axis" for item in window.scene.items()))
             window.rotate_preview_clockwise()
             self.assertEqual(window.preview_yaw_deg, -90)
             window.show(); self.app.processEvents()
-            position = window.view.mapFromScene(QPointF(2200, 200))
+            position = window.view.mapFromScene(QPointF(2100, 300))
             QTest.mousePress(window.view.viewport(), Qt.MouseButton.LeftButton, pos=position)
             self.assertEqual(window.plan.waypoints, [])
             QTest.mouseRelease(window.view.viewport(), Qt.MouseButton.LeftButton, pos=position)
@@ -312,6 +314,56 @@ class GuiTests(unittest.TestCase):
             window.update_preview(1000, 600)
             window.confirm_preview(1000, 600)
             self.assertEqual(window.plan.waypoints, [])
+        finally:
+            window.close()
+
+    def test_preview_sweep_uses_actual_yaw_and_marks_invalid_areas(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.update_preview(2200, 300)
+            self.assertTrue(any(item.data(0) == "preview_sweep" for item in window.scene.items()))
+            self.assertFalse(any(item.data(0) == "preview_platform_collision" for item in window.scene.items()))
+            sweep = window.route_sweep(QPointF(2250, 150), QPointF(2200, 300), 0, 90)
+            self.assertNotEqual(sweep.polygons[0], sweep.polygons[-1])
+            window.update_preview(1000, 600)
+            self.assertTrue(any(item.data(0) == "preview_platform_collision" for item in window.scene.items()))
+            window.update_preview(2350, 150)
+            out_of_bounds, collisions = window.sweep_violations(window.route_sweep(QPointF(2250, 150), QPointF(2350, 150)))
+            self.assertTrue(out_of_bounds)
+            self.assertTrue(collisions.isEmpty())
+        finally:
+            window.close()
+
+    def test_start_pose_uses_the_same_sweep_boundary_check(self):
+        window = PlannerWindow()
+        try:
+            window.plan.start_paper_x_mm, window.plan.start_paper_y_mm = 775, 775
+            self.assertFalse(window.is_valid_start_pose())
+            window.plan.start_paper_x_mm, window.plan.start_paper_y_mm = 2250, 150
+            self.assertTrue(window.is_valid_start_pose())
+        finally:
+            window.close()
+
+    def test_layout_sliders_update_at_one_millimeter_and_are_undoable(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.on_map_click(2200, 300)
+            window.play(); window.pause()
+            self.assertTrue(window.timeline)
+            window._begin_layout_slider_edit()
+            window.raw_slider.setValue(1257)
+            window.qr_slider.setValue(1143)
+            window._finish_layout_slider_edit()
+            self.assertEqual(window.plan.layout.raw_center_x_mm, 1257)
+            self.assertEqual(window.plan.layout.qr_center_y_mm, 1143)
+            self.assertEqual(window.raw_slider.singleStep(), 1)
+            self.assertEqual(window.qr_slider.singleStep(), 1)
+            self.assertEqual(window.timeline, [])
+            window.undo()
+            self.assertEqual(window.plan.layout.raw_center_x_mm, 1200)
+            self.assertEqual(window.plan.layout.qr_center_y_mm, 1200)
         finally:
             window.close()
 
