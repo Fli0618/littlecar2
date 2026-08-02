@@ -127,6 +127,25 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_start_heading_uses_repeated_right_click_rotation_and_confirmation(self):
+        window = PlannerWindow()
+        try:
+            window.begin_start("启停区 1")
+            self.assertEqual(window.calibration_stage, "heading")
+            self.assertFalse(window.confirm_start_button.isHidden())
+            initial_heading = window.plan.start_heading_deg
+            window.rotate_start_clockwise()
+            window.rotate_start_clockwise()
+            self.assertEqual(window.plan.start_heading_deg, ((initial_heading - 180 + 180) % 360) - 180)
+            self.assertTrue(window.calibration_pending)
+            window.confirm_start_heading()
+            self.assertFalse(window.calibration_pending)
+            self.assertEqual(window.calibration_stage, "complete")
+            self.assertEqual(window.mode, "select")
+            self.assertTrue(window.confirm_start_button.isHidden())
+        finally:
+            window.close()
+
     def test_selected_nodes_move_as_a_group(self):
         window = PlannerWindow()
         try:

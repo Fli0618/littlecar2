@@ -67,7 +67,7 @@ class MapView(QGraphicsView):
             self._pan_scroll = QPoint(self.horizontalScrollBar().value(), self.verticalScrollBar().value())
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor); event.accept(); return
         item = self.itemAt(event.position().toPoint())
-        editable = isinstance(item, (WaypointItem, RotationHandleItem, StartItem, StartHeadingHandle))
+        editable = isinstance(item, (WaypointItem, RotationHandleItem, StartItem))
         if event.button() == Qt.MouseButton.LeftButton and self.mode in ("add", "calibrate", "measure") and not editable:
             point = self.mapToScene(event.position().toPoint()); self.clicked.emit(point.x(), point.y(), bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)); event.accept(); return
         if event.button() == Qt.MouseButton.LeftButton and self.mode == "select" and not editable:
@@ -159,21 +159,17 @@ class CarOutlineItem(QGraphicsRectItem):
         super().mousePressEvent(event)
 
 
-class StartHeadingHandle(QGraphicsEllipseItem):
-    def __init__(self, owner, changed):  # type: ignore[no-untyped-def]
-        super().__init__(-12, -12, 24, 24, owner); self.changed = changed
-        self.setBrush(QColor("#ffffff")); self.setPen(QPen(QColor("#1565c0"), 3)); self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-        icon=QGraphicsTextItem("↻",self); icon.setFont(QFont("Microsoft YaHei",12)); icon.setDefaultTextColor(QColor("#1565c0")); icon.setPos(-9,-13); icon.setAcceptedMouseButtons(Qt.MouseButton.NoButton); self.setToolTip("拖动设置起始朝向")
-    def mouseMoveEvent(self, event): super().mouseMoveEvent(event)
-    def mouseReleaseEvent(self, event): super().mouseReleaseEvent(event); self.changed(self)
-
-
 class StartItem(QGraphicsPolygonItem):
-    """流程图风格的起点箭头，拖动末端圆柄完成初始朝向标定。"""
-    def __init__(self, heading, changed):  # type: ignore[no-untyped-def]
+    """起点箭头通过右击以 90 度为单位设置初始朝向。"""
+    def __init__(self, heading, rotated):  # type: ignore[no-untyped-def]
         poly = QPolygonF([QPointF(-28, -18), QPointF(10, -18), QPointF(10, -34), QPointF(42, 0), QPointF(10, 34), QPointF(10, 18), QPointF(-28, 18)])
         super().__init__(poly); self.setRotation(-heading); self.setBrush(QColor("#1976d2")); self.setPen(QPen(QColor("#0d47a1"), 3)); self.setZValue(12)
-        self.handle = StartHeadingHandle(self, changed); self.handle.setPos(70, 0)
+        self.rotated = rotated; self.setToolTip("右击顺时针旋转 90 度")
+
+    def mousePressEvent(self, event):  # type: ignore[no-untyped-def]
+        if event.button() == Qt.MouseButton.RightButton:
+            self.rotated(); event.accept(); return
+        super().mousePressEvent(event)
 
 
 class PlannerWindow(QMainWindow):
@@ -220,13 +216,14 @@ class PlannerWindow(QMainWindow):
         self.progress.sliderPressed.connect(self.pause); self.progress.valueChanged.connect(self.seek_timeline)
         box.addWidget(self.progress); self.progress_label = QLabel("进度：0.00 / 0.00 s"); box.addWidget(self.progress_label)
         self.measurement_label = QLabel("水平：--  垂直：--  欧式：--"); self.measurement_label.setWordWrap(True); box.addWidget(self.measurement_label)
-        self.status=QLabel("先选择起点并拖动蓝色流程箭头标定朝向。"); self.status.setWordWrap(True); box.addWidget(self.status); box.addStretch()
+        self.status=QLabel("先选择起点，再右击蓝色箭头设置朝向并确认。"); self.status.setWordWrap(True); box.addWidget(self.status); box.addStretch()
         scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); scroll.setWidget(left)
         map_panel=QWidget(); map_box=QVBoxLayout(map_panel); map_box.setContentsMargins(0,0,0,0); map_box.setSpacing(0)
         self.calibration_bar=QWidget(); guide=QHBoxLayout(self.calibration_bar); guide.setContentsMargins(12,8,12,8)
-        self.calibration_label=QLabel("1. 选择起点   2. 拖动蓝色箭头设置朝向") ; guide.addWidget(self.calibration_label); guide.addStretch()
+        self.calibration_label=QLabel("1. 选择起点   2. 右击蓝色箭头设置朝向") ; guide.addWidget(self.calibration_label); guide.addStretch()
         for label in ("启停区 1", "启停区 2", "自定义"):
             button=QPushButton(label); button.clicked.connect(lambda checked=False,value=label:self.begin_start(value)); guide.addWidget(button)
+        self.confirm_start_button=QPushButton("确认朝向"); self.confirm_start_button.clicked.connect(self.confirm_start_heading); guide.addWidget(self.confirm_start_button)
         map_box.addWidget(self.calibration_bar); map_box.addWidget(self.view)
         root.addWidget(scroll); root.addWidget(map_panel); root.setSizes([360,1060]); self.setCentralWidget(root); self.update_calibration_ui()
 
@@ -258,7 +255,9 @@ class PlannerWindow(QMainWindow):
 
     def update_calibration_ui(self):
         self.calibration_bar.setVisible(self.calibration_pending)
-        if self.calibration_pending and self.calibration_stage == "heading": self.calibration_label.setText("2. 拖动蓝色箭头的圆柄设置朝向")
+        heading_ready=self.calibration_pending and self.calibration_stage == "heading"
+        if heading_ready: self.calibration_label.setText("2. 右击蓝色箭头可重复旋转 90 度，确认后完成标定")
+        self.confirm_start_button.setVisible(heading_ready); self.confirm_start_button.setEnabled(heading_ready)
         enabled=not self.calibration_pending
         for widget in (self.add_button,self.save_button,self.save_as_button,self.play_button): widget.setEnabled(enabled)
 
@@ -324,8 +323,14 @@ class PlannerWindow(QMainWindow):
         self.push_undo(); delta=item.pos(); yaw=-math.degrees(math.atan2(delta.y(),delta.x()))-self.plan.start_heading_deg
         p=self.plan.waypoints[index]; p.yaw_deg=yaw; p.use_yaw=True; self.show_node(index); self.redraw()
 
-    def rotate_start(self,item):
-        self.push_undo(); delta=item.pos(); self.plan.start_heading_deg=-math.degrees(math.atan2(delta.y(),delta.x())); self.calibration_pending=False; self.calibration_stage="complete"; self.set_mode("select"); self.update_calibration_ui(); self.redraw(); self.status.setText("起点标定完成。")
+    def rotate_start_clockwise(self):
+        if not (self.calibration_pending and self.calibration_stage == "heading"): return
+        self.push_undo(); self.plan.start_heading_deg=((self.plan.start_heading_deg-90+180)%360)-180
+        self.redraw(); self.status.setText("起点朝向已顺时针旋转 90 度，可继续右击修改或点击确认朝向。")
+
+    def confirm_start_heading(self):
+        if not (self.calibration_pending and self.calibration_stage == "heading"): return
+        self.calibration_pending=False; self.calibration_stage="complete"; self.set_mode("select"); self.update_calibration_ui(); self.redraw(); self.status.setText("起点标定完成。")
 
     def select_box(self,rect,append):
         if not append: self.scene.clearSelection()
@@ -399,7 +404,7 @@ class PlannerWindow(QMainWindow):
 
     def draw_start(self):
         if self.calibration_pending and self.calibration_stage in ("choose","position"): return
-        item=StartItem(self.plan.start_heading_deg,self.rotate_start); item.setPos(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm); self.scene.addItem(item)
+        item=StartItem(self.plan.start_heading_deg,self.rotate_start_clockwise); item.setPos(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm); self.scene.addItem(item)
 
     def draw_route(self):
         invalid=set(self.invalid_waypoints())
