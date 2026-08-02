@@ -27,13 +27,13 @@ class GuiTests(unittest.TestCase):
         window = PlannerWindow()
         try:
             self.calibrated(window)
-            window.on_map_click(2250, 100)
+            window.on_map_click(2200, 200)
             self.assertEqual(len(window.plan.waypoints), 1)
             window.waypoint_list.setCurrentRow(0)
             window.x.setValue(25)
             window.update_waypoint()
             self.assertEqual(window.plan.waypoints[0].x_mm, 25)
-            window.move_waypoint(0, QPointF(2250, 100), QPointF(2250, 80))
+            window.move_waypoint(0, QPointF(2200, 200), QPointF(2200, 220))
             self.assertNotEqual(window.plan.waypoints[0].y_mm, 0)
         finally:
             window.close()
@@ -42,9 +42,9 @@ class GuiTests(unittest.TestCase):
         window = PlannerWindow()
         try:
             self.calibrated(window)
-            window.on_map_click(2250, 100)
-            window.on_map_click(2200, 100)
-            window.select_box(QRectF(2100, 0, 250, 250), False)
+            window.on_map_click(2200, 200)
+            window.on_map_click(2100, 250)
+            window.select_box(QRectF(2050, 150, 250, 200), False)
             self.assertEqual(len(window.scene.selectedItems()), 2)
             window.remove_waypoint()
             self.assertEqual(len(window.plan.waypoints), 0)
@@ -240,8 +240,8 @@ class GuiTests(unittest.TestCase):
         window = PlannerWindow()
         try:
             self.calibrated(window)
-            window.on_map_click(2000, 300)
-            window.on_map_click(1900, 400)
+            window.on_map_click(2200, 300)
+            window.on_map_click(2100, 400)
             window.select_all()
             before=[window.paper_of(point) for point in window.plan.waypoints]
             window.active_index=1
@@ -268,6 +268,50 @@ class GuiTests(unittest.TestCase):
             window.set_mode("select")
             self.assertEqual(window.measurement_points, [])
             self.assertFalse(any(item.data(0) == "measurement_horizontal_guide" for item in window.scene.items()))
+        finally:
+            window.close()
+
+    def test_measurement_shift_snaps_second_point(self):
+        window = PlannerWindow()
+        try:
+            window.set_mode("measure")
+            window.on_map_click(100, 200)
+            window.on_map_click(400, 300, True)
+            point = window.measurement_points[1]
+            self.assertTrue(point.y() == 200 or point.x() == 100 or abs(point.x() - 100) == abs(point.y() - 200))
+        finally:
+            window.close()
+
+    def test_obstacles_and_edge_objects_are_drag_limited(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.add_obstacle(QPointF(100, 100))
+            obstacle = window.plan.layout.obstacles[0]
+            window.move_obstacle(0, QPointF(-10, 2500))
+            self.assertEqual((obstacle.paper_x_mm, obstacle.paper_y_mm), (25, 2375))
+            window.move_obstacle(0, QPointF(300, 400))
+            self.assertEqual((obstacle.paper_x_mm, obstacle.paper_y_mm), (300, 400))
+            obstacle_item = next(item for item in window.scene.items() if item.data(0) == "obstacle")
+            obstacle_item.setSelected(True)
+            window.remove_waypoint()
+            self.assertEqual(window.plan.layout.obstacles, [])
+            window.move_raw_area(QPointF(1400, 0))
+            window.move_qr_board(QPointF(0, 1000))
+            self.assertEqual(window.plan.layout.raw_center_x_mm, 1300)
+            self.assertEqual(window.plan.layout.qr_center_y_mm, 1100)
+        finally:
+            window.close()
+
+    def test_platforms_reject_intersecting_route_segments(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            self.assertFalse(window.is_valid_route_segment(QPointF(2250, 150), QPointF(1000, 600)))
+            self.assertTrue(window.is_valid_route_segment(QPointF(2250, 150), QPointF(2200, 300)))
+            window.update_preview(1000, 600)
+            window.confirm_preview(1000, 600)
+            self.assertEqual(window.plan.waypoints, [])
         finally:
             window.close()
 

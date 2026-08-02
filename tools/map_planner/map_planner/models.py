@@ -9,7 +9,7 @@ from typing import Literal, Union
 
 FIELD_SIZE_MM = 2400.0
 CAR_SIZE_MM = 300.0
-MAP_VERSION = 4
+MAP_VERSION = 5
 StartKind = Literal["zone_1", "zone_2", "custom"]
 
 
@@ -50,6 +50,19 @@ MotionCommand = Union[Waypoint, RotateInPlace]
 
 
 @dataclass
+class Obstacle:
+    paper_x_mm: float
+    paper_y_mm: float
+
+
+@dataclass
+class MapLayout:
+    obstacles: list[Obstacle] = field(default_factory=list)
+    raw_center_x_mm: float = 1200.0
+    qr_center_y_mm: float = 1200.0
+
+
+@dataclass
 class Plan:
     name: str = "未命名方案"
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -59,6 +72,7 @@ class Plan:
     start_paper_y_mm: float = 150.0
     start_heading_deg: float = 180.0
     waypoints: list[MotionCommand] = field(default_factory=list)
+    layout: MapLayout = field(default_factory=MapLayout)
 
     def normalize(self) -> None:
         self.updated_at = datetime.now(timezone.utc).isoformat()
@@ -83,6 +97,11 @@ class Plan:
                 "heading_deg": self.start_heading_deg,
             },
             "commands": commands,
+            "layout": {
+                "obstacles": [asdict(obstacle) for obstacle in self.layout.obstacles],
+                "raw_center_x_mm": self.layout.raw_center_x_mm,
+                "qr_center_y_mm": self.layout.qr_center_y_mm,
+            },
         }
 
     @classmethod
@@ -94,7 +113,8 @@ class Plan:
         try:
             start = value["start"]
             commands = value.get("commands", [])
-            if not isinstance(start, dict) or not isinstance(commands, list):
+            layout = value["layout"]
+            if not isinstance(start, dict) or not isinstance(commands, list) or not isinstance(layout, dict):
                 raise TypeError
             waypoints: list[MotionCommand] = []
             for command in commands:
@@ -110,6 +130,9 @@ class Plan:
             kind = str(start["kind"])
             if kind not in ("zone_1", "zone_2", "custom"):
                 raise ValueError
+            obstacles = layout.get("obstacles", [])
+            if not isinstance(obstacles, list) or not all(isinstance(item, dict) for item in obstacles):
+                raise ValueError
             return cls(
                 name=str(value["name"]),
                 created_at=str(value["created_at"]),
@@ -119,6 +142,11 @@ class Plan:
                 start_paper_y_mm=float(start["paper_y_mm"]),
                 start_heading_deg=float(start["heading_deg"]),
                 waypoints=waypoints,
+                layout=MapLayout(
+                    obstacles=[Obstacle(float(item["paper_x_mm"]), float(item["paper_y_mm"])) for item in obstacles],
+                    raw_center_x_mm=float(layout["raw_center_x_mm"]),
+                    qr_center_y_mm=float(layout["qr_center_y_mm"]),
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("方案 JSON 格式无效") from error

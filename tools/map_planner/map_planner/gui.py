@@ -14,13 +14,18 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDoubleSpi
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QSlider, QSplitter, QVBoxLayout, QWidget, QRubberBand)
 
 from .geometry import paper_to_world, world_to_paper
-from .models import CAR_SIZE_MM, FIELD_SIZE_MM, Plan, Pose, RotateInPlace, Waypoint
+from .models import CAR_SIZE_MM, FIELD_SIZE_MM, Obstacle, Plan, Pose, RotateInPlace, Waypoint
 from .sim import SimulationFrame, build_timeline
 from .storage import list_plans, load_plan, save_plan
 
 PLATFORMS = ((550, 550), (1400, 550), (550, 1400), (1400, 1400))
 MATERIAL_SLOTS = ((75, 1050), (75, 1200), (75, 1350), (1050, 2325), (1200, 2325), (1350, 2325))
 START_PRESETS = {"启停区 1": (2250.0, 150.0), "启停区 2": (2250.0, 2250.0)}
+RAW_CENTER_Y_MM = -70.0
+RAW_CENTER_X_RANGE = (1100.0, 1300.0)
+QR_CENTER_X_MM = 2396.0
+QR_CENTER_Y_RANGE = (1100.0, 1300.0)
+OBSTACLE_RADIUS_MM = 25.0
 
 
 class NumericSpinBox(QDoubleSpinBox):
@@ -76,7 +81,7 @@ class MapView(QGraphicsView):
         if event.button() == Qt.MouseButton.RightButton and isinstance(item, StartItem):
             item.rotated(); event.accept(); return
         editable = isinstance(item, (WaypointItem, RotationHandleItem, StartItem))
-        if event.button() == Qt.MouseButton.LeftButton and self.mode == "add" and not editable:
+        if event.button() == Qt.MouseButton.LeftButton and self.mode in ("add", "obstacle") and not editable:
             self._add_pressed = True; event.accept(); return
         if event.button() == Qt.MouseButton.LeftButton and self.mode in ("calibrate", "measure") and not editable:
             point = self.mapToScene(event.position().toPoint()); self.clicked.emit(point.x(), point.y(), bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)); event.accept(); return
@@ -168,6 +173,24 @@ class WaypointItem(QGraphicsEllipseItem):
         self.activate(self.index); event.accept()
 
 
+class DraggableEllipseItem(QGraphicsEllipseItem):
+    def __init__(self, rect, moved):  # type: ignore[no-untyped-def]
+        super().__init__(*rect); self.moved = moved
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable); self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+
+    def mouseReleaseEvent(self, event):  # type: ignore[no-untyped-def]
+        super().mouseReleaseEvent(event); self.moved(self.scenePos())
+
+
+class DraggableRectItem(QGraphicsRectItem):
+    def __init__(self, rect, moved):  # type: ignore[no-untyped-def]
+        super().__init__(*rect); self.moved = moved
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable); self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+
+    def mouseReleaseEvent(self, event):  # type: ignore[no-untyped-def]
+        super().mouseReleaseEvent(event); self.moved(self.scenePos())
+
+
 class CarOutlineItem(QGraphicsRectItem):
     def __init__(self, rotated):  # type: ignore[no-untyped-def]
         super().__init__(-150, -150, 300, 300)
@@ -201,7 +224,7 @@ class PlannerWindow(QMainWindow):
         self.preview_paper: QPointF | None = None; self.preview_yaw_deg: float | None = None; self.preview_anchor_index: int | None = None; self.preview_shift = False
         self.timeline: list[SimulationFrame] = []; self.timeline_position = 0; self.current_frame = None; self.actual_trace = []
         self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
-        self.view.clicked.connect(self.on_map_click); self.view.hovered.connect(self.update_preview); self.view.released.connect(self.confirm_preview); self.view.preview_rotated.connect(self.rotate_preview_clockwise); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
+        self.view.clicked.connect(self.on_map_click); self.view.hovered.connect(self.update_preview); self.view.released.connect(self.on_map_release); self.view.preview_rotated.connect(self.rotate_preview_clockwise); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
         self._build(); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_waypoint)
         self.redraw(); self.refresh_plans(); QTimer.singleShot(0,self.fit_map); QShortcut(QKeySequence(Qt.Key.Key_Home),self,activated=self.fit_map)
 
@@ -211,8 +234,8 @@ class PlannerWindow(QMainWindow):
     def _build(self) -> None:
         root = QSplitter(Qt.Orientation.Horizontal); left = QWidget(); box = QVBoxLayout(left); box.setContentsMargins(10, 10, 10, 10); box.setSpacing(6)
         toolbar = QHBoxLayout(); self.tool_group = QButtonGroup(self); self.tool_group.setExclusive(True)
-        self.select_button = QPushButton("选择"); self.add_button = QPushButton("添加节点"); self.measure_button = QPushButton("测距")
-        for button, value in ((self.select_button, "select"), (self.add_button, "add"), (self.measure_button, "measure")):
+        self.select_button = QPushButton("选择"); self.add_button = QPushButton("添加节点"); self.measure_button = QPushButton("测距"); self.obstacle_button = QPushButton("障碍物")
+        for button, value in ((self.select_button, "select"), (self.add_button, "add"), (self.measure_button, "measure"), (self.obstacle_button, "obstacle")):
             button.setCheckable(True); self.tool_group.addButton(button)
             button.toggled.connect(lambda checked=False, mode=value: checked and self.set_mode(mode)); toolbar.addWidget(button)
         self.select_button.setChecked(True); box.addLayout(toolbar)
@@ -258,7 +281,7 @@ class PlannerWindow(QMainWindow):
 
     def set_mode(self, mode):
         if mode != "add": self.clear_preview()
-        if mode == "add" and self.calibration_pending:
+        if mode in ("add", "obstacle") and self.calibration_pending:
             self.select_button.setChecked(True)
             if hasattr(self,"status"): self.status.setText("请先完成起点和朝向标定。")
             return
@@ -271,10 +294,12 @@ class PlannerWindow(QMainWindow):
             message = "选择：框选、Ctrl 多选；中键或空格+左键平移地图。"
             if mode == "add": message = "添加节点：点击地图添加，按住 Shift 吸附水平、垂直或 45 度。"
             elif mode == "measure": message = "测距：左键依次选择两点，生成水平和垂直对齐线；Esc 或切换工具清除。"
+            elif mode == "obstacle": message = "障碍物：左键释放添加黑色圆形标记，选择模式可拖拽。"
             self.status.setText(message)
         if mode == "select": self.select_button.setChecked(True)
         elif mode == "add": self.add_button.setChecked(True)
         elif mode == "measure": self.measure_button.setChecked(True)
+        elif mode == "obstacle": self.obstacle_button.setChecked(True)
 
     def begin_start(self, kind):
         self.push_undo(); self.calibration_pending=True
@@ -289,20 +314,26 @@ class PlannerWindow(QMainWindow):
         if heading_ready: self.calibration_label.setText("2. 右击蓝色箭头可重复旋转 90 度，确认后完成标定")
         self.confirm_start_button.setVisible(heading_ready); self.confirm_start_button.setEnabled(heading_ready)
         enabled=not self.calibration_pending
-        for widget in (self.add_button,self.save_button,self.save_as_button,self.play_button): widget.setEnabled(enabled)
+        for widget in (self.add_button,self.obstacle_button,self.save_button,self.save_as_button,self.play_button): widget.setEnabled(enabled)
 
     def on_map_click(self, x, y, shift=False):
         if math.isnan(x):
             self.clear_measurement(); return
         if not (0 <= x <= FIELD_SIZE_MM and 0 <= y <= FIELD_SIZE_MM): return
         if self.mode == "measure":
-            self.add_measurement_point(QPointF(x, y)); return
+            self.add_measurement_point(QPointF(x, y), shift); return
+        if self.mode == "obstacle":
+            self.add_obstacle(QPointF(x, y)); return
         if self.mode == "calibrate":
             if self.calibration_stage != "position": return
             self.plan.start_paper_x_mm, self.plan.start_paper_y_mm = x, y; self.calibration_stage="heading"; self.update_calibration_ui(); self.redraw(); return
         if self.mode != "add" or self.calibration_pending: return
         self.update_preview(x, y, shift)
         self.confirm_preview(x, y, shift)
+
+    def on_map_release(self, x, y, shift=False):
+        if self.mode == "add": self.confirm_preview(x, y, shift)
+        elif self.mode == "obstacle": self.add_obstacle(QPointF(x, y))
 
     def _preview_anchor(self) -> tuple[QPointF, float, int]:
         position=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm); yaw=0.0; index=-1
@@ -333,6 +364,10 @@ class PlannerWindow(QMainWindow):
     def confirm_preview(self, x, y, shift=False):
         self.update_preview(x, y, shift)
         if self.preview_paper is None or self.preview_yaw_deg is None: return
+        anchor, _, _=self._preview_anchor()
+        if not self.is_valid_route_segment(anchor,self.preview_paper):
+            self.status.setText("目标路径进入禁行区或超出车体中心可移动范围。")
+            return
         pose=paper_to_world(self.preview_paper.x(),self.preview_paper.y(),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
         self.push_undo()
         self.plan.waypoints.append(Waypoint(pose.x_mm,pose.y_mm,yaw_deg=self.preview_yaw_deg,use_yaw=True,name=f"节点 {len(self.plan.waypoints)+1}"))
@@ -428,6 +463,11 @@ class PlannerWindow(QMainWindow):
         self.selected_indices=set(range(len(self.plan.waypoints)))
 
     def remove_waypoint(self):
+        obstacle_indices=sorted((item.data(1) for item in self.scene.selectedItems() if item.data(0) == "obstacle"),reverse=True)
+        if obstacle_indices:
+            self.push_undo()
+            for index in obstacle_indices: del self.plan.layout.obstacles[index]
+            self.redraw(); return
         indices=sorted((i.index for i in self.scene.selectedItems() if isinstance(i,WaypointItem)),reverse=True)
         if 0 <= self.active_index < len(self.plan.waypoints) and isinstance(self.plan.waypoints[self.active_index],RotateInPlace):
             indices=[self.active_index]
@@ -447,12 +487,35 @@ class PlannerWindow(QMainWindow):
         self.undo_stack.append(copy.deepcopy(self.plan)); self.plan=self.redo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw()
 
     def invalid_waypoints(self):
-        margin=CAR_SIZE_MM/2.0; invalid=[]
+        margin=CAR_SIZE_MM/2.0; invalid=[]; previous=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm)
         for index,waypoint in enumerate(self.plan.waypoints):
             if isinstance(waypoint,RotateInPlace): continue
             paper=self.paper_of(waypoint)
-            if not (margin <= paper.x_mm <= FIELD_SIZE_MM-margin and margin <= paper.y_mm <= FIELD_SIZE_MM-margin): invalid.append(index)
+            current=QPointF(paper.x_mm,paper.y_mm)
+            if not self.is_valid_route_segment(previous,current): invalid.append(index)
+            previous=current
         return invalid
+
+    def is_valid_route_segment(self, start, end):
+        margin=CAR_SIZE_MM/2.0
+        if not (margin <= start.x() <= FIELD_SIZE_MM-margin and margin <= start.y() <= FIELD_SIZE_MM-margin): return False
+        if not (margin <= end.x() <= FIELD_SIZE_MM-margin and margin <= end.y() <= FIELD_SIZE_MM-margin): return False
+        for x,y in PLATFORMS:
+            if self.segment_intersects_rect(start,end,QRectF(x-margin,y-margin,450+2*margin,450+2*margin)): return False
+        return True
+
+    @staticmethod
+    def segment_intersects_rect(start,end,rect):
+        dx=end.x()-start.x(); dy=end.y()-start.y(); low=0.0; high=1.0
+        for origin,direction,minimum,maximum in ((start.x(),dx,rect.left(),rect.right()),(start.y(),dy,rect.top(),rect.bottom())):
+            if direction == 0:
+                if origin < minimum or origin > maximum: return False
+                continue
+            first=(minimum-origin)/direction; second=(maximum-origin)/direction
+            if first > second: first,second=second,first
+            low=max(low,first); high=min(high,second)
+            if low > high: return False
+        return True
 
     def redraw(self):
         self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_start(); self.draw_route(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None)
@@ -472,16 +535,18 @@ class PlannerWindow(QMainWindow):
         for x,y,label in ((2250,150,"启停区 1"),(2250,2250,"启停区 2")):
             self.static(self.scene.addRect(x-150,y-150,300,300,QPen(Qt.PenStyle.NoPen),QColor("#114ce0")),"start_zone"); self.text(x-115,y+162,label,"start_zone_label",20)
         self.static(self.scene.addRect(0,910,150,580,QPen(QColor("#9e9e9e"),2),QColor("#ffffff")),"storage_base"); self.static(self.scene.addRect(910,2250,580,150,QPen(QColor("#9e9e9e"),2),QColor("#ffffff")),"rough_base")
-        self.static(self.scene.addEllipse(1050,-220,300,300,QPen(QColor("#444"),4),QColor("#f7f7f7")),"raw_turntable")
+        raw_x=self.plan.layout.raw_center_x_mm; raw=DraggableEllipseItem((-150,-150,300,300),self.move_raw_area); raw.setPos(raw_x,RAW_CENTER_Y_MM); raw.setPen(QPen(QColor("#444"),4)); raw.setBrush(QColor("#f7f7f7")); raw.setData(0,"raw_turntable"); raw.setZValue(5); self.scene.addItem(raw)
         for angle in (90, 210, 330):
-            radians=math.radians(angle); x=1200+100*math.cos(radians); y=-70+100*math.sin(radians)
+            radians=math.radians(angle); x=raw_x+100*math.cos(radians); y=RAW_CENTER_Y_MM+100*math.sin(radians)
             self.static(self.scene.addEllipse(x-25,y-25,50,50,QPen(QColor("#444"),3),QColor("white")),"raw_pick_hole")
         for x,y in MATERIAL_SLOTS:
             self.static(self.scene.addEllipse(x-40,y-40,80,80,QPen(QColor("#222"),4),QColor("white")),"material_slot_outer"); self.static(self.scene.addEllipse(x-13,y-13,26,26,QPen(Qt.PenStyle.NoPen),QColor("#222")),"material_slot_inner")
-        self.static(self.scene.addRect(2392,1100,8,200,QPen(Qt.PenStyle.NoPen),QColor("#212121")),"qr_board")
+        qr=DraggableRectItem((-4,-100,8,200),self.move_qr_board); qr.setPos(QR_CENTER_X_MM,self.plan.layout.qr_center_y_mm); qr.setPen(QPen(Qt.PenStyle.NoPen)); qr.setBrush(QColor("#212121")); qr.setData(0,"qr_board"); qr.setZValue(5); self.scene.addItem(qr)
         safe=QPen(QColor("#2e7d32"),3,Qt.PenStyle.DashLine); self.static(self.scene.addRect(150,150,2100,2100,safe),"car_center_boundary")
         self.text(720,105,"原料区","raw_label",26); self.text(180,1260,"暂存区","storage_label",24,90); self.text(1320,2180,"粗加工区","rough_label",26); self.text(2290,1300,"二维码板","coding_label",22,90); self.text(690,2420,"车体中心可移动范围：X/Y 150～2250 mm","movable_boundary_label",18,0,"#2e7d32")
         self.draw_dimensions()
+        for index,obstacle in enumerate(self.plan.layout.obstacles):
+            item=DraggableEllipseItem((-OBSTACLE_RADIUS_MM,-OBSTACLE_RADIUS_MM,OBSTACLE_RADIUS_MM*2,OBSTACLE_RADIUS_MM*2),lambda position,index=index:self.move_obstacle(index,position)); item.setPos(obstacle.paper_x_mm,obstacle.paper_y_mm); item.setBrush(QColor("#000000")); item.setPen(QPen(QColor("#000000"),1)); item.setData(0,"obstacle"); item.setData(1,index); item.setZValue(20); self.scene.addItem(item)
 
     def draw_dimensions(self):
         blue=QColor("#1748c5"); pen=QPen(blue,2)
@@ -513,16 +578,39 @@ class PlannerWindow(QMainWindow):
     def draw_preview(self):
         if self.preview_paper is None or self.preview_yaw_deg is None: return
         anchor, _, _=self._preview_anchor()
+        valid=self.is_valid_route_segment(anchor,self.preview_paper)
         if self.preview_shift:
             guide=QPen(QColor(21,101,192,120),3,Qt.PenStyle.DashLine)
             line=self.scene.addLine(anchor.x(),anchor.y(),self.preview_paper.x(),self.preview_paper.y(),guide); line.setData(0,"snap_preview_axis"); line.setZValue(13)
         yaw=self.preview_yaw_deg+self.plan.start_heading_deg
-        car=CarOutlineItem(self.rotate_preview_clockwise); car.setPos(self.preview_paper); car.setRotation(-yaw); car.setPen(QPen(QColor(21,101,192,125),4)); car.setBrush(QColor(21,101,192,42)); car.setZValue(17); self.scene.addItem(car)
-        arrow=QGraphicsPolygonItem(QPolygonF([QPointF(-24,-24),QPointF(32,-24),QPointF(32,-44),QPointF(72,0),QPointF(32,44),QPointF(32,24),QPointF(-24,24)])); arrow.setPos(self.preview_paper); arrow.setRotation(-yaw); arrow.setBrush(QColor(21,101,192,75)); arrow.setPen(QPen(QColor(13,71,161,125),2)); arrow.setZValue(18); self.scene.addItem(arrow)
+        color=QColor(21,101,192,125) if valid else QColor(198,40,40,150)
+        car=CarOutlineItem(self.rotate_preview_clockwise); car.setPos(self.preview_paper); car.setRotation(-yaw); car.setPen(QPen(color,4)); car.setBrush(QColor(color.red(),color.green(),color.blue(),42)); car.setZValue(17); self.scene.addItem(car)
+        arrow=QGraphicsPolygonItem(QPolygonF([QPointF(-24,-24),QPointF(32,-24),QPointF(32,-44),QPointF(72,0),QPointF(32,44),QPointF(32,24),QPointF(-24,24)])); arrow.setPos(self.preview_paper); arrow.setRotation(-yaw); arrow.setBrush(QColor(color.red(),color.green(),color.blue(),75)); arrow.setPen(QPen(color,2)); arrow.setZValue(18); self.scene.addItem(arrow)
 
-    def add_measurement_point(self, point):
+    def add_measurement_point(self, point, shift=False):
         if len(self.measurement_points) >= 2: self.measurement_points=[]
+        if shift and self.measurement_points:
+            point=snap_to_45(self.measurement_points[0],point)
         self.measurement_points.append(QPointF(point)); self.update_measurement_ui(); self.redraw()
+
+    def add_obstacle(self, point):
+        if not (0 <= point.x() <= FIELD_SIZE_MM and 0 <= point.y() <= FIELD_SIZE_MM): return
+        self.push_undo(); self.plan.layout.obstacles.append(Obstacle(*self.clamp_obstacle(point)))
+        self.redraw()
+
+    @staticmethod
+    def clamp_obstacle(point):
+        return (max(OBSTACLE_RADIUS_MM,min(FIELD_SIZE_MM-OBSTACLE_RADIUS_MM,point.x())),max(OBSTACLE_RADIUS_MM,min(FIELD_SIZE_MM-OBSTACLE_RADIUS_MM,point.y())))
+
+    def move_obstacle(self, index, position):
+        if not 0 <= index < len(self.plan.layout.obstacles): return
+        self.push_undo(); obstacle=self.plan.layout.obstacles[index]; obstacle.paper_x_mm,obstacle.paper_y_mm=self.clamp_obstacle(position); self.redraw()
+
+    def move_raw_area(self, position):
+        self.push_undo(); self.plan.layout.raw_center_x_mm=max(RAW_CENTER_X_RANGE[0],min(RAW_CENTER_X_RANGE[1],position.x())); self.redraw()
+
+    def move_qr_board(self, position):
+        self.push_undo(); self.plan.layout.qr_center_y_mm=max(QR_CENTER_Y_RANGE[0],min(QR_CENTER_Y_RANGE[1],position.y())); self.redraw()
 
     def clear_measurement(self):
         self.measurement_points=[]; self.update_measurement_ui(); self.redraw()
