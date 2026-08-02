@@ -1,5 +1,10 @@
 # 比赛地图路径规划工具
 
+## v7 流程编辑
+
+方案仅使用有序 `steps` 保存到点停靠、原地转向和连续路径段，不再提供全局规划模式，也不再加载 v5/v6 方案。
+连续段的第一个点是随前序步骤自动同步的锁定入口点；中间点是软途经点，最后一个点是最终停车点。代码生成按流程顺序输出 GOTO、转向和 `AdvanceMotion_FollowPathBlocking`。
+
 独立的 PySide6 赛前规划与仿真工具，不连接串口，也不会向小车下发指令。
 
 地图按官方 `2400 mm × 2400 mm` 图纸绘制。四个黄色区的定位坐标由“场地中心对称、十字通道居中”关系推导为 `(550,550)`、`(1400,550)`、`(550,1400)`、`(1400,1400)`。新建方案必须先选择启停区或自定义起点，再右击蓝色起点箭头设置朝向并确认。
@@ -14,7 +19,7 @@
 - 框选或 `Ctrl+A` 后可批量平移、删除节点，`Ctrl+Z`/`Ctrl+Shift+Z` 撤销或重做。
 - 虚线绿色框是 `300 mm × 300 mm` 车体中心可移动范围，即图纸坐标 `X/Y=150～2250 mm`；越界方案不能保存或播放。
 
-方案 JSON 使用 `map_version: 5`。`start` 保存官方图纸坐标和起始朝向，`commands` 保存标定后固定世界坐标系中的顺序动作，`layout` 保存障碍物、原料区和二维码板位置；仅加载 v5，旧版方案不提供迁移兼容。
+方案 JSON 使用 `map_version: 7`，仅通过有序 `steps` 保存 `goto_pose`、`rotate_in_place` 和 `continuous_path`。v5/v6 方案及旧 `mode`、`commands`、`path_points` 顶层结构不再加载。连续路径的播放仅用于几何预览和碰撞检查，不表示实车动力学或实际跟踪效果。
 
 ## 仿真模型
 
@@ -50,7 +55,7 @@ conda run -n low_numpy python -m pytest tools/map_planner/tests -q
 
 在方案操作区点击“生成业务函数”可打开代码预览窗口。方案必须完成起点与朝向标定，并至少包含一个动作；路径碰撞、越界和不支持的语义会被拒绝。
 
-生成函数格式为 `void Task_<Name>(void)`，函数名称可在窗口内编辑并严格校验。每个 GOTO 和原地转向都使用 `AdvanceMotion_GotoPoseBlocking()`，加速度参数使用 `CHASSIS_DEFAULT_ACC`，每次调用均检查到达状态并在失败时取消运动。正数停留会转换为 `HAL_Delay()`。
+生成函数格式为 `void Task_<Name>(void)`，函数名称可在窗口内编辑并严格校验。生成器按步骤顺序为 GOTO 和原地转向调用 `AdvanceMotion_GotoPoseBlocking()`；每个连续路径步骤生成独立的 `static const AdvanceMotion_PathPoint_t` 数组并调用一次 `AdvanceMotion_FollowPathBlocking()`。GOTO 和原地转向使用 `CHASSIS_DEFAULT_ACC`，任一步骤失败都会取消运动；GOTO 的正数停留会转换为 `HAL_Delay()`。
 
 `Waypoint.x_mm`、`Waypoint.y_mm` 和 `yaw_deg` 已经是根据起点定义的世界坐标，生成时不会再次进行坐标转换。原地转向保持上一个最近的 GOTO 目标位置。当前不支持 `use_yaw=False` 和 `stop=False`；节点的速度、角速度和超时使用 STM32 固件默认值，不会写入生成代码。
 

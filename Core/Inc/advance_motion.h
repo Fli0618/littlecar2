@@ -13,15 +13,41 @@ extern "C"
 #include "main.h"
 #include <math.h>
 
+/* 连续路径参数。以下保守初值均需要实机标定。 */
+#define ADVANCE_MOTION_PATH_MIN_SEGMENT_MM (1.0f) /*!< 最小有效线段长度，单位为 mm。 */
+#define ADVANCE_MOTION_PATH_SEARCH_SEGMENTS ((uint16_t)12U) /*!< 每周期前向搜索上限，单位为段。 */
+#define ADVANCE_MOTION_PATH_CRUISE_SPEED_MM_S (820.0f) /*!< 巡航速度，单位为 mm/s。 */
+#define ADVANCE_MOTION_PATH_MAX_WZ_DEG_S (100.0f) /*!< 路径最大角速度，单位为 deg/s。 */
+#define ADVANCE_MOTION_PATH_ACCEL_MM_S2 (800.0f) /*!< 参考速度加速度，单位为 mm/s^2。 */
+#define ADVANCE_MOTION_PATH_DECEL_MM_S2 (1000.0f) /*!< 参考速度减速度，单位为 mm/s^2。 */
+#define ADVANCE_MOTION_PATH_MAX_LATERAL_ACC_MM_S2 (600.0f) /*!< 横向加速度限值，单位为 mm/s^2。 */
+#define ADVANCE_MOTION_PATH_CURVATURE_EPSILON_1_MM (0.00001f) /*!< 曲率除数下限，单位为 1/mm。 */
+#define ADVANCE_MOTION_PATH_YAW_GRADIENT_EPSILON_DEG_PER_MM (0.0001f) /*!< 航向梯度除数下限，单位为 deg/mm。 */
+#define ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM (300.0f) /*!< 曲率与航向梯度预览距离，单位为 mm。 */
+#define ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM (60.0f) /*!< 前视下限，单位为 mm。 */
+#define ADVANCE_MOTION_PATH_LOOKAHEAD_BASE_MM (60.0f) /*!< 前视基础距离，单位为 mm。 */
+#define ADVANCE_MOTION_PATH_LOOKAHEAD_SPEED_GAIN_S (0.15f) /*!< 前视速度增益，单位为 s。 */
+#define ADVANCE_MOTION_PATH_LOOKAHEAD_CURVE_GAIN_MM (120.0f) /*!< 前视曲率增益，单位为 mm。 */
+#define ADVANCE_MOTION_PATH_LOOKAHEAD_MAX_MM (180.0f) /*!< 前视上限，单位为 mm。 */
+#define ADVANCE_MOTION_PATH_LOOKAHEAD_RATE_MM_S (400.0f) /*!< 前视变化率，单位为 mm/s。 */
+#define ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM (80.0f) /*!< 初始前视距离，单位为 mm。 */
+#define ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM (60.0f) /*!< 进入末段捕获距离，单位为 mm。 */
+#define ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S (150.0f) /*!< 进入末段捕获速度，单位为 mm/s。 */
+#define ADVANCE_MOTION_PATH_KP_POS (0.98f) /*!< 路径位置 PD 比例增益，需要单独实机标定。 */
+#define ADVANCE_MOTION_PATH_KD_VEL (0.620f) /*!< 路径位置 PD 速度增益，需要单独实机标定。 */
+#define ADVANCE_MOTION_PATH_KP_YAW (1.42f) /*!< 路径航向 PD 比例增益，需要单独实机标定。 */
+#define ADVANCE_MOTION_PATH_KD_YAW (0.427f) /*!< 路径航向 PD 速度增益，需要单独实机标定。 */
+#define ADVANCE_MOTION_PATH_TIMEOUT_BASE_MS ((uint32_t)3000U) /*!< 路径超时基础值，单位为 ms。 */
+#define ADVANCE_MOTION_PATH_TIMEOUT_EXPECTED_MIN_SPEED_MM_S (250.0f) /*!< 估算超时最小速度，单位为 mm/s。 */
+#define ADVANCE_MOTION_PATH_TIMEOUT_SCALE (2.0f) /*!< 路径超时安全系数，无单位。 */
+#define ADVANCE_MOTION_PATH_TIMEOUT_MAX_MS ((uint32_t)60000U) /*!< 路径超时上限，单位为 ms。 */
+#define ADVANCE_MOTION_PATH_DRIVER_ACC CHASSIS_DEFAULT_ACC /*!< 驱动协议加速度档位，非软件速度规划加速度。 */
+
 /* 控制周期与传感器数据新鲜度。 */
 #define ADVANCE_MOTION_CONTROL_PERIOD_MS ((uint32_t)20U) /*!< 闭环控制周期，单位为 ms。 */
 #define ADVANCE_MOTION_POSE_TIMEOUT_MS ((uint32_t)100U) /*!< 位姿数据超时时间，单位为 ms。 */
 #define ADVANCE_MOTION_YAW_TIMEOUT_MS ((uint32_t)100U) /*!< 航向角数据超时时间，单位为 ms。 */
 #define ADVANCE_MOTION_ARRIVE_HOLD_MS ((uint32_t)150U) /*!< 到达判定保持时间，单位为 ms。 */
-
-/* 连续路径跟踪配置。路径点由调用方长期持有，控制器不复制数组。 */
-#define ADVANCE_MOTION_PATH_LOOKAHEAD_MM (80.0f) /*!< 路径前视距离，单位为 mm。 */
-#define ADVANCE_MOTION_PATH_SEARCH_POINTS ((uint16_t)12U) /*!< 每个控制周期向前搜索的最大路径点数，单位为点。 */
 
 /* PID 公共限制。 */
 #define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
@@ -112,6 +138,13 @@ extern "C"
     float kd_yaw; /*!< 航向角基于实测角速度的微分增益。 */
   } AdvanceMotion_PidConfig_t;
 
+  typedef struct
+  {
+    float x_mm;
+    float y_mm;
+    float yaw_deg;
+  } AdvanceMotion_PathPoint_t;
+
   /** @brief 运动控制的对外状态快照，用于上位机与调试查询。 */
   typedef struct
   {
@@ -147,6 +180,20 @@ extern "C"
     float integral_x_mm_s;
     float integral_y_mm_s;
     float integral_yaw_deg_s;
+    uint16_t nearest_segment_index; /*!< 当前投影点所在的路径段索引。 */
+    uint16_t target_segment_index; /*!< 动态前视点所在的路径段索引。 */
+    float path_progress_mm; /*!< 从路径起点到投影点的累计弧长，单位为 mm。 */
+    float path_remaining_mm; /*!< 从投影点到最终点的剩余弧长，单位为 mm。 */
+    float path_projection_x_mm; /*!< 当前路径投影点 world X，单位为 mm。 */
+    float path_projection_y_mm; /*!< 当前路径投影点 world Y，单位为 mm。 */
+    float path_curvature_preview_1_mm; /*!< 预览窗口内的最大绝对曲率，单位为 1/mm。 */
+    float path_yaw_gradient_deg_per_mm; /*!< 投影段的有符号航向梯度，单位为 deg/mm。 */
+    float path_reference_speed_mm_s; /*!< 加减速约束后的路径参考速度，单位为 mm/s。 */
+    float path_lookahead_mm; /*!< 当前动态前视距离，单位为 mm。 */
+    float path_feedforward_vx_mm_s; /*!< 路径切向 X 速度前馈，单位为 mm/s。 */
+    float path_feedforward_vy_mm_s; /*!< 路径切向 Y 速度前馈，单位为 mm/s。 */
+    float path_feedforward_wz_deg_s; /*!< 路径航向变化率前馈，单位为 deg/s。 */
+    uint8_t path_final_stage; /*!< 非零表示已进入最终 Goto PID 捕获阶段。 */
   } AdvanceMotion_DebugSnapshot_t;
 
 #define ADVANCE_MOTION_DEBUG_FLAG_VALID ((uint8_t)0x01U)
@@ -167,14 +214,16 @@ extern "C"
   /**
    * @brief 异步启动连续路径跟踪。
    * @details points 必须指向调用方长期持有的只读数组；任务结束、取消或进入异常终态前，
-   * 调用方不得释放、覆盖或修改该数组。所有点必须启用位置约束，最后一个点为精确收敛并停车的终点。
+   * 调用方不得释放、覆盖或修改该数组。中间点是连续通过的软途经点，最后一个点是精确收敛并停车的终点。
    * @param points 路径离散采样点数组。
    * @param point_count 路径点数量，至少为 2。
-   * @param acc 底盘加速度参数。
    * @return 启动结果状态。
    */
-  AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const WorldGoalPose2D_t *points,
-                                                     uint16_t point_count, uint8_t acc);
+  AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_t *points,
+                                                     uint16_t point_count);
+  /** @brief 阻塞执行连续路径；等待期间仅执行 __WFI()，不得从中断上下文调用。 */
+  AdvanceMotion_RunState_t AdvanceMotion_FollowPathBlocking(const AdvanceMotion_PathPoint_t *points,
+                                                             uint16_t point_count);
   /**
    * @brief 阻塞执行位姿导航，返回前不会继续执行调用方后续代码。
    * @details UART/DMA 中断在阻塞期间仍可运行，但本函数不处理上位机协议队列。

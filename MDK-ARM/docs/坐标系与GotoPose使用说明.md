@@ -217,23 +217,23 @@ AdvanceMotion_Cancel();
 | `vmax_mm_s` | mm/s | 平移速度上限 |
 | `wmax_deg_s` | deg/s | 旋转速度上限 |
 | `timeout_ms` | ms | 目标超时，0 表示不启用目标超时 |
-| `goal_flags` | bit mask | bit0 启用 yaw 控制 |
+| `goal_flags` | bit mask | bit0 启用 yaw 控制，bit1 启用 X/Y 位置控制；至少启用一项 |
 
 默认控制参数在 `advance_motion.h`：
 
 | 宏 | 默认值 | 含义 |
 | --- | ---: | --- |
 | `ADVANCE_MOTION_CONTROL_PERIOD_MS` | 20 | 控制周期 |
-| `ADVANCE_MOTION_KP_POS` | 1.0 | 位置 P 控制系数 |
-| `ADVANCE_MOTION_KP_YAW` | 2.0 | yaw P 控制系数 |
-| `ADVANCE_MOTION_POS_TOLERANCE_MM` | 20.0 | 到达位置阈值 |
-| `ADVANCE_MOTION_YAW_TOLERANCE_DEG` | 2.0 | 到达 yaw 阈值 |
+| `ADVANCE_MOTION_DEFAULT_KP/KI/KD_POS` | 0.98 / 0.185 / 0.620 | 位置 PID 默认增益 |
+| `ADVANCE_MOTION_DEFAULT_KP/KI/KD_YAW` | 1.42 / 0.625 / 0.427 | yaw PID 默认增益 |
+| `ADVANCE_MOTION_POS_TOLERANCE_MM` | 10.0 | 到达位置阈值 |
+| `ADVANCE_MOTION_YAW_TOLERANCE_DEG` | 1.5 | 到达 yaw 阈值 |
 | `ADVANCE_MOTION_ARRIVE_HOLD_MS` | 150 | 到达保持时间 |
 | `ADVANCE_MOTION_POSE_TIMEOUT_MS` | 100 | 位姿超时阈值 |
-| `ADVANCE_MOTION_DEFAULT_VMAX_MM_S` | 200.0 | 默认平移速度上限 |
-| `ADVANCE_MOTION_DEFAULT_WMAX_DEG_S` | 90.0 | 默认旋转速度上限 |
+| `ADVANCE_MOTION_DEFAULT_VMAX_MM_S` | 820.0 | 默认平移速度上限 |
+| `ADVANCE_MOTION_DEFAULT_WMAX_DEG_S` | 100.0 | 默认旋转速度上限 |
 
-如果 `vmax_mm_s <= 0` 或 `wmax_deg_s <= 0`，状态机会使用默认速度上限。
+调用 `AdvanceMotion_GotoPoseEx()` 时，已启用位置约束的目标必须提供大于 0 的 `vmax_mm_s`，已启用 yaw 约束的目标必须提供大于 0 的 `wmax_deg_s`。简化阻塞接口会自动填入默认速度上限。
 
 ## 9. GotoPose 控制运算逻辑
 
@@ -268,13 +268,13 @@ error_y = goal.y_mm - pose.y_mm
 position_error = sqrt(error_x^2 + error_y^2)
 ```
 
-### 9.3 平移速度 P 控制
+### 9.3 平移速度 PID 控制
 
-用 P 控制生成 world 平移速度：
+位置环使用运行时 PID 配置生成 world 平移速度。微分项直接使用实测速度，避免对位置误差做数值差分：
 
 ```text
-vx_world = error_x * ADVANCE_MOTION_KP_POS
-vy_world = error_y * ADVANCE_MOTION_KP_POS
+vx_world = kp_pos * error_x + ki_pos * integral_x - kd_pos * measured_vx_world
+vy_world = kp_pos * error_y + ki_pos * integral_y - kd_pos * measured_vy_world
 ```
 
 然后按二维向量模长限幅：
@@ -299,10 +299,10 @@ yaw 误差先 wrap 到 `[-180, 180]`：
 yaw_error = wrap(goal.yaw_deg - pose.yaw_deg)
 ```
 
-再用 P 控制生成角速度：
+再用运行时 yaw PID 生成角速度，微分项使用实测角速度：
 
 ```text
-wz_ccw = yaw_error * ADVANCE_MOTION_KP_YAW
+wz_ccw = kp_yaw * yaw_error + ki_yaw * integral_yaw - kd_yaw * measured_wz
 ```
 
 最后限幅到 `wmax_deg_s`：
@@ -356,7 +356,7 @@ ADVANCE_MOTION_ARRIVE_HOLD_MS
 
 ## 10. 当前运动接口与调度边界
 
-当前仓库没有实现 `CMDSET_CHASSIS`、`CHASSIS_GOTO_POSE` 或运动状态查询协议。运动控制通过本地 C 接口完成：
+当前仓库没有名为 `CMDSET_CHASSIS` 或 `CHASSIS_GOTO_POSE` 的通用比赛协议；在线调参模式通过 `comm_tuner` 提供独立的 `GOTO_POSE`、停止、状态与遥测命令。固件业务可直接使用本地 C 接口：
 
 ```c
 AdvanceMotion_GotoPoseEx(&goal, acc);
@@ -370,7 +370,9 @@ AdvanceMotion_Cancel();
 需要顺序等待时使用：
 
 ```c
-AdvanceMotion_GotoPoseBlocking(&goal, acc);
+AdvanceMotion_GotoGoalBlocking(&goal, acc);
+/* 或使用默认约束： */
+AdvanceMotion_GotoPoseBlocking(x_mm, y_mm, yaw_deg, acc);
 ```
 
 该接口启动目标后只检查运动终态并执行 `__WFI()`；传感器、世界位姿、电机 DMA 和超时检查仍由中断异步推进。
@@ -379,7 +381,7 @@ AdvanceMotion_GotoPoseBlocking(&goal, acc);
 
 1. 初始化 OPS、WIT、`CarPose`、`AdvanceWorld`、`AdvanceControl`、`AdvanceMotion` 和 `drive_emm`。
 2. 等待 TIM6 更新传感器缓存，并在原点未建立时由周期任务调用 `AdvanceWorld_ResetOrigin()`。
-3. 通过 `AdvanceMotion_GotoPoseEx()`启动异步目标，或使用 `AdvanceMotion_GotoPoseBlocking()`执行顺序流程。
+3. 通过 `AdvanceMotion_GotoPoseEx()` 启动异步目标，或使用 `AdvanceMotion_GotoGoalBlocking()`、`AdvanceMotion_GotoPoseBlocking()` 执行顺序流程；连续软途经路径使用 `AdvanceMotion_FollowPathEx()` 或其 Blocking 版本。
 4. 通过 `AdvanceMotion_GetStatus()`读取状态；完成、失败、取消或超时后控制权回到 `ADVANCE_CONTROL_NONE`。
 5. 不要在业务等待循环中调用任何 `*_Update()`、UART 发送或 `HAL_Delay()`。
 

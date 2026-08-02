@@ -1,12 +1,14 @@
 import unittest
 
-from map_planner.models import RotateInPlace, Waypoint
+from map_planner.models import PathPosePoint, Plan, RotateInPlace, Waypoint
 from map_planner.sim import (
     ANGULAR_ACCELERATION_DEG_S2,
     DT_S,
     LINEAR_ACCELERATION_MM_S2,
     Simulation,
     build_timeline,
+    build_continuous_timeline,
+    build_plan_timeline,
 )
 from map_planner.models import Pose
 from map_planner.sweep import MAX_SAMPLE_DISTANCE_MM, MAX_SAMPLE_YAW_DEG, build_goto_sweep, build_rotation_sweep
@@ -75,3 +77,15 @@ class SimulationTests(unittest.TestCase):
         for first, second in zip(sweep.poses, sweep.poses[1:]):
             self.assertEqual((second.x_mm, second.y_mm), (123, 456))
             self.assertLessEqual(abs(((second.yaw_deg-first.yaw_deg+180) % 360)-180), MAX_SAMPLE_YAW_DEG + 1e-6)
+
+    def test_continuous_timeline_is_geometric_and_does_not_stop_at_intermediate_point(self):
+        frames = build_continuous_timeline([PathPosePoint(100, 0, 0), PathPosePoint(200, 0, 90)], 1200, 1200, 0)
+        self.assertTrue(frames)
+        self.assertEqual(frames[-1].actual, Pose(200, 0, 90))
+        self.assertFalse(any(frame.stopped for frame in frames[:-1]))
+
+    def test_mixed_plan_rotates_at_previous_goto_position(self):
+        plan = Plan(steps=[Waypoint(300, 200, 0, dwell_s=0), RotateInPlace(90), Waypoint(400, 200, 90, dwell_s=0)])
+        frames = [frame for frame in build_plan_timeline(plan) if frame.command_index == 1]
+        self.assertTrue(frames)
+        self.assertTrue(all(frame.actual.x_mm == 300 and frame.actual.y_mm == 200 for frame in frames))
