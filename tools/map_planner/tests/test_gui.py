@@ -143,3 +143,59 @@ class GuiTests(unittest.TestCase):
                 self.assertAlmostEqual(new.y_mm-old.y_mm,20)
         finally:
             window.close()
+
+    def test_measurement_mode_reports_absolute_distances_without_adding_node(self):
+        window = PlannerWindow()
+        try:
+            window.set_mode("measure")
+            window.on_map_click(100, 200)
+            window.on_map_click(400, 600)
+            self.assertEqual(window.plan.waypoints, [])
+            self.assertIn("300.0 mm", window.measurement_label.text())
+            self.assertIn("400.0 mm", window.measurement_label.text())
+            self.assertIn("500.0 mm", window.measurement_label.text())
+            window.set_mode("select")
+            self.assertEqual(window.measurement_points, [])
+        finally:
+            window.close()
+
+    def test_right_click_rotation_updates_active_waypoint_heading(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.on_map_click(2200, 200)
+            window.rotate_car_clockwise()
+            waypoint = window.plan.waypoints[0]
+            self.assertEqual(waypoint.yaw_deg, -90)
+            self.assertTrue(waypoint.use_yaw)
+            window.undo()
+            self.assertFalse(window.plan.waypoints[0].use_yaw)
+        finally:
+            window.close()
+
+    def test_timeline_slider_seeks_and_stays_paused(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.on_map_click(2200, 200)
+            window.play()
+            window.pause()
+            self.assertTrue(window.progress.isEnabled())
+            middle = max(1, window.progress.maximum() // 2)
+            window.progress.setValue(middle)
+            self.assertEqual(window.timeline_position, middle)
+            self.assertFalse(window.timer.isActive())
+            self.assertEqual(len(window.actual_trace), middle)
+        finally:
+            window.close()
+
+    def test_raw_turntable_slots_follow_documented_geometry(self):
+        window = PlannerWindow()
+        try:
+            holes = [item for item in window.scene.items() if item.data(0) == "raw_pick_hole"]
+            self.assertEqual(len(holes), 3)
+            for hole in holes:
+                center = hole.rect().center() + hole.pos()
+                self.assertAlmostEqual((center.x() - 1200) ** 2 + (center.y() + 70) ** 2, 10000, delta=1)
+        finally:
+            window.close()

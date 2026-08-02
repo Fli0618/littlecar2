@@ -11,11 +11,11 @@ from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, Q
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDoubleSpinBox, QFormLayout,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsPolygonItem, QGraphicsRectItem,
     QGraphicsScene, QGraphicsTextItem, QGraphicsView, QHBoxLayout, QInputDialog, QLabel, QListWidget,
-    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget, QRubberBand)
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSlider, QSplitter, QVBoxLayout, QWidget, QRubberBand)
 
 from .geometry import paper_to_world, world_to_paper
 from .models import CAR_SIZE_MM, FIELD_SIZE_MM, Plan, Pose, Waypoint
-from .sim import Simulation
+from .sim import SimulationFrame, build_timeline
 from .storage import list_plans, load_plan, save_plan
 
 PLATFORMS = ((550, 550), (1400, 550), (550, 1400), (1400, 1400))
@@ -68,7 +68,7 @@ class MapView(QGraphicsView):
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor); event.accept(); return
         item = self.itemAt(event.position().toPoint())
         editable = isinstance(item, (WaypointItem, RotationHandleItem, StartItem, StartHeadingHandle))
-        if event.button() == Qt.MouseButton.LeftButton and self.mode in ("add", "calibrate") and not editable:
+        if event.button() == Qt.MouseButton.LeftButton and self.mode in ("add", "calibrate", "measure") and not editable:
             point = self.mapToScene(event.position().toPoint()); self.clicked.emit(point.x(), point.y(), bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)); event.accept(); return
         if event.button() == Qt.MouseButton.LeftButton and self.mode == "select" and not editable:
             self._origin = event.position().toPoint(); self._rubber = QRubberBand(QRubberBand.Shape.Rectangle, self.viewport())
@@ -97,6 +97,8 @@ class MapView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):  # type: ignore[no-untyped-def]
+        if event.key() == Qt.Key.Key_Escape and self.mode == "measure":
+            self.clicked.emit(float("nan"), float("nan"), False); event.accept(); return
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self._space_pressed = True; self.viewport().setCursor(Qt.CursorShape.OpenHandCursor); event.accept(); return
         super().keyPressEvent(event)
@@ -145,6 +147,18 @@ class WaypointItem(QGraphicsEllipseItem):
         self.activate(self.index); event.accept()
 
 
+class CarOutlineItem(QGraphicsRectItem):
+    def __init__(self, rotated):  # type: ignore[no-untyped-def]
+        super().__init__(-150, -150, 300, 300)
+        self.rotated = rotated
+        self.setToolTip("右击顺时针旋转 90 度")
+
+    def mousePressEvent(self, event):  # type: ignore[no-untyped-def]
+        if event.button() == Qt.MouseButton.RightButton:
+            self.rotated(); event.accept(); return
+        super().mousePressEvent(event)
+
+
 class StartHeadingHandle(QGraphicsEllipseItem):
     def __init__(self, owner, changed):  # type: ignore[no-untyped-def]
         super().__init__(-12, -12, 24, 24, owner); self.changed = changed
@@ -166,8 +180,9 @@ class PlannerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__(); self.setWindowTitle("LittleCar2 比赛地图路径规划"); self.resize(1420, 860); self.setMinimumSize(1024, 768)
         self.plan = Plan(); self.active_index = -1; self.mode = "select"; self.calibration_pending = True; self.calibration_stage = "choose"; self.undo_stack = []; self.redo_stack = []
-        self.selected_indices: set[int] = set()
-        self.simulation = None; self.actual_trace = []; self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
+        self.selected_indices: set[int] = set(); self.measurement_points: list[QPointF] = []
+        self.timeline: list[SimulationFrame] = []; self.timeline_position = 0; self.current_frame = None; self.actual_trace = []
+        self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
         self.view.clicked.connect(self.on_map_click); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
         self._build(); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_waypoint)
         self.redraw(); self.refresh_plans(); QTimer.singleShot(0,self.fit_map); QShortcut(QKeySequence(Qt.Key.Key_Home),self,activated=self.fit_map)
@@ -178,8 +193,8 @@ class PlannerWindow(QMainWindow):
     def _build(self) -> None:
         root = QSplitter(Qt.Orientation.Horizontal); left = QWidget(); box = QVBoxLayout(left); box.setContentsMargins(10, 10, 10, 10); box.setSpacing(6)
         toolbar = QHBoxLayout(); self.tool_group = QButtonGroup(self); self.tool_group.setExclusive(True)
-        self.select_button = QPushButton("选择"); self.add_button = QPushButton("添加节点")
-        for button, value in ((self.select_button, "select"), (self.add_button, "add")):
+        self.select_button = QPushButton("选择"); self.add_button = QPushButton("添加节点"); self.measure_button = QPushButton("测距")
+        for button, value in ((self.select_button, "select"), (self.add_button, "add"), (self.measure_button, "measure")):
             button.setCheckable(True); self.tool_group.addButton(button)
             button.toggled.connect(lambda checked=False, mode=value: checked and self.set_mode(mode)); toolbar.addWidget(button)
         self.select_button.setChecked(True); box.addLayout(toolbar)
@@ -200,7 +215,12 @@ class PlannerWindow(QMainWindow):
         for label, fn in (("播放",self.play),("暂停",self.pause),("重置",self.reset_simulation)):
             button=QPushButton(label); button.clicked.connect(fn); simrow.addWidget(button)
             if label == "播放": self.play_button = button
-        box.addLayout(simrow); self.status=QLabel("先选择起点并拖动蓝色流程箭头标定朝向。"); self.status.setWordWrap(True); box.addWidget(self.status); box.addStretch()
+        box.addLayout(simrow)
+        self.progress = QSlider(Qt.Orientation.Horizontal); self.progress.setRange(0, 0); self.progress.setEnabled(False)
+        self.progress.sliderPressed.connect(self.pause); self.progress.valueChanged.connect(self.seek_timeline)
+        box.addWidget(self.progress); self.progress_label = QLabel("进度：0.00 / 0.00 s"); box.addWidget(self.progress_label)
+        self.measurement_label = QLabel("水平：--  垂直：--  欧式：--"); self.measurement_label.setWordWrap(True); box.addWidget(self.measurement_label)
+        self.status=QLabel("先选择起点并拖动蓝色流程箭头标定朝向。"); self.status.setWordWrap(True); box.addWidget(self.status); box.addStretch()
         scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); scroll.setWidget(left)
         map_panel=QWidget(); map_box=QVBoxLayout(map_panel); map_box.setContentsMargins(0,0,0,0); map_box.setSpacing(0)
         self.calibration_bar=QWidget(); guide=QHBoxLayout(self.calibration_bar); guide.setContentsMargins(12,8,12,8)
@@ -215,10 +235,19 @@ class PlannerWindow(QMainWindow):
             self.select_button.setChecked(True)
             if hasattr(self,"status"): self.status.setText("请先完成起点和朝向标定。")
             return
-        self.mode=mode; self.view.mode=mode
-        if hasattr(self,"status"): self.status.setText("选择：框选、Ctrl 多选；中键或空格+左键平移地图。" if mode=="select" else "添加节点：点击地图添加，按住 Shift 吸附水平、垂直或 45 度。")
+        was_measuring=self.mode == "measure"; self.mode=mode; self.view.mode=mode
+        if was_measuring and mode != "measure":
+            self.measurement_points=[]
+            if hasattr(self,"measurement_label"): self.update_measurement_ui()
+            if hasattr(self,"scene"): self.redraw()
+        if hasattr(self,"status"):
+            message = "选择：框选、Ctrl 多选；中键或空格+左键平移地图。"
+            if mode == "add": message = "添加节点：点击地图添加，按住 Shift 吸附水平、垂直或 45 度。"
+            elif mode == "measure": message = "测距：左键依次选择两点，Esc 或切换工具清除。"
+            self.status.setText(message)
         if mode == "select": self.select_button.setChecked(True)
         elif mode == "add": self.add_button.setChecked(True)
+        elif mode == "measure": self.measure_button.setChecked(True)
 
     def begin_start(self, kind):
         self.push_undo(); self.calibration_pending=True
@@ -234,7 +263,11 @@ class PlannerWindow(QMainWindow):
         for widget in (self.add_button,self.save_button,self.save_as_button,self.play_button): widget.setEnabled(enabled)
 
     def on_map_click(self, x, y, shift=False):
+        if math.isnan(x):
+            self.clear_measurement(); return
         if not (0 <= x <= FIELD_SIZE_MM and 0 <= y <= FIELD_SIZE_MM): return
+        if self.mode == "measure":
+            self.add_measurement_point(QPointF(x, y)); return
         if self.mode == "calibrate":
             if self.calibration_stage != "position": return
             self.plan.start_paper_x_mm, self.plan.start_paper_y_mm = x, y; self.calibration_stage="heading"; self.update_calibration_ui(); self.redraw(); return
@@ -312,13 +345,13 @@ class PlannerWindow(QMainWindow):
         for index in indices: del self.plan.waypoints[index]
         self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self.refresh_waypoints(); self.redraw()
 
-    def push_undo(self): self.undo_stack.append(copy.deepcopy(self.plan)); self.undo_stack=self.undo_stack[-100:]; self.redo_stack.clear()
+    def push_undo(self): self._invalidate_timeline(); self.undo_stack.append(copy.deepcopy(self.plan)); self.undo_stack=self.undo_stack[-100:]; self.redo_stack.clear()
     def undo(self):
         if not self.undo_stack:return
-        self.redo_stack.append(copy.deepcopy(self.plan)); self.plan=self.undo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self.simulation=None; self.actual_trace=[]; self.refresh_waypoints(); self.redraw()
+        self.redo_stack.append(copy.deepcopy(self.plan)); self.plan=self.undo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw()
     def redo(self):
         if not self.redo_stack:return
-        self.undo_stack.append(copy.deepcopy(self.plan)); self.plan=self.redo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self.refresh_waypoints(); self.redraw()
+        self.undo_stack.append(copy.deepcopy(self.plan)); self.plan=self.redo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw()
 
     def invalid_waypoints(self):
         margin=CAR_SIZE_MM/2.0; invalid=[]
@@ -328,7 +361,7 @@ class PlannerWindow(QMainWindow):
         return invalid
 
     def redraw(self):
-        self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_start(); self.draw_route(); self.draw_car(self.simulation.actual if self.simulation else None)
+        self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_start(); self.draw_route(); self.draw_measurement(); self.draw_car(self.current_frame.actual if self.current_frame else None)
         for item in self.scene.items():
             if isinstance(item,WaypointItem) and item.index in self.selected_indices: item.setSelected(True)
 
@@ -346,7 +379,9 @@ class PlannerWindow(QMainWindow):
             self.static(self.scene.addRect(x-150,y-150,300,300,QPen(Qt.PenStyle.NoPen),QColor("#114ce0")),"start_zone"); self.text(x-115,y+162,label,"start_zone_label",20)
         self.static(self.scene.addRect(0,910,150,580,QPen(QColor("#9e9e9e"),2),QColor("#ffffff")),"storage_base"); self.static(self.scene.addRect(910,2250,580,150,QPen(QColor("#9e9e9e"),2),QColor("#ffffff")),"rough_base")
         self.static(self.scene.addEllipse(1050,-220,300,300,QPen(QColor("#444"),4),QColor("#f7f7f7")),"raw_turntable")
-        for x,y in ((1130,20),(1270,20),(1200,110)): self.static(self.scene.addEllipse(x-12,y-12,24,24,QPen(QColor("#444"),3),QColor("white")),"raw_pick_hole")
+        for angle in (90, 210, 330):
+            radians=math.radians(angle); x=1200+100*math.cos(radians); y=-70+100*math.sin(radians)
+            self.static(self.scene.addEllipse(x-25,y-25,50,50,QPen(QColor("#444"),3),QColor("white")),"raw_pick_hole")
         for x,y in MATERIAL_SLOTS:
             self.static(self.scene.addEllipse(x-40,y-40,80,80,QPen(QColor("#222"),4),QColor("white")),"material_slot_outer"); self.static(self.scene.addEllipse(x-13,y-13,26,26,QPen(Qt.PenStyle.NoPen),QColor("#222")),"material_slot_inner")
         self.static(self.scene.addRect(2392,1100,8,200,QPen(Qt.PenStyle.NoPen),QColor("#212121")),"qr_board")
@@ -360,7 +395,7 @@ class PlannerWindow(QMainWindow):
             self.line(x1,edge,x1,dim,marker=key,pen=QPen(blue)); self.line(x2,edge,x2,dim,marker=key,pen=QPen(blue)); self.line(x1,dim,x2,dim,marker=key,pen=pen); self.text((x1+x2)/2-32,dim-32,label,key,18,0,"#1748c5")
         def v(y1,y2,edge,dim,label,key):
             self.line(edge,y1,dim,y1,marker=key,pen=QPen(blue)); self.line(edge,y2,dim,y2,marker=key,pen=QPen(blue)); self.line(dim,y1,dim,y2,marker=key,pen=pen); self.text(dim+8,(y1+y2)/2,label,key,18,90,"#1748c5")
-        h(0,2400,2400,2530,"2400","dim_2400w"); v(0,2400,2400,2500,"2400","dim_2400h"); h(550,1000,1000,1060,"450","dim_platform_450"); v(550,1000,550,490,"450","dim_platform_450"); h(1000,1400,550,470,"400","dim_channel_400"); v(1000,1400,1400,1480,"400","dim_channel_400"); h(2100,2400,0,-100,"300","dim_start_300"); v(0,300,2400,2470,"300","dim_start_300"); h(0,150,0,-180,"150","dim_storage_150"); v(910,1490,0,-90,"580","dim_storage_580"); h(910,1490,2400,2620,"580","dim_rough_580"); v(2250,2400,1490,1570,"150","dim_rough_150"); h(1100,1300,0,-230,"1100～1300","dim_raw_range"); v(75,85,0,-170,"75～85","dim_raw_depth"); v(1100,1300,2400,2570,"1100～1300","dim_qr_range")
+        h(0,2400,2400,2530,"2400","dim_2400w"); v(0,2400,2400,2500,"2400","dim_2400h"); h(550,1000,1000,1060,"450","dim_platform_450"); v(550,1000,550,490,"450","dim_platform_450"); h(1000,1400,550,470,"400","dim_channel_400"); v(1000,1400,1400,1480,"400","dim_channel_400"); h(2100,2400,0,-100,"300","dim_start_300"); v(0,300,2400,2470,"300","dim_start_300"); h(0,150,0,-180,"150","dim_storage_150"); v(910,1490,0,-90,"580","dim_storage_580"); h(910,1490,2400,2620,"580","dim_rough_580"); v(2250,2400,1490,1570,"150","dim_rough_150"); h(1050,1350,-70,-270,"Ø300","dim_raw_diameter"); h(1100,1300,-70,-150,"Ø200","dim_raw_pitch"); v(1100,1300,2400,2570,"1100～1300","dim_qr_range")
 
     def draw_start(self):
         if self.calibration_pending and self.calibration_stage in ("choose","position"): return
@@ -378,6 +413,29 @@ class PlannerWindow(QMainWindow):
             for p in self.actual_trace[1:]: path.lineTo(*world_to_paper(p,self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg))
             self.scene.addPath(path,QPen(QColor("#9e1b32"),4,Qt.PenStyle.DashLine))
 
+    def add_measurement_point(self, point):
+        if len(self.measurement_points) >= 2: self.measurement_points=[]
+        self.measurement_points.append(QPointF(point)); self.update_measurement_ui(); self.redraw()
+
+    def clear_measurement(self):
+        self.measurement_points=[]; self.update_measurement_ui(); self.redraw()
+
+    def update_measurement_ui(self):
+        if len(self.measurement_points) < 2:
+            self.measurement_label.setText("水平：--  垂直：--  欧式：--")
+            return
+        first, second=self.measurement_points
+        horizontal=abs(second.x()-first.x()); vertical=abs(second.y()-first.y())
+        self.measurement_label.setText(f"水平：{horizontal:.1f} mm  垂直：{vertical:.1f} mm  欧式：{math.hypot(horizontal, vertical):.1f} mm")
+
+    def draw_measurement(self):
+        if not self.measurement_points: return
+        pen=QPen(QColor("#7b1fa2"),4,Qt.PenStyle.DashLine)
+        for point in self.measurement_points:
+            marker=self.scene.addEllipse(point.x()-13,point.y()-13,26,26,QPen(QColor("#4a148c"),3),QColor("#ffffff")); marker.setZValue(30)
+        if len(self.measurement_points) == 2:
+            first, second=self.measurement_points; line=self.scene.addLine(first.x(),first.y(),second.x(),second.y(),pen); line.setZValue(29)
+
     def draw_car(self,pose):
         p=pose
         if p is None and 0 <= self.active_index < len(self.plan.waypoints):
@@ -386,26 +444,53 @@ class PlannerWindow(QMainWindow):
                 if waypoint.use_yaw: yaw=waypoint.yaw_deg
             active=self.plan.waypoints[self.active_index]; p=Pose(active.x_mm,active.y_mm,yaw)
         p=p or Pose(); x,y=world_to_paper(p,self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg); yaw=p.yaw_deg+self.plan.start_heading_deg
-        out=not (150 <= x <= 2250 and 150 <= y <= 2250); car=QGraphicsRectItem(-150,-150,300,300); car.setPos(x,y); car.setRotation(-yaw); car.setPen(QPen(QColor("#c62828") if out else QColor("#455a64"),5)); car.setBrush(QColor(239,83,80,135) if out else QColor(120,144,156,105)); car.setZValue(15); self.scene.addItem(car)
+        out=not (150 <= x <= 2250 and 150 <= y <= 2250); car=CarOutlineItem(self.rotate_car_clockwise); car.setPos(x,y); car.setRotation(-yaw); car.setPen(QPen(QColor("#c62828") if out else QColor("#455a64"),5)); car.setBrush(QColor(239,83,80,135) if out else QColor(120,144,156,105)); car.setZValue(15); self.scene.addItem(car)
         arrow=QGraphicsPolygonItem(QPolygonF([QPointF(-24,-24),QPointF(32,-24),QPointF(32,-44),QPointF(72,0),QPointF(32,44),QPointF(32,24),QPointF(-24,24)])); arrow.setPos(x,y); arrow.setRotation(-yaw); arrow.setBrush(QColor("#1565c0")); arrow.setPen(QPen(QColor("#0d47a1"),3)); arrow.setZValue(16); self.scene.addItem(arrow)
+
+    def rotate_car_clockwise(self):
+        if self.timer.isActive(): self.status.setText("请先暂停仿真后再旋转小车。 "); return
+        if not 0 <= self.active_index < len(self.plan.waypoints): self.status.setText("请先选择一个路径节点。 "); return
+        self.push_undo(); waypoint=self.plan.waypoints[self.active_index]
+        waypoint.yaw_deg=((waypoint.yaw_deg-90+180)%360)-180; waypoint.use_yaw=True
+        self.show_node(self.active_index); self.refresh_waypoints(); self.redraw(); self.status.setText("当前节点航向已顺时针旋转 90 度。")
+
+    def _invalidate_timeline(self):
+        if not hasattr(self,"progress"): return
+        self.pause(); self.timeline=[]; self.timeline_position=0; self.current_frame=None; self.actual_trace=[]
+        self.progress.blockSignals(True); self.progress.setRange(0,0); self.progress.setValue(0); self.progress.blockSignals(False); self.progress.setEnabled(False)
+        self.progress_label.setText("进度：0.00 / 0.00 s")
+
+    def _update_progress_ui(self):
+        total=self.timeline[-1].time_s if self.timeline else 0.0
+        current=self.current_frame.time_s if self.current_frame else 0.0
+        self.progress_label.setText(f"进度：{current:.2f} / {total:.2f} s")
+
+    def seek_timeline(self, position):
+        if not self.timeline: return
+        self.timeline_position=max(0,min(position,len(self.timeline))); self.current_frame=self.timeline[self.timeline_position-1] if self.timeline_position else None
+        self.actual_trace=[frame.actual for frame in self.timeline[:self.timeline_position]]; self._update_progress_ui(); self.redraw()
 
     def play(self):
         if self.calibration_pending: self.status.setText("请先完成起点标定。"); return
         invalid=self.invalid_waypoints()
         if invalid: self.status.setText("以下步骤超出车体中心可移动范围："+"、".join(str(i+1) for i in invalid)); return
         if not self.plan.waypoints: self.status.setText("至少添加一个节点后才能仿真。 "); return
-        self.simulation=Simulation(copy.deepcopy(self.plan.waypoints),self.plan.settings,self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg); self.actual_trace=[]; self.timer.start()
+        if not self.timeline:
+            self.timeline=build_timeline(copy.deepcopy(self.plan.waypoints),self.plan.settings,self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
+            self.progress.blockSignals(True); self.progress.setRange(0,len(self.timeline)); self.progress.setEnabled(True); self.progress.blockSignals(False)
+        if self.timeline_position >= len(self.timeline): self.progress.setValue(0)
+        self.timer.start()
     def pause(self): self.timer.stop()
-    def reset_simulation(self): self.timer.stop(); self.simulation=None; self.actual_trace=[]; self.redraw()
+    def reset_simulation(self): self.pause(); self.progress.setValue(0) if self.timeline else self.redraw()
     def tick(self):
-        if not self.simulation:return
-        frame=self.simulation.step(); self.actual_trace.append(frame.actual); self.redraw(); self.status.setText(f"t={frame.time_s:.2f}s  速度={frame.speed_mm_s:.1f} mm/s  误差={frame.error_mm:.1f} mm")
-        if self.simulation.finished or self.simulation.failed:
-            self.timer.stop()
-            if self.simulation.failed: self.status.setText(self.simulation.failure_reason)
+        if not self.timeline: return
+        next_position=min(self.timeline_position+1,len(self.timeline)); self.progress.setValue(next_position)
+        frame=self.current_frame
+        if frame: self.status.setText(f"t={frame.time_s:.2f}s  速度={frame.speed_mm_s:.1f} mm/s  误差={frame.error_mm:.1f} mm")
+        if self.timeline_position >= len(self.timeline): self.pause()
     def refresh_plans(self): self.plan_list.clear(); self.plan_list.addItems(list_plans())
     def new_plan(self):
-        self.pause(); self.plan=Plan(); self.active_index=-1; self.actual_trace=[]; self.undo_stack=[]; self.redo_stack=[]; self.selected_indices=set(); self.calibration_pending=True; self.calibration_stage="choose"; self.set_mode("select"); self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
+        self._invalidate_timeline(); self.plan=Plan(); self.active_index=-1; self.undo_stack=[]; self.redo_stack=[]; self.selected_indices=set(); self.calibration_pending=True; self.calibration_stage="choose"; self.set_mode("select"); self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
     def save(self):
         if self.calibration_pending: self.status.setText("请先完成起点标定。"); return
         invalid=self.invalid_waypoints()
@@ -421,7 +506,7 @@ class PlannerWindow(QMainWindow):
     def load_selected(self):
         item=self.plan_list.currentItem()
         if item is None:return
-        try: self.plan=load_plan(item.text()); self.active_index=-1; self.calibration_pending=False; self.calibration_stage="complete"; self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
+        try: self._invalidate_timeline(); self.plan=load_plan(item.text()); self.active_index=-1; self.calibration_pending=False; self.calibration_stage="complete"; self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
         except ValueError as error: QMessageBox.warning(self,"加载失败",str(error))
 
 

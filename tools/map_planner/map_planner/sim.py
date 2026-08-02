@@ -200,3 +200,24 @@ class Simulation:
             out,
             timed_out,
         )
+
+
+def build_timeline(
+    commands: list[Waypoint],
+    settings: SimulationSettings,
+    start_paper_x_mm: float,
+    start_paper_y_mm: float,
+    start_heading_deg: float,
+) -> list[SimulationFrame]:
+    """Return deterministic simulation frames through completion or failure."""
+    simulation = Simulation(
+        commands,
+        settings,
+        start_paper_x_mm,
+        start_paper_y_mm,
+        start_heading_deg,
+    )
+    frames: list[SimulationFrame] = []
+    while not simulation.finished and not simulation.failed:
+        frames.append(simulation.step())
+    return frames

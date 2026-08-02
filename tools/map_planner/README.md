@@ -26,3 +26,10 @@ conda run -n low_numpy littlecar-map-planner
 $env:QT_QPA_PLATFORM='offscreen'
 conda run -n low_numpy python -m pytest tools/map_planner/tests -q
 ```
+
+## 地图交互
+
+- `测距` 工具中，左键依次选择两个图纸点；侧栏显示水平、垂直和欧式距离，按 `Esc` 或切换工具清除。
+- 暂停状态下右击小车外轮廓，可将当前节点航向顺时针旋转 90 度并启用航向约束。
+- 仿真播放后可拖动进度条定位到任意已计算时刻；拖动会暂停播放，松开后保持暂停。
+- 原料转盘按外径 300 mm、槽位分布圆直径 200 mm、120 度间隔和槽径 50 mm 绘制。

@@ -1,7 +1,7 @@
 import unittest
 
 from map_planner.models import SimulationSettings, Waypoint
-from map_planner.sim import Simulation
+from map_planner.sim import Simulation, build_timeline
 
 
 class SimulationTests(unittest.TestCase):
@@ -68,3 +68,13 @@ class SimulationTests(unittest.TestCase):
     def test_out_of_bounds_uses_start_marker(self):
         simulation = Simulation([Waypoint(0, 100)], SimulationSettings(), 100, 100, 0)
         self.assertTrue(simulation.step().out_of_bounds)
+
+    def test_timeline_is_deterministic_and_stops_at_terminal_frame(self):
+        settings = SimulationSettings(dt_s=0.02, sensor_delay_s=0)
+        commands = [Waypoint(0, 1000, vmax_mm_s=1, timeout_s=0.05)]
+        first = build_timeline(commands, settings, 1200, 1200, 0)
+        second = build_timeline(commands, settings, 1200, 1200, 0)
+        self.assertGreater(len(first), 0)
+        self.assertEqual([frame.actual for frame in first], [frame.actual for frame in second])
+        self.assertTrue(first[-1].timed_out)
+        self.assertEqual(first[-1].time_s, 0.06)
