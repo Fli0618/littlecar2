@@ -22,6 +22,12 @@ extern "C"
 /* PID 公共限制。 */
 #define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
 
+/* 组合 GOTO 航向策略：复位后恢复本编译期默认值。 */
+#define ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE ((uint8_t)0U) /*!< 复位后的默认策略：0 为始终并行，1 为大角度先对准。 */
+#define ADVANCE_MOTION_LARGE_YAW_ALIGN_ENTER_DEG (30.0f) /*!< 航向绝对误差达到该值时暂停平移并进入对准阶段，单位为度。 */
+#define ADVANCE_MOTION_LARGE_YAW_ALIGN_EXIT_DEG (20.0f) /*!< 对准阶段航向绝对误差降至该值后恢复组合平移，单位为度。 */
+#define ADVANCE_MOTION_LARGE_YAW_ALIGN_LINEAR_MIN_SCALE (0.35f) /*!< 组合运行时、大航向误差下允许的最小线速度比例。 */
+
 /* 位置 PID 默认参数与在线调参上限。 */
 #define ADVANCE_MOTION_DEFAULT_KP_POS (0.98f) /*!< 位置误差比例默认增益。 */
 #define ADVANCE_MOTION_DEFAULT_KI_POS (0.185f) /*!< 位置误差积分默认增益。 */
@@ -144,6 +150,7 @@ extern "C"
 #define ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH ((uint8_t)0x04U)
 #define ADVANCE_MOTION_DEBUG_FLAG_LINEAR_SATURATED ((uint8_t)0x08U)
 #define ADVANCE_MOTION_DEBUG_FLAG_YAW_SATURATED ((uint8_t)0x10U)
+#define ADVANCE_MOTION_DEBUG_FLAG_YAW_ALIGNING ((uint8_t)0x20U)
 #define ADVANCE_MOTION_DEBUG_FLAG_YAW_SOURCE_OPS ((uint8_t)0x80U)
 
   /** @brief 初始化运动控制模块。 */
@@ -180,6 +187,10 @@ extern "C"
                                                           uint32_t *revision);
   /** @brief 提交固件默认 PID 配置，在下一次 20 ms 周期边界整体生效。 */
   AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultPid(uint32_t *revision);
+  /** @brief 设置组合 GOTO 的大航向误差先对准策略；仅空闲状态可修改。 */
+  AdvanceMotion_Status_t AdvanceMotion_SetLargeYawAlignEnabled(uint8_t enabled);
+  /** @brief 获取组合 GOTO 的大航向误差先对准策略当前状态。 */
+  AdvanceMotion_Status_t AdvanceMotion_GetLargeYawAlignEnabled(uint8_t *enabled);
   /** @brief 航向数据源变更后清除航向 PID 历史，避免使用旧源的积分与微分项。 */
   void AdvanceMotion_ResetYawControl(void);
 

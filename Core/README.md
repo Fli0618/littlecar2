@@ -26,7 +26,7 @@
 - `advance_control`：维护 `NONE/WORLD/VISUAL` 单一底盘控制权，并向高级控制器返回申请结果。
 - `advance_visual`：基于 Jetson 新实测目标的二维车体速度 P 控制；提供阻塞式对齐接口，由 `main.c` 每 20 ms 在 `VISUAL` 控制权下推进。
 - `advance_world`：维护 world 坐标系、全局位姿和 world/base 速度变换。
-- `advance_motion`：世界速度与 `GotoPose` 异步状态机；`GotoPoseBlocking(x, y, yaw, acc)` 使用默认目标，`GotoGoalBlocking(&goal, acc)` 用于自定义目标；由 `main.c` 每 20 ms 调度。
+- `advance_motion`：世界速度与 `GotoPose` 异步状态机；`GotoPoseBlocking(x, y, yaw, acc)` 使用默认目标，`GotoGoalBlocking(&goal, acc)` 用于自定义目标；由 `main.c` 每 20 ms 调度。组合 GOTO 的大航向误差先对准策略由 `advance_motion.h` 的默认宏决定，并可在空闲状态由调参工具临时切换。
 - `drive_emm` 的 DMA 队列和反馈监督由 `main.c` 每 10 ms 调度，周期定义为 `DRIVE_EMM_UPDATE_PERIOD_MS`；该周期独立于 20 ms 底盘闭环周期。
 - `advance_arm`：固定 ID 和编译期动作参数的完全开环阻塞式机械臂执行器；每个原子动作直接发送命令后等待 1000 ms。
 - `comm_jetson`：USART6 上的 Jetson 连续视觉通信、帧解析与最新结果缓存；不参与底盘控制。

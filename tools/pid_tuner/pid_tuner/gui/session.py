@@ -16,6 +16,8 @@ class SessionController(QObject):
     pid_read = Signal(int, object)
     pid_applied = Signal(int, object)
     yaw_source_changed = Signal(str)
+    goto_strategy_read = Signal(bool)
+    goto_strategy_changed = Signal(bool)
     origin_reset = Signal()
     motion_changed = Signal(bool)
 
@@ -29,18 +31,19 @@ class SessionController(QObject):
         self._motion_generation = 0
 
     def connect_port(self, port: str, baud: int) -> None:
-        def action() -> SerialClient:
+        def action() -> tuple[SerialClient, tuple[int, PidConfig], bool]:
             client = SerialClient.open_port(port, baud)
             client.start(); client.add_telemetry_callback(self._handle_telemetry)
-            client.get_pid()
-            return client
+            return client, client.get_pid(), client.get_goto_strategy()
         future = self._executor.submit(action)
         future.add_done_callback(self._connected)
 
     def _connected(self, future: object) -> None:
         try:
-            self._client = future.result()  # type: ignore[attr-defined]
-            self.connected = True; self.status.emit("已连接")
+            client, pid, goto_strategy = future.result()  # type: ignore[attr-defined]
+            self._client = client
+            self.connected = True; self.pid_read.emit(*pid)
+            self.goto_strategy_read.emit(goto_strategy); self.status.emit("已连接")
         except Exception as error:
             self.failure.emit(str(error))
 
@@ -88,6 +91,10 @@ class SessionController(QObject):
 
     def set_yaw_source(self, source: str) -> None:
         self._submit(lambda client: client.set_yaw_source(source), lambda _: self.yaw_source_changed.emit(source))
+
+    def set_goto_strategy(self, large_yaw_align_enabled: bool) -> None:
+        self._submit(lambda client: client.set_goto_strategy(large_yaw_align_enabled),
+                     lambda _: self.goto_strategy_changed.emit(large_yaw_align_enabled))
 
     def reset_origin(self) -> None:
         self._submit(lambda client: client.reset_origin(), lambda _: self.origin_reset.emit())

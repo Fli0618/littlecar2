@@ -64,7 +64,8 @@ def format_telemetry_status(item: Telemetry) -> str:
     motion_state = MOTION_STATE_TEXT.get(item.state, f"未知状态 {item.state}")
     target = ", ".join(f"{value:.1f}" for value in item.target)
     actual = ", ".join(f"{value:.1f}" for value in item.actual)
-    return (f"{motion_state} {pose_state} 目标=({target}) 实际=({actual}) "
+    phase = " 航向对准中" if item.yaw_aligning else ""
+    return (f"{motion_state} {pose_state}{phase} 目标=({target}) 实际=({actual}) "
             f"PID r{item.pid_revision} 标志=0x{item.flags:02X} 覆盖={item.overwritten_count}")
 
 
@@ -94,8 +95,11 @@ class MainWindow(QMainWindow):
         left.addWidget(self.profile); left.addWidget(self.load_profile); left.addWidget(self.save_profile); left.addWidget(self.export_c)
         self.goal = [number(), number(), number(), number(600.0, 0.1, GOTO_VMAX_MM_S), number(120.0, 0.1, GOTO_WMAX_DEG_S)]; self.timeout = QSpinBox(); self.timeout.setRange(1, GOTO_TIMEOUT_MS); self.timeout.setValue(GOTO_TIMEOUT_MS)
         self.use_yaw = QCheckBox("启用航向约束"); self.use_yaw.setChecked(True)
+        self.large_yaw_align = QCheckBox("航向误差大时先对准"); self.large_yaw_align.setEnabled(False)
+        self.large_yaw_align.setToolTip("仅对位置和航向同时启用的 GOTO 生效；板端复位后恢复固件默认值")
         self.yaw_source = QComboBox(); self.yaw_source.addItems(["WIT", "OPS"]); self.reset_origin = QPushButton("重置零点")
         goal_form = QFormLayout(); [goal_form.addRow(name, widget) for name, widget in zip(("X mm", "Y mm", GOTO_YAW_LABEL, "vmax mm/s", "wmax deg/s"), self.goal)]; goal_form.addRow(self.use_yaw)
+        goal_form.addRow(self.large_yaw_align)
         goal_form.addRow("航向 PID 源", self.yaw_source); goal_form.addRow(self.reset_origin)
         goal_form.addRow("超时 ms", self.timeout); self.goto = QPushButton("开始组合 GOTO"); self.goto_position = QPushButton("发送位置 GOTO"); self.goto_yaw = QPushButton("发送角度 GOTO"); self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton"); self.new_experiment = QPushButton("新实验")
         goal_form.addRow(self.goto); goal_form.addRow(self.goto_position); goal_form.addRow(self.goto_yaw); goal_form.addRow(self.stop); goal_form.addRow(self.new_experiment); left.addLayout(goal_form)
@@ -121,16 +125,16 @@ class MainWindow(QMainWindow):
     def _wire(self) -> None:
         self.connect_button.clicked.connect(self.toggle_connection); self.refresh_ports_button.clicked.connect(self.refresh_ports); self.read_pid.clicked.connect(self.session.read_pid); self.apply_pid.clicked.connect(self.apply_current_pid); self.restore_pid.clicked.connect(self.session.restore_pid)
         self.goto.clicked.connect(self.start_motion); self.goto_position.clicked.connect(self.start_position_motion); self.goto_yaw.clicked.connect(self.start_yaw_motion); self.stop.clicked.connect(self.session.stop); self.new_experiment.clicked.connect(self.new_experiment_clicked); self.record.clicked.connect(self.toggle_record)
-        self.yaw_source.currentTextChanged.connect(self.session.set_yaw_source); self.reset_origin.clicked.connect(self.session.reset_origin)
+        self.yaw_source.currentTextChanged.connect(self.session.set_yaw_source); self.reset_origin.clicked.connect(self.session.reset_origin); self.large_yaw_align.toggled.connect(self.session.set_goto_strategy)
         self.load_profile.clicked.connect(self.load_selected_profile); self.save_profile.clicked.connect(self.save_current_profile); self.export_c.clicked.connect(self.export_current_c)
-        self.window.valueChanged.connect(lambda value: self.plots.set_window(float(value))); self.session.telemetry.connect(self.on_telemetry); self.session.status.connect(self.status.setText); self.session.failure.connect(self.on_failure); self.session.pid_read.connect(self.on_pid); self.session.pid_applied.connect(self.on_pid_applied); self.session.yaw_source_changed.connect(self.on_yaw_source_changed); self.session.origin_reset.connect(self.on_origin_reset); self.session.motion_changed.connect(lambda _: self.buffer.add_event("运动状态改变"))
+        self.window.valueChanged.connect(lambda value: self.plots.set_window(float(value))); self.session.telemetry.connect(self.on_telemetry); self.session.status.connect(self.status.setText); self.session.failure.connect(self.on_failure); self.session.pid_read.connect(self.on_pid); self.session.pid_applied.connect(self.on_pid_applied); self.session.yaw_source_changed.connect(self.on_yaw_source_changed); self.session.goto_strategy_read.connect(self.on_goto_strategy_changed); self.session.goto_strategy_changed.connect(self.on_goto_strategy_changed); self.session.origin_reset.connect(self.on_origin_reset); self.session.motion_changed.connect(self.on_motion_changed)
 
     def refresh_ports(self) -> None:
         from serial.tools import list_ports
         self.port.clear(); self.port.addItems([item.device for item in list_ports.comports()])
 
     def toggle_connection(self) -> None:
-        if self.session.connected: self.session.disconnect(); self.connect_button.setText("连接"); return
+        if self.session.connected: self.session.disconnect(); self.large_yaw_align.setEnabled(False); self.connect_button.setText("连接"); return
         if not self.port.currentText(): self.on_failure("未发现可用 COM 口"); return
         self.session.connect_port(self.port.currentText(), int(self.baud.currentText())); self.connect_button.setText("断开")
 
@@ -175,6 +179,14 @@ class MainWindow(QMainWindow):
         self.status.setText(f"PID 已应用，修订号 {revision}")
     def on_yaw_source_changed(self, source: str) -> None:
         self.status.setText(f"航向 PID 数据源已切换为 {source}"); self.buffer.add_event(f"航向源 {source}")
+    def on_goto_strategy_changed(self, enabled: bool) -> None:
+        self.large_yaw_align.blockSignals(True); self.large_yaw_align.setChecked(enabled); self.large_yaw_align.blockSignals(False)
+        self.large_yaw_align.setEnabled(self.session.connected and not self.session.motion_active)
+        self.status.setText("大航向误差先对准已启用" if enabled else "大航向误差先对准已关闭")
+        self.buffer.add_event("GOTO 策略: 先对准航向" if enabled else "GOTO 策略: 并行控制")
+    def on_motion_changed(self, active: bool) -> None:
+        self.large_yaw_align.setEnabled(self.session.connected and not active)
+        self.buffer.add_event("运动状态改变")
     def on_origin_reset(self) -> None:
         [widget.setValue(0.0) for widget in self.goal[:3]]; self.buffer.add_event("零点重置"); self.status.setText("零点已重置")
     def new_experiment_clicked(self) -> None: self.buffer.clear(); self.recorded.clear(); self.buffer.add_event("新实验")

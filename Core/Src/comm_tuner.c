@@ -33,9 +33,12 @@
 #define COMM_TUNER_CMD_HEARTBEAT ((uint8_t)0x12U)
 #define COMM_TUNER_CMD_SET_YAW_SOURCE ((uint8_t)0x13U)
 #define COMM_TUNER_CMD_RESET_ORIGIN ((uint8_t)0x14U)
+#define COMM_TUNER_CMD_GET_GOTO_STRATEGY ((uint8_t)0x15U)
+#define COMM_TUNER_CMD_SET_GOTO_STRATEGY ((uint8_t)0x16U)
 #define COMM_TUNER_CMD_ACK ((uint8_t)0x80U)
 #define COMM_TUNER_CMD_PID ((uint8_t)0x81U)
 #define COMM_TUNER_CMD_TELEMETRY ((uint8_t)0x82U)
+#define COMM_TUNER_CMD_GOTO_STRATEGY ((uint8_t)0x83U)
 #define COMM_TUNER_CMD_ERROR ((uint8_t)0xE0U)
 
 #define COMM_TUNER_ERROR_BAD_CRC ((uint8_t)0x01U)
@@ -322,6 +325,19 @@ static void CommTuner_SendPid(uint8_t request_command, uint8_t request_sequence)
                          payload, sizeof(payload), 1U);
 }
 
+static void CommTuner_SendGotoStrategy(uint8_t request_command, uint8_t request_sequence)
+{
+  uint8_t payload[1U];
+
+  if (AdvanceMotion_GetLargeYawAlignEnabled(&payload[0]) != ADVANCE_MOTION_STATUS_OK)
+  {
+    CommTuner_SendError(request_command, request_sequence, COMM_TUNER_ERROR_BAD_GOAL, 1U);
+    return;
+  }
+  CommTuner_SendResponse(request_command, request_sequence, COMM_TUNER_CMD_GOTO_STRATEGY,
+                         payload, sizeof(payload), 1U);
+}
+
 static void CommTuner_QueueTelemetry(void)
 {
   AdvanceMotion_DebugSnapshot_t snapshot;
@@ -585,6 +601,39 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
       return;
     }
     AdvanceMotion_ResetYawControl();
+    CommTuner_SendAck(command, sequence, 0U, 0U);
+    break;
+  }
+
+  case COMM_TUNER_CMD_GET_GOTO_STRATEGY:
+    if (payload_length != 0U)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
+      return;
+    }
+    CommTuner_SendGotoStrategy(command, sequence);
+    break;
+
+  case COMM_TUNER_CMD_SET_GOTO_STRATEGY:
+  {
+    AdvanceMotion_Status_t status;
+
+    if (payload_length != 1U)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
+      return;
+    }
+    status = AdvanceMotion_SetLargeYawAlignEnabled(payload[0]);
+    if (status == ADVANCE_MOTION_STATUS_BUSY)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BUSY, 1U);
+      return;
+    }
+    if (status != ADVANCE_MOTION_STATUS_OK)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_GOAL, 1U);
+      return;
+    }
     CommTuner_SendAck(command, sequence, 0U, 0U);
     break;
   }
