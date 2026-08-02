@@ -1,6 +1,6 @@
 import unittest
 
-from map_planner.models import PathPosePoint, RotateInPlace, Waypoint
+from map_planner.models import PathPosePoint, Plan, RotateInPlace, Waypoint
 from map_planner.sim import (
     ANGULAR_ACCELERATION_DEG_S2,
     DT_S,
@@ -8,6 +8,7 @@ from map_planner.sim import (
     Simulation,
     build_timeline,
     build_continuous_timeline,
+    build_plan_timeline,
 )
 from map_planner.models import Pose
 from map_planner.sweep import MAX_SAMPLE_DISTANCE_MM, MAX_SAMPLE_YAW_DEG, build_goto_sweep, build_rotation_sweep
@@ -82,3 +83,9 @@ class SimulationTests(unittest.TestCase):
         self.assertTrue(frames)
         self.assertEqual(frames[-1].actual, Pose(200, 0, 90))
         self.assertFalse(any(frame.stopped for frame in frames[:-1]))
+
+    def test_mixed_plan_rotates_at_previous_goto_position(self):
+        plan = Plan(steps=[Waypoint(300, 200, 0, dwell_s=0), RotateInPlace(90), Waypoint(400, 200, 90, dwell_s=0)])
+        frames = [frame for frame in build_plan_timeline(plan) if frame.command_index == 1]
+        self.assertTrue(frames)
+        self.assertTrue(all(frame.actual.x_mm == 300 and frame.actual.y_mm == 200 for frame in frames))

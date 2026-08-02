@@ -16,8 +16,8 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDoubleSpi
 from .geometry import paper_to_world, world_to_paper
 from .codegen_c import CodeGenerationError, validate_plan_for_blocking_codegen
 from .codegen_dialog import CodeGenerationDialog
-from .models import CAR_SIZE_MM, FIELD_SIZE_MM, Obstacle, PathPosePoint, Plan, Pose, RotateInPlace, Waypoint, convert_plan_mode
-from .sim import SimulationFrame, build_continuous_timeline, build_timeline
+from .models import CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, Obstacle, PathPosePoint, Plan, Pose, RotateInPlace, Waypoint
+from .sim import SimulationFrame, build_plan_timeline, build_continuous_timeline, build_timeline
 from .sweep import SweepGeometry, build_continuous_segment_sweep, build_goto_sweep, build_rotation_sweep
 from .storage import list_plans, load_plan, rename_plan, save_plan
 
@@ -227,9 +227,9 @@ class StartItem(QGraphicsPolygonItem):
 class PlannerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__(); self.setWindowTitle("LittleCar2 比赛地图路径规划"); self.resize(1420, 860); self.setMinimumSize(1024, 768)
-        self.plan = Plan(); self.active_index = -1; self.mode = "select"; self.calibration_pending = True; self.calibration_stage = "choose"; self.undo_stack = []; self.redo_stack = []
+        self.plan = Plan(); self.active_index = -1; self.active_point_index = -1; self.mode = "select"; self.pending_action: str | None = None; self.calibration_pending = True; self.calibration_stage = "choose"; self.undo_stack = []; self.redo_stack = []
         self.selected_indices: set[int] = set(); self.measurement_points: list[QPointF] = []
-        self.preview_paper: QPointF | None = None; self.preview_yaw_deg: float | None = None; self.preview_anchor_index: int | None = None; self.preview_shift = False
+        self.preview_paper: QPointF | None = None; self.preview_yaw_deg: float | None = None; self.preview_anchor_index: int | None = None; self.preview_anchor_signature = None; self.preview_shift = False
         self.timeline: list[SimulationFrame] = []; self.timeline_position = 0; self.current_frame = None; self.actual_trace = []
         self._layout_slider_before: Plan | None = None; self._layout_slider_changed = False
         self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
@@ -286,9 +286,7 @@ class PlannerWindow(QMainWindow):
             button.setCheckable(True); self.tool_group.addButton(button)
             button.toggled.connect(lambda checked=False, mode=value: checked and self.set_mode(mode)); toolbar.addWidget(button)
         self.select_button.setChecked(True); box.addLayout(toolbar)
-        mode_row = QHBoxLayout(); mode_row.addWidget(QLabel("规划模式")); self.plan_mode_combo = QComboBox()
-        self.plan_mode_combo.addItem("停点路径", "stop_point"); self.plan_mode_combo.addItem("连续路径", "continuous")
-        self.plan_mode_combo.currentIndexChanged.connect(self.on_plan_mode_changed); mode_row.addWidget(self.plan_mode_combo); box.addLayout(mode_row)
+        # v7 将所有动作放入同一流程，连续路径是一个独立步骤而非全局模式。
         box.addWidget(QLabel("方案")); self.plan_list = QListWidget(); self.plan_list.itemDoubleClicked.connect(self.load_selected); self.plan_list.setMinimumHeight(76); box.addWidget(self.plan_list)
         row = QHBoxLayout()
         for label, fn in (("新建", self.new_plan), ("保存", self.save), ("另存", self.save_as), ("重命名", self.rename_selected), ("加载", self.load_selected)):
@@ -299,10 +297,11 @@ class PlannerWindow(QMainWindow):
         self.codegen_button.clicked.connect(self.open_code_generator)
         row.addWidget(self.codegen_button)
         box.addLayout(row)
-        self.stop_point_label=QLabel("动作（绿色为当前 GOTO；橙色动作右键切换）"); box.addWidget(self.stop_point_label); self.waypoint_list = QListWidget(); self.waypoint_list.currentRowChanged.connect(self.activate_node); self.waypoint_list.setMinimumHeight(105); box.addWidget(self.waypoint_list)
-        action_row=QHBoxLayout(); self.append_rotation_button=QPushButton("追加原地转向"); self.insert_rotation_button=QPushButton("插入当前后")
-        self.append_rotation_button.clicked.connect(self.append_rotation); self.insert_rotation_button.clicked.connect(self.insert_rotation_after_active); action_row.addWidget(self.append_rotation_button); action_row.addWidget(self.insert_rotation_button); box.addLayout(action_row)
-        self.stop_point_action_row = action_row
+        self.stop_point_label=QLabel("流程步骤"); box.addWidget(self.stop_point_label); self.waypoint_list = QListWidget(); self.waypoint_list.currentRowChanged.connect(self.activate_node); self.waypoint_list.setMinimumHeight(105); box.addWidget(self.waypoint_list)
+        action_row=QHBoxLayout(); self.add_goto_button=QPushButton("新增点到点"); self.append_rotation_button=QPushButton("新增原地转向"); self.insert_rotation_button=QPushButton("新增连续段")
+        self.add_goto_button.clicked.connect(self.begin_goto_add); self.append_rotation_button.clicked.connect(self.append_rotation); self.insert_rotation_button.clicked.connect(self.add_continuous_segment)
+        action_row.addWidget(self.add_goto_button); action_row.addWidget(self.append_rotation_button); action_row.addWidget(self.insert_rotation_button); box.addLayout(action_row)
+        order_row=QHBoxLayout(); self.move_up_button=QPushButton("上移"); self.move_down_button=QPushButton("下移"); self.move_up_button.clicked.connect(lambda:self.move_step(-1)); self.move_down_button.clicked.connect(lambda:self.move_step(1)); order_row.addWidget(self.move_up_button); order_row.addWidget(self.move_down_button); box.addLayout(order_row)
         self.delete_button = QPushButton("删除选中动作"); self.delete_button.clicked.connect(self.remove_waypoint); box.addWidget(self.delete_button)
         form = QFormLayout(); self.x=spin(); self.y=spin(); self.yaw=spin(0,-360,360,5); self.use_yaw=QCheckBox("启用航向约束（GOTO Pose）")
         self.stop=QCheckBox("到点停止"); self.stop.setChecked(True); self.dwell=spin(.5,0,120,.1); self.node_vmax=spin(820,1,1500,10); self.vmax=self.node_vmax; self.node_wmax=spin(90,1,360,5); self.timeout=spin(15, .1, 300, 1)
@@ -320,7 +319,7 @@ class PlannerWindow(QMainWindow):
         self.update_continuous_button=QPushButton("更新连续位姿点"); self.update_continuous_button.clicked.connect(self.update_continuous_point)
         self.delete_continuous_button=QPushButton("删除连续位姿点"); self.delete_continuous_button.clicked.connect(self.remove_continuous_point)
         self.continuous_panel=QWidget(); continuous_box=QVBoxLayout(self.continuous_panel); continuous_box.setContentsMargins(0,0,0,0); continuous_box.addWidget(self.continuous_label); continuous_box.addWidget(self.continuous_list)
-        continuous_form=QFormLayout(); continuous_form.addRow("X (mm)",self.continuous_x); continuous_form.addRow("Y (mm)",self.continuous_y); continuous_form.addRow("目标航向 (deg)",self.continuous_yaw); continuous_form.addRow(self.update_continuous_button); continuous_box.addLayout(continuous_form); continuous_box.addWidget(self.delete_continuous_button); box.addWidget(self.continuous_panel)
+        continuous_form=QFormLayout(); continuous_form.addRow("X (mm)",self.continuous_x); continuous_form.addRow("Y (mm)",self.continuous_y); continuous_form.addRow("目标航向 (deg)",self.continuous_yaw); continuous_form.addRow(self.update_continuous_button); continuous_box.addLayout(continuous_form); continuous_box.addWidget(self.delete_continuous_button); box.addWidget(self.continuous_panel); self.continuous_panel.setVisible(False)
         box.addWidget(QLabel("仿真")); simrow=QHBoxLayout()
         for label, fn in (("播放",self.play),("暂停",self.pause),("重置",self.reset_simulation)):
             button=QPushButton(label); button.clicked.connect(fn); simrow.addWidget(button)
@@ -330,7 +329,8 @@ class PlannerWindow(QMainWindow):
         self.progress.sliderPressed.connect(self.pause); self.progress.valueChanged.connect(self.seek_timeline)
         box.addWidget(self.progress); self.progress_label = QLabel("进度：0.00 / 0.00 s"); box.addWidget(self.progress_label)
         self.measurement_label = QLabel("水平：--  垂直：--  欧式：--"); self.measurement_label.setWordWrap(True); box.addWidget(self.measurement_label)
-        self.status=QLabel("先选择起点，再右击蓝色箭头设置朝向并确认。"); self.status.setWordWrap(True); box.addWidget(self.status); box.addStretch()
+        self.status=QLabel("先选择起点，再右击蓝色箭头设置朝向并确认。"); self.status.setWordWrap(True); box.addWidget(self.status)
+        self.path_check=QLabel("路径检查：等待编辑"); self.path_check.setWordWrap(True); box.addWidget(self.path_check); box.addStretch()
         scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); scroll.setWidget(left)
         map_panel=QWidget(); map_box=QVBoxLayout(map_panel); map_box.setContentsMargins(0,0,0,0); map_box.setSpacing(0)
         self.calibration_bar=QWidget(); guide=QHBoxLayout(self.calibration_bar); guide.setContentsMargins(12,8,12,8)
@@ -622,6 +622,90 @@ class PlannerWindow(QMainWindow):
             previous=current
             previous_yaw=target_yaw
         return invalid
+
+    # 统一步骤流编辑器。以下方法覆盖 v6 的全局 mode/path_points 编辑路径。
+    def _selected_step(self):
+        return self.plan.steps[self.active_index] if 0 <= self.active_index < len(self.plan.steps) else None
+
+    def _step_anchor(self, index):
+        paper=QPointF(self.plan.start_paper_x_mm, self.plan.start_paper_y_mm); yaw=0.0
+        for step in self.plan.steps[:index]:
+            if isinstance(step, Waypoint):
+                p=self.paper_of(step); paper=QPointF(p.x_mm,p.y_mm); yaw=step.yaw_deg if step.use_yaw else yaw
+            elif isinstance(step, RotateInPlace): yaw=step.yaw_deg
+            elif isinstance(step, ContinuousPathSegment) and step.points:
+                p=self.paper_of(step.points[-1]); paper=QPointF(p.x_mm,p.y_mm); yaw=step.points[-1].yaw_deg
+        return paper, yaw
+
+    def refresh_waypoints(self):
+        self.waypoint_list.blockSignals(True); self.waypoint_list.clear()
+        for i, step in enumerate(self.plan.steps):
+            if isinstance(step, Waypoint): text=f"{i+1}. GOTO ({step.x_mm:.0f}, {step.y_mm:.0f})"
+            elif isinstance(step, RotateInPlace): text=f"{i+1}. 原地转向 {step.yaw_deg:.0f} 度"
+            else: text=f"{i+1}. 连续路径段 {step.name or ''} ({max(0, len(step.points)-1)} 段)"
+            self.waypoint_list.addItem(text)
+        self.waypoint_list.blockSignals(False)
+        valid=0 <= self.active_index < len(self.plan.steps)
+        self.continuous_panel.setVisible(valid and isinstance(self._selected_step(), ContinuousPathSegment))
+        if valid: self.waypoint_list.setCurrentRow(self.active_index); self.show_node(self.active_index)
+        self.codegen_button.setEnabled(not self.calibration_pending and bool(self.plan.steps))
+
+    def activate_node(self, index):
+        if not 0 <= index < len(self.plan.steps): return
+        self.active_index=index; self.active_point_index=-1; self.show_node(index); self.refresh_waypoints(); self.redraw()
+
+    def show_node(self, index):
+        step=self._selected_step()
+        if step is None: return
+        continuous=isinstance(step, ContinuousPathSegment); rotating=isinstance(step, RotateInPlace)
+        self.continuous_panel.setVisible(continuous)
+        for widget in self.goto_form_widgets: widget.setVisible(not rotating and not continuous)
+        for widget in (self.yaw,self.node_wmax,self.timeout,self.update_action_button): widget.setVisible(not continuous)
+        if continuous:
+            self.continuous_list.blockSignals(True); self.continuous_list.clear()
+            for point_index, point in enumerate(step.points): self.continuous_list.addItem(f"{'入口 ' if point_index == 0 else str(point_index)+'. '}({point.x_mm:.0f}, {point.y_mm:.0f}) {point.yaw_deg:.0f} 度 {point.name}")
+            self.continuous_list.blockSignals(False)
+            if step.points: self.continuous_list.setCurrentRow(max(0,self.active_point_index)); self.show_continuous_point(max(0,self.active_point_index))
+            return
+        self.update_action_button.setText("更新原地转向" if rotating else "更新当前节点")
+        self.yaw.setValue(step.yaw_deg); self.node_wmax.setValue(step.wmax_deg_s); self.timeout.setValue(step.timeout_s)
+        if isinstance(step,Waypoint): self.x.setValue(step.x_mm); self.y.setValue(step.y_mm); self.use_yaw.setChecked(step.use_yaw); self.stop.setChecked(step.stop); self.dwell.setValue(step.dwell_s); self.node_vmax.setValue(step.vmax_mm_s)
+
+    def add_continuous_segment(self):
+        self.push_undo(); anchor,yaw=self._step_anchor(len(self.plan.steps)); pose=paper_to_world(anchor.x(),anchor.y(),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
+        self.plan.steps.append(ContinuousPathSegment([PathPosePoint(pose.x_mm,pose.y_mm,yaw,"入口点")], f"连续段 {sum(isinstance(s,ContinuousPathSegment) for s in self.plan.steps)+1}")); self.active_index=len(self.plan.steps)-1; self.active_point_index=0; self.refresh_waypoints(); self.redraw()
+
+    def move_step(self, delta):
+        target=self.active_index+delta
+        if not (0 <= self.active_index < len(self.plan.steps) and 0 <= target < len(self.plan.steps)): return
+        self.push_undo(); self.plan.steps[self.active_index],self.plan.steps[target]=self.plan.steps[target],self.plan.steps[self.active_index]; self.active_index=target; self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def append_rotation(self):
+        self.push_undo(); _,yaw=self._step_anchor(len(self.plan.steps)); self.plan.steps.append(RotateInPlace(yaw_deg=yaw)); self.active_index=len(self.plan.steps)-1; self.refresh_waypoints(); self.redraw()
+
+    def activate_continuous_point(self, index):
+        step=self._selected_step()
+        if isinstance(step,ContinuousPathSegment) and 0 <= index < len(step.points): self.active_point_index=index; self.show_continuous_point(index); self.redraw()
+
+    def show_continuous_point(self,index):
+        step=self._selected_step()
+        if not isinstance(step,ContinuousPathSegment) or not 0 <= index < len(step.points): return
+        point=step.points[index]; self.continuous_x.setValue(point.x_mm); self.continuous_y.setValue(point.y_mm); self.continuous_yaw.setValue(point.yaw_deg); locked=index == 0
+        self.continuous_x.setEnabled(not locked); self.continuous_y.setEnabled(not locked); self.continuous_yaw.setEnabled(not locked); self.update_continuous_button.setEnabled(not locked); self.delete_continuous_button.setEnabled(not locked)
+
+    def update_continuous_point(self):
+        step=self._selected_step(); index=self.active_point_index
+        if not isinstance(step,ContinuousPathSegment) or index <= 0 or index >= len(step.points): return
+        self.push_undo(); point=step.points[index]; point.x_mm=self.continuous_x.value(); point.y_mm=self.continuous_y.value(); point.yaw_deg=self.continuous_yaw.value(); self.show_node(self.active_index); self.redraw()
+
+    def remove_continuous_point(self):
+        step=self._selected_step(); index=self.active_point_index
+        if not isinstance(step,ContinuousPathSegment) or index <= 0 or index >= len(step.points): return
+        self.push_undo(); del step.points[index]; self.active_point_index=max(0,index-1); self.show_node(self.active_index); self.redraw()
+
+    def remove_waypoint(self):
+        if not 0 <= self.active_index < len(self.plan.steps): return
+        self.push_undo(); del self.plan.steps[self.active_index]; self.active_index=min(self.active_index,len(self.plan.steps)-1); self.active_point_index=-1; self.refresh_waypoints(); self.redraw()
 
     @staticmethod
     def _polygon_path(points):
@@ -961,6 +1045,500 @@ class PlannerWindow(QMainWindow):
         self.codegen_dialog = CodeGenerationDialog(self.plan, self)
         self.codegen_dialog.show()
 
+
+    # 覆盖旧版仿真/地图入口：步骤流中连续段只在当前段内追加节点。
+    def _preview_anchor(self):
+        if isinstance(self._selected_step(), ContinuousPathSegment):
+            step=self._selected_step()
+            if step.points:
+                p=self.paper_of(step.points[-1]); return QPointF(p.x_mm,p.y_mm),step.points[-1].yaw_deg,self.active_index
+        return self._step_anchor(len(self.plan.steps)) + (self.active_index,)
+
+    def confirm_preview(self, x, y, shift=False):
+        self.update_preview(x,y,shift)
+        if self.preview_paper is None or self.preview_yaw_deg is None: return
+        pose=paper_to_world(self.preview_paper.x(),self.preview_paper.y(),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
+        self.push_undo(); step=self._selected_step()
+        if isinstance(step,ContinuousPathSegment):
+            step.points.append(PathPosePoint(pose.x_mm,pose.y_mm,self.preview_yaw_deg,f"节点 {len(step.points)}")); self.active_point_index=len(step.points)-1
+        else:
+            self.plan.steps.append(Waypoint(pose.x_mm,pose.y_mm,self.preview_yaw_deg,True,name=f"节点 {len(self.plan.steps)+1}")); self.active_index=len(self.plan.steps)-1
+        self.clear_preview(False); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def update_waypoint(self):
+        step=self._selected_step()
+        if not isinstance(step,(Waypoint,RotateInPlace)): return
+        self.push_undo(); step.yaw_deg=self.yaw.value(); step.wmax_deg_s=self.node_wmax.value(); step.timeout_s=self.timeout.value()
+        if isinstance(step,Waypoint): step.x_mm=self.x.value(); step.y_mm=self.y.value(); step.use_yaw=self.use_yaw.isChecked(); step.stop=self.stop.isChecked(); step.dwell_s=self.dwell.value(); step.vmax_mm_s=self.node_vmax.value()
+        self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def new_plan(self):
+        self._invalidate_timeline(); self.plan=Plan(); self.active_index=-1; self.active_point_index=-1; self.undo_stack=[]; self.redo_stack=[]; self.calibration_pending=True; self.calibration_stage="choose"; self.set_mode("select"); self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
+
+    def load_selected(self):
+        item=self.plan_list.currentItem()
+        if item is None: return
+        try:
+            self._invalidate_timeline(); self.plan=load_plan(item.text()); self.active_index=-1; self.active_point_index=-1; self.calibration_pending=False; self.calibration_stage="complete"; self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
+        except ValueError as error: QMessageBox.warning(self,"加载失败",str(error))
+
+    def rebuild_timeline_after_edit(self):
+        # 旧仿真只支持同构命令；混合流程编辑后保持进度失效，等待仿真模块升级。
+        self._invalidate_timeline()
+
+    def draw_route(self):
+        previous=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm)
+        colors={Waypoint:QColor("#d27800"), RotateInPlace:QColor("#7b1fa2"), ContinuousPathSegment:QColor("#00897b")}
+        for index,step in enumerate(self.plan.steps):
+            if isinstance(step,RotateInPlace):
+                marker=self.scene.addEllipse(previous.x()-22,previous.y()-22,44,44,QPen(colors[RotateInPlace],4),QColor("#f3e5f5")); marker.setZValue(11); continue
+            if isinstance(step,Waypoint):
+                p=self.paper_of(step); current=QPointF(p.x_mm,p.y_mm); self.scene.addLine(previous.x(),previous.y(),current.x(),current.y(),QPen(colors[Waypoint],7)); self.scene.addItem(WaypointItem(index,current.x(),current.y(),index==self.active_index,False,lambda *_:None,lambda *_:None,self.set_active_from_context)); previous=current; continue
+            for point_index,point in enumerate(step.points):
+                p=self.paper_of(point); current=QPointF(p.x_mm,p.y_mm)
+                if point_index: self.scene.addLine(previous.x(),previous.y(),current.x(),current.y(),QPen(colors[ContinuousPathSegment],6))
+                marker=self.scene.addEllipse(current.x()-10,current.y()-10,20,20,QPen(colors[ContinuousPathSegment],3),QColor("#e0f2f1")); marker.setZValue(12); previous=current
+
+    # The methods below are the v7-only flow editor.  They intentionally replace
+    # the old global-mode implementations above while the visual field helpers stay shared.
+    def _selected_step(self):
+        return self.plan.steps[self.active_index] if 0 <= self.active_index < len(self.plan.steps) else None
+
+    def _step_end_pose(self, index):
+        pose = Pose()
+        for step in self.plan.steps[:index]:
+            if isinstance(step, Waypoint):
+                pose = Pose(step.x_mm, step.y_mm, step.yaw_deg if step.use_yaw else pose.yaw_deg)
+            elif isinstance(step, RotateInPlace):
+                pose.yaw_deg = step.yaw_deg
+            elif isinstance(step, ContinuousPathSegment) and step.points:
+                point = step.points[-1]
+                pose = Pose(point.x_mm, point.y_mm, point.yaw_deg)
+        return pose
+
+    def _step_anchor(self, index):
+        pose = self._step_end_pose(index)
+        paper = self.paper_of(pose)
+        return QPointF(paper.x_mm, paper.y_mm), pose.yaw_deg
+
+    def _sync_continuous_entries(self):
+        for index, step in enumerate(self.plan.steps):
+            if isinstance(step, ContinuousPathSegment):
+                anchor = self._step_end_pose(index)
+                if step.points:
+                    entry = step.points[0]
+                    entry.x_mm, entry.y_mm, entry.yaw_deg = anchor.x_mm, anchor.y_mm, anchor.yaw_deg
+                    entry.name = "入口点"
+                else:
+                    step.points.append(PathPosePoint(anchor.x_mm, anchor.y_mm, anchor.yaw_deg, "入口点"))
+
+    def refresh_mode_ui(self):
+        self.stop_point_label.setText("流程步骤")
+        self.continuous_panel.setVisible(isinstance(self._selected_step(), ContinuousPathSegment))
+
+    def refresh_waypoints(self):
+        self.waypoint_list.blockSignals(True)
+        self.waypoint_list.clear()
+        for index, step in enumerate(self.plan.steps):
+            if isinstance(step, Waypoint):
+                text = f"{index + 1}. 到点停靠 ({step.x_mm:.0f}, {step.y_mm:.0f})"
+            elif isinstance(step, RotateInPlace):
+                text = f"{index + 1}. 原地转向 {step.yaw_deg:.0f} deg"
+            else:
+                text = f"{index + 1}. 连续路径段 {step.name} ({max(0, len(step.points) - 1)} 点)"
+            self.waypoint_list.addItem(text)
+        if 0 <= self.active_index < self.waypoint_list.count():
+            self.waypoint_list.setCurrentRow(self.active_index)
+        self.waypoint_list.blockSignals(False)
+        self.refresh_mode_ui()
+        if 0 <= self.active_index < len(self.plan.steps):
+            self.show_node(self.active_index)
+        self.codegen_button.setEnabled(not self.calibration_pending and bool(self.plan.steps))
+
+    def activate_node(self, index):
+        if not 0 <= index < len(self.plan.steps):
+            return
+        self.active_index, self.active_point_index = index, -1
+        self.show_node(index)
+        self.refresh_mode_ui()
+        self.redraw()
+
+    def show_node(self, index):
+        step = self._selected_step()
+        if step is None:
+            return
+        continuous, rotating = isinstance(step, ContinuousPathSegment), isinstance(step, RotateInPlace)
+        self.continuous_panel.setVisible(continuous)
+        for widget in self.goto_form_widgets:
+            widget.setVisible(not continuous and not rotating)
+        for widget in (self.yaw, self.node_wmax, self.timeout, self.update_action_button):
+            widget.setVisible(not continuous)
+        if continuous:
+            self.continuous_list.blockSignals(True)
+            self.continuous_list.clear()
+            for point_index, point in enumerate(step.points):
+                label = "入口点" if point_index == 0 else ("最终停车点" if point_index == len(step.points) - 1 else f"软途经点 {point_index}")
+                self.continuous_list.addItem(f"{label}: ({point.x_mm:.0f}, {point.y_mm:.0f}) {point.yaw_deg:.0f} deg")
+            self.continuous_list.blockSignals(False)
+            if step.points:
+                self.active_point_index = max(0, min(self.active_point_index, len(step.points) - 1))
+                self.continuous_list.setCurrentRow(self.active_point_index)
+                self.show_continuous_point(self.active_point_index)
+            return
+        self.update_action_button.setText("更新原地转向" if rotating else "更新到点停靠")
+        self.yaw.setValue(step.yaw_deg)
+        self.node_wmax.setValue(step.wmax_deg_s)
+        self.timeout.setValue(step.timeout_s)
+        if isinstance(step, Waypoint):
+            self.x.setValue(step.x_mm); self.y.setValue(step.y_mm); self.use_yaw.setChecked(step.use_yaw)
+            self.stop.setChecked(step.stop); self.dwell.setValue(step.dwell_s); self.node_vmax.setValue(step.vmax_mm_s)
+
+    def add_continuous_segment(self):
+        self.push_undo()
+        anchor = self._step_end_pose(len(self.plan.steps))
+        count = sum(isinstance(step, ContinuousPathSegment) for step in self.plan.steps) + 1
+        self.plan.steps.append(ContinuousPathSegment([PathPosePoint(anchor.x_mm, anchor.y_mm, anchor.yaw_deg, "入口点")], f"连续段 {count}"))
+        self.active_index, self.active_point_index = len(self.plan.steps) - 1, 0
+        self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def append_rotation(self):
+        self.push_undo()
+        self.plan.steps.append(RotateInPlace(yaw_deg=self._step_end_pose(len(self.plan.steps)).yaw_deg))
+        self.active_index, self.active_point_index = len(self.plan.steps) - 1, -1
+        self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def move_step(self, delta):
+        target = self.active_index + delta
+        if not (0 <= self.active_index < len(self.plan.steps) and 0 <= target < len(self.plan.steps)):
+            return
+        self.push_undo()
+        self.plan.steps[self.active_index], self.plan.steps[target] = self.plan.steps[target], self.plan.steps[self.active_index]
+        self.active_index = target
+        self._sync_continuous_entries()
+        self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def update_waypoint(self):
+        step = self._selected_step()
+        if not isinstance(step, (Waypoint, RotateInPlace)):
+            return
+        self.push_undo()
+        step.yaw_deg, step.wmax_deg_s, step.timeout_s = self.yaw.value(), self.node_wmax.value(), self.timeout.value()
+        if isinstance(step, Waypoint):
+            step.x_mm, step.y_mm = self.x.value(), self.y.value()
+            step.use_yaw, step.stop, step.dwell_s, step.vmax_mm_s = self.use_yaw.isChecked(), self.stop.isChecked(), self.dwell.value(), self.node_vmax.value()
+        self._sync_continuous_entries()
+        self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def activate_continuous_point(self, index):
+        step = self._selected_step()
+        if isinstance(step, ContinuousPathSegment) and 0 <= index < len(step.points):
+            self.active_point_index = index
+            self.show_continuous_point(index)
+            self.redraw()
+
+    def show_continuous_point(self, index):
+        step = self._selected_step()
+        if not isinstance(step, ContinuousPathSegment) or not 0 <= index < len(step.points):
+            return
+        point, locked = step.points[index], index == 0
+        self.continuous_x.setValue(point.x_mm); self.continuous_y.setValue(point.y_mm); self.continuous_yaw.setValue(point.yaw_deg)
+        for widget in (self.continuous_x, self.continuous_y, self.continuous_yaw, self.update_continuous_button, self.delete_continuous_button):
+            widget.setEnabled(not locked)
+
+    def update_continuous_point(self):
+        step = self._selected_step()
+        if not isinstance(step, ContinuousPathSegment) or self.active_point_index <= 0:
+            return
+        self.push_undo()
+        point = step.points[self.active_point_index]
+        point.x_mm, point.y_mm, point.yaw_deg = self.continuous_x.value(), self.continuous_y.value(), self.continuous_yaw.value()
+        self.show_node(self.active_index); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def remove_continuous_point(self):
+        step = self._selected_step()
+        if not isinstance(step, ContinuousPathSegment) or self.active_point_index <= 0:
+            return
+        self.push_undo(); del step.points[self.active_point_index]
+        self.active_point_index = max(0, self.active_point_index - 1)
+        self.show_node(self.active_index); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def remove_waypoint(self):
+        if not 0 <= self.active_index < len(self.plan.steps):
+            return
+        self.push_undo(); del self.plan.steps[self.active_index]
+        self.active_index, self.active_point_index = min(self.active_index, len(self.plan.steps) - 1), -1
+        self._sync_continuous_entries()
+        self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def invalid_waypoints(self):
+        invalid = []
+        for index, step in enumerate(self.plan.steps):
+            previous = self._step_end_pose(index)
+            if isinstance(step, Waypoint):
+                target_yaw = step.yaw_deg if step.use_yaw else previous.yaw_deg
+                start, end = self.paper_of(previous), self.paper_of(step)
+                if not self.is_valid_route_segment(QPointF(start.x_mm, start.y_mm), QPointF(end.x_mm, end.y_mm), previous.yaw_deg, target_yaw, step.vmax_mm_s, step.wmax_deg_s, step.timeout_s): invalid.append(index)
+            elif isinstance(step, RotateInPlace):
+                paper = self.paper_of(previous)
+                if not self.is_valid_rotation(QPointF(paper.x_mm, paper.y_mm), previous.yaw_deg, step.yaw_deg, step.wmax_deg_s, step.timeout_s): invalid.append(index)
+            elif len(step.points) < 2:
+                invalid.append(index)
+            else:
+                for first, second in zip(step.points, step.points[1:]):
+                    a, b = self.paper_of(first), self.paper_of(second)
+                    if not self.is_valid_continuous_segment(QPointF(a.x_mm, a.y_mm), QPointF(b.x_mm, b.y_mm), first.yaw_deg, second.yaw_deg):
+                        invalid.append(index); break
+        return invalid
+
+    def rebuild_timeline_after_edit(self):
+        self._invalidate_timeline()
+        if self.calibration_pending or not self.plan.steps or self.invalid_waypoints() or not self.is_valid_start_pose():
+            return
+        self.timeline = build_plan_timeline(copy.deepcopy(self.plan))
+        self.progress.blockSignals(True); self.progress.setRange(0, len(self.timeline)); self.progress.setValue(0); self.progress.blockSignals(False)
+        self.progress.setEnabled(bool(self.timeline)); self._update_progress_ui()
+
+    def draw_car(self, pose):
+        p = pose or self._step_end_pose(self.active_index + 1)
+        x, y = world_to_paper(p, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+        invalid = self.active_index in self.invalid_waypoints()
+        color = QColor("#c62828") if invalid else QColor("#455a64")
+        car = CarOutlineItem(self.rotate_car_clockwise); car.setPos(x, y); car.setRotation(-(p.yaw_deg + self.plan.start_heading_deg)); car.setPen(QPen(color, 5)); car.setBrush(QColor(120, 144, 156, 105)); car.setZValue(15); self.scene.addItem(car)
+
+    def draw_route(self):
+        previous = self._step_end_pose(0)
+        invalid = set(self.invalid_waypoints())
+        for index, step in enumerate(self.plan.steps):
+            color = QColor("#c62828") if index in invalid else (QColor("#00897b") if isinstance(step, ContinuousPathSegment) else QColor("#d27800"))
+            if isinstance(step, RotateInPlace):
+                paper = self.paper_of(previous); marker = self.scene.addEllipse(paper.x_mm - 22, paper.y_mm - 22, 44, 44, QPen(QColor("#7b1fa2"), 4), QColor("#f3e5f5")); marker.setData(0, "rotate_in_place_marker"); marker.setZValue(11); previous.yaw_deg = step.yaw_deg; continue
+            if isinstance(step, Waypoint):
+                paper = self.paper_of(step); current = QPointF(paper.x_mm, paper.y_mm); before = self.paper_of(previous)
+                self.scene.addLine(before.x_mm, before.y_mm, current.x(), current.y(), QPen(color, 7))
+                self.scene.addItem(WaypointItem(index, current.x(), current.y(), index == self.active_index, index in invalid, self.move_waypoint, self.rotate_waypoint, self.set_active_from_context))
+                previous = Pose(step.x_mm, step.y_mm, step.yaw_deg if step.use_yaw else previous.yaw_deg); continue
+            for point_index, point in enumerate(step.points):
+                paper = self.paper_of(point); current = QPointF(paper.x_mm, paper.y_mm)
+                if point_index:
+                    prior = self.paper_of(step.points[point_index - 1]); self.scene.addLine(prior.x_mm, prior.y_mm, current.x(), current.y(), QPen(color, 6))
+                radius = 13 if point_index == len(step.points) - 1 else 10
+                marker = self.scene.addEllipse(current.x() - radius, current.y() - radius, radius * 2, radius * 2, QPen(color, 3), QColor("#e0f2f1")); marker.setData(0, "continuous_endpoint" if point_index == len(step.points) - 1 else "continuous_waypoint"); marker.setZValue(12)
+                self._draw_direction_arrow(current.x(), current.y(), point.yaw_deg, color, "continuous_direction")
+            if step.points:
+                last = step.points[-1]; previous = Pose(last.x_mm, last.y_mm, last.yaw_deg)
+
+    def move_waypoint(self, index, before, after, shift=False):
+        if not isinstance(index, int) or index != self.active_index or before == after:
+            return
+        step = self._selected_step()
+        if not isinstance(step, Waypoint):
+            return
+        self.push_undo(); pose = paper_to_world(after.x(), after.y(), self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+        step.x_mm, step.y_mm = pose.x_mm, pose.y_mm; self._sync_continuous_entries()
+        self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def rotate_waypoint(self, index, item):
+        if index != self.active_index or not isinstance(self._selected_step(), Waypoint):
+            return
+        self.push_undo(); step = self._selected_step(); delta = item.pos()
+        step.yaw_deg = -math.degrees(math.atan2(delta.y(), delta.x())) - self.plan.start_heading_deg; step.use_yaw = True
+        self._sync_continuous_entries(); self.show_node(index); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def set_active_from_context(self, index):
+        self.activate_node(index)
+
+    def rotate_car_clockwise(self):
+        step = self._selected_step()
+        if not isinstance(step, (Waypoint, RotateInPlace)):
+            return
+        self.push_undo(); step.yaw_deg = ((step.yaw_deg - 90 + 180) % 360) - 180
+        if isinstance(step, Waypoint): step.use_yaw = True
+        self._sync_continuous_entries(); self.show_node(self.active_index); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def play(self):
+        if self.calibration_pending or not self.plan.steps or self.invalid_waypoints() or not self.is_valid_start_pose():
+            self.status.setText("Complete calibration and correct the flow before simulation."); return
+        if not self.timeline: self.rebuild_timeline_after_edit()
+        if self.timeline:
+            if self.timeline_position >= len(self.timeline): self.progress.setValue(0)
+            self.timer.start()
+
+    def open_code_generator(self):
+        if self.calibration_pending or not self.plan.steps or self.invalid_waypoints():
+            self.status.setText("Complete calibration and correct the flow before code generation."); return
+        try:
+            validate_plan_for_blocking_codegen(self.plan)
+        except CodeGenerationError as error:
+            self.status.setText(str(error)); return
+        self.codegen_dialog = CodeGenerationDialog(self.plan, self); self.codegen_dialog.show()
+
+    def update_calibration_ui(self):
+        self.calibration_bar.setVisible(self.calibration_pending)
+        heading_ready = self.calibration_pending and self.calibration_stage == "heading"
+        self.confirm_start_button.setVisible(heading_ready); self.confirm_start_button.setEnabled(heading_ready)
+        enabled = not self.calibration_pending
+        for widget in (self.add_button, self.add_goto_button, self.obstacle_button, self.save_button, self.save_as_button, self.play_button):
+            widget.setEnabled(enabled)
+        self.codegen_button.setEnabled(enabled and bool(self.plan.steps))
+
+    def undo(self):
+        if not self.undo_stack:
+            return
+        self.redo_stack.append(copy.deepcopy(self.plan)); self.plan = self.undo_stack.pop()
+        self.active_index = min(self.active_index, len(self.plan.steps) - 1); self.active_point_index = -1
+        self._sync_continuous_entries(); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def redo(self):
+        if not self.redo_stack:
+            return
+        self.undo_stack.append(copy.deepcopy(self.plan)); self.plan = self.redo_stack.pop()
+        self.active_index = min(self.active_index, len(self.plan.steps) - 1); self.active_point_index = -1
+        self._sync_continuous_entries(); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def update_preview(self, x, y, shift=False):
+        if math.isnan(x) or self.mode != "add" or self.calibration_pending:
+            self.clear_preview(); return
+        anchor, yaw = self._step_anchor(self.active_index + 1 if isinstance(self._selected_step(), ContinuousPathSegment) else len(self.plan.steps))
+        target = QPointF(x, y)
+        if isinstance(self._selected_step(), ContinuousPathSegment) and self._selected_step().points:
+            last = self.paper_of(self._selected_step().points[-1]); anchor = QPointF(last.x_mm, last.y_mm); yaw = self._selected_step().points[-1].yaw_deg
+        if shift: target = snap_to_45(anchor, target)
+        self.preview_paper, self.preview_yaw_deg, self.preview_anchor_index, self.preview_shift = target, yaw, self.active_index, shift
+        self.redraw()
+
+    def draw_preview(self):
+        if self.preview_paper is None or self.preview_yaw_deg is None:
+            return
+        step = self._selected_step()
+        anchor, anchor_yaw = self._step_anchor(self.active_index + 1 if isinstance(step, ContinuousPathSegment) else len(self.plan.steps))
+        if isinstance(step, ContinuousPathSegment) and step.points:
+            last = self.paper_of(step.points[-1]); anchor, anchor_yaw = QPointF(last.x_mm, last.y_mm), step.points[-1].yaw_deg
+        sweep = self.continuous_sweep(anchor, self.preview_paper, anchor_yaw, self.preview_yaw_deg) if isinstance(step, ContinuousPathSegment) else self.route_sweep(anchor, self.preview_paper, anchor_yaw, self.preview_yaw_deg)
+        out_of_bounds, hit_platform = self.sweep_violations(sweep)
+        color = QColor("#c62828") if out_of_bounds or not hit_platform.isEmpty() else QColor("#1565c0")
+        path = self.scene.addPath(self.sweep_path(sweep), QPen(Qt.PenStyle.NoPen), QColor(color.red(), color.green(), color.blue(), 70)); path.setData(0, "preview_sweep"); path.setZValue(2)
+        if not hit_platform.isEmpty():
+            collision = self.scene.addPath(hit_platform, QPen(Qt.PenStyle.NoPen), QColor("#d32f2f")); collision.setData(0, "preview_platform_collision"); collision.setZValue(3)
+        item = CarOutlineItem(self.rotate_preview_clockwise); item.setPos(self.preview_paper); item.setRotation(-(self.preview_yaw_deg + self.plan.start_heading_deg)); item.setPen(QPen(color, 4)); item.setBrush(QColor(color.red(), color.green(), color.blue(), 42)); item.setZValue(17); self.scene.addItem(item)
+        self._draw_direction_arrow(self.preview_paper.x(), self.preview_paper.y(), self.preview_yaw_deg, color, "preview_direction")
+        self._set_path_check("预览", "可行" if not out_of_bounds and hit_platform.isEmpty() else ("越界" if out_of_bounds else "碰撞平台"))
+
+    def begin_goto_add(self):
+        self.pending_action = "goto"
+        self.set_mode("add")
+        self.status.setText("新增点到点：在地图上点击目标位置。")
+
+    def confirm_preview(self, x, y, shift=False):
+        self.update_preview(x, y, shift)
+        if self.preview_paper is None or self.preview_yaw_deg is None:
+            return
+        pose = paper_to_world(self.preview_paper.x(), self.preview_paper.y(), self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+        self.push_undo()
+        step = self._selected_step()
+        if isinstance(step, ContinuousPathSegment) and self.pending_action != "goto":
+            step.points.append(PathPosePoint(pose.x_mm, pose.y_mm, self.preview_yaw_deg, f"路径点 {len(step.points)}"))
+            self.active_point_index = len(step.points) - 1
+        else:
+            self.plan.steps.append(Waypoint(pose.x_mm, pose.y_mm, self.preview_yaw_deg, True, name=f"点到点 {len(self.plan.steps) + 1}"))
+            self.active_index, self.active_point_index = len(self.plan.steps) - 1, -1
+        self.pending_action = None
+        self.clear_preview(False); self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def _draw_direction_arrow(self, x, y, yaw, color, marker):
+        arrow = QGraphicsPolygonItem(QPolygonF([QPointF(-18, -14), QPointF(20, -14), QPointF(20, -28), QPointF(52, 0), QPointF(20, 28), QPointF(20, 14), QPointF(-18, 14)]))
+        arrow.setPos(x, y); arrow.setRotation(-(yaw + self.plan.start_heading_deg)); arrow.setBrush(color); arrow.setPen(QPen(QColor("#0d47a1"), 2)); arrow.setData(0, marker); arrow.setZValue(18); self.scene.addItem(arrow)
+
+    def _set_path_check(self, subject, result):
+        self.path_check.setText(f"路径检查：{subject} - {result}")
+
+    def _validation_reason(self):
+        if self.calibration_pending: return "未完成起点标定"
+        if not self.plan.steps: return "流程为空"
+        if not self.is_valid_start_pose(): return "起点车体越界或碰撞"
+        for index, step in enumerate(self.plan.steps):
+            if isinstance(step, ContinuousPathSegment) and len(step.points) < 2: return f"步骤 {index + 1} 连续段至少需要入口点和最终停车点"
+        invalid = self.invalid_waypoints()
+        return f"步骤 {invalid[0] + 1} 越界或碰撞平台" if invalid else "可行"
+
+    def rebuild_timeline_after_edit(self):
+        self._invalidate_timeline(); self._sync_continuous_entries()
+        reason = self._validation_reason(); self._set_path_check("流程", reason)
+        if reason != "可行": return
+        self.timeline = build_plan_timeline(copy.deepcopy(self.plan))
+        self.progress.blockSignals(True); self.progress.setRange(0, len(self.timeline)); self.progress.setValue(0); self.progress.blockSignals(False)
+        self.progress.setEnabled(bool(self.timeline))
+        self._update_progress_ui()
+
+    def play(self):
+        self._sync_continuous_entries()
+        reason = self._validation_reason()
+        self._set_path_check("仿真", reason)
+        if reason != "可行":
+            self.status.setText(f"无法播放：{reason}")
+            return
+        if not self.timeline: self.rebuild_timeline_after_edit()
+        if self.timeline:
+            if self.timeline_position >= len(self.timeline): self.progress.setValue(0)
+            self.timer.start(); self.status.setText("正在播放仿真。")
+
+    def draw_car(self, pose):
+        p = pose or self._step_end_pose(self.active_index + 1)
+        x, y = world_to_paper(p, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+        invalid = self.active_index in self.invalid_waypoints(); color = QColor("#c62828") if invalid else QColor("#455a64")
+        car = CarOutlineItem(self.rotate_car_clockwise); car.setPos(x, y); car.setRotation(-(p.yaw_deg + self.plan.start_heading_deg)); car.setPen(QPen(color, 5)); car.setBrush(QColor(120, 144, 156, 105)); car.setZValue(15); self.scene.addItem(car)
+        self._draw_direction_arrow(x, y, p.yaw_deg, QColor("#1565c0"), "car_direction")
+
+    def clear_preview(self, redraw=True):
+        self.preview_paper = None; self.preview_yaw_deg = None; self.preview_anchor_index = None; self.preview_anchor_signature = None; self.preview_shift = False
+        if redraw: self.redraw()
+
+    def _current_preview_anchor(self):
+        step = self._selected_step()
+        if isinstance(step, ContinuousPathSegment) and step.points and self.pending_action != "goto":
+            point = step.points[-1]; paper = self.paper_of(point)
+            return QPointF(paper.x_mm, paper.y_mm), point.yaw_deg, (self.active_index, len(step.points) - 1, point.x_mm, point.y_mm, point.yaw_deg)
+        anchor, yaw = self._step_anchor(len(self.plan.steps))
+        return anchor, yaw, (len(self.plan.steps), anchor.x(), anchor.y(), yaw)
+
+    def update_preview(self, x, y, shift=False):
+        if math.isnan(x) or self.mode != "add" or self.calibration_pending or not (0 <= x <= FIELD_SIZE_MM and 0 <= y <= FIELD_SIZE_MM):
+            self.clear_preview(); return
+        anchor, anchor_yaw, signature = self._current_preview_anchor()
+        if signature != self.preview_anchor_signature:
+            self.preview_yaw_deg = anchor_yaw
+            self.preview_anchor_signature = signature
+        target = QPointF(x, y)
+        self.preview_paper = snap_to_45(anchor, target) if shift else target
+        self.preview_anchor_index, self.preview_shift = self.active_index, shift
+        self.redraw()
+
+    def rotate_preview_clockwise(self):
+        if self.preview_yaw_deg is not None:
+            self.preview_yaw_deg = ((self.preview_yaw_deg - 90 + 180) % 360) - 180
+            self._set_path_check("预览", f"目标朝向 {self.preview_yaw_deg:.0f} deg")
+            self.redraw(); return
+        step = self._selected_step()
+        if not isinstance(step, RotateInPlace):
+            return
+        self.push_undo(); step.yaw_deg = ((step.yaw_deg - 90 + 180) % 360) - 180
+        self._sync_continuous_entries(); self.show_node(self.active_index); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def confirm_preview(self, x, y, shift=False):
+        self.update_preview(x, y, shift)
+        if self.preview_paper is None or self.preview_yaw_deg is None:
+            return
+        pose = paper_to_world(self.preview_paper.x(), self.preview_paper.y(), self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+        yaw = self.preview_yaw_deg
+        self.push_undo()
+        step = self._selected_step()
+        if isinstance(step, ContinuousPathSegment) and self.pending_action != "goto":
+            step.points.append(PathPosePoint(pose.x_mm, pose.y_mm, yaw, f"路径点 {len(step.points)}"))
+            self.active_point_index = len(step.points) - 1
+        else:
+            self.plan.steps.append(Waypoint(pose.x_mm, pose.y_mm, yaw, True, name=f"点到点 {len(self.plan.steps) + 1}"))
+            self.active_index, self.active_point_index = len(self.plan.steps) - 1, -1
+        self.pending_action = None
+        self.clear_preview(False); self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
 def main() -> int:
     app=QApplication(sys.argv); app.setStyleSheet("QWidget{font-family:'Microsoft YaHei';font-size:13px;} QPushButton{min-height:28px;} QScrollArea{border:0;}")

@@ -1,5 +1,5 @@
 """LittleCar2 比赛地图路径规划包。"""
 
-from .models import MapLayout, Obstacle, PathPosePoint, Plan, PlanMode, Pose, RotateInPlace, Waypoint
+from .models import ContinuousPathSegment, MapLayout, Obstacle, PathPosePoint, Plan, Pose, RotateInPlace, Waypoint
 
-__all__ = ["MapLayout", "Obstacle", "PathPosePoint", "Plan", "PlanMode", "Pose", "RotateInPlace", "Waypoint"]
+__all__ = ["ContinuousPathSegment", "MapLayout", "Obstacle", "PathPosePoint", "Plan", "Pose", "RotateInPlace", "Waypoint"]

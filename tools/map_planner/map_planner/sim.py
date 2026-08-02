@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import math
 
 from .geometry import world_to_paper, wrap_deg
-from .models import CAR_SIZE_MM, FIELD_SIZE_MM, MotionCommand, PathPosePoint, Pose, RotateInPlace, Waypoint
+from .models import CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, MotionCommand, PathPosePoint, Plan, Pose, RotateInPlace, Waypoint
 
 
 POSITION_TOLERANCE_MM = 25.0
@@ -228,3 +228,65 @@ def build_continuous_timeline(
             ))
         previous = target
     return frames
+
+
+def build_plan_timeline(plan: Plan) -> list[SimulationFrame]:
+    """按流程顺序拼接停点、转向和连续路径的离线播放帧。"""
+    frames: list[SimulationFrame] = []
+    current = Pose()
+    elapsed_s = 0.0
+    for command_index, step in enumerate(plan.steps):
+        if isinstance(step, ContinuousPathSegment):
+            points = step.points
+            if len(points) < 2:
+                continue
+            for previous, target in zip(points, points[1:]):
+                distance = math.hypot(target.x_mm - previous.x_mm, target.y_mm - previous.y_mm)
+                yaw_delta = wrap_deg(target.yaw_deg - previous.yaw_deg)
+                count = max(1, math.ceil(distance / (820.0 * DT_S)), math.ceil(abs(yaw_delta) / (90.0 * DT_S)))
+                for frame_index in range(1, count + 1):
+                    ratio = frame_index / count
+                    actual = Pose(
+                        previous.x_mm + (target.x_mm - previous.x_mm) * ratio,
+                        previous.y_mm + (target.y_mm - previous.y_mm) * ratio,
+                        wrap_deg(previous.yaw_deg + yaw_delta * ratio),
+                    )
+                    elapsed_s += DT_S
+                    paper_x, paper_y = world_to_paper(actual, plan.start_paper_x_mm, plan.start_paper_y_mm, plan.start_heading_deg)
+                    margin = CAR_SIZE_MM / 2.0
+                    frames.append(SimulationFrame(elapsed_s, Pose(target.x_mm, target.y_mm, target.yaw_deg), actual,
+                        distance / (count * DT_S), math.hypot(target.x_mm - actual.x_mm, target.y_mm - actual.y_mm),
+                        command_index, frame_index == count and target is points[-1],
+                        not (margin <= paper_x <= FIELD_SIZE_MM - margin and margin <= paper_y <= FIELD_SIZE_MM - margin), False))
+            current = Pose(points[-1].x_mm, points[-1].y_mm, points[-1].yaw_deg)
+            continue
+        segment = build_timeline_from_pose(step, current, plan.start_paper_x_mm, plan.start_paper_y_mm, plan.start_heading_deg)
+        for frame in segment:
+            frame.time_s += elapsed_s
+            frame.command_index = command_index
+        if segment:
+            elapsed_s = segment[-1].time_s
+        frames.extend(segment)
+        if isinstance(step, Waypoint):
+            current = Pose(step.x_mm, step.y_mm, step.yaw_deg if step.use_yaw else current.yaw_deg)
+        elif isinstance(step, RotateInPlace):
+            current.yaw_deg = step.yaw_deg
+    return frames
+
+
+def build_timeline_from_pose(
+    command: MotionCommand, initial: Pose, start_paper_x_mm: float, start_paper_y_mm: float, start_heading_deg: float
+) -> list[SimulationFrame]:
+    """Execute one discrete step from the preceding flow pose, not world origin."""
+    simulation = Simulation([command], start_paper_x_mm, start_paper_y_mm, start_heading_deg, Pose(initial.x_mm, initial.y_mm, initial.yaw_deg))
+    frames: list[SimulationFrame] = []
+    while not simulation.finished and not simulation.failed:
+        frames.append(simulation.step())
+    return frames
+
+
+def copy_command(step: MotionCommand, current: Pose) -> MotionCommand:
+    if isinstance(step, RotateInPlace):
+        return step
+    return Waypoint(step.x_mm, step.y_mm, step.yaw_deg, step.stop, step.dwell_s, step.name,
+                    step.use_yaw, step.vmax_mm_s, step.wmax_deg_s, step.timeout_s)
