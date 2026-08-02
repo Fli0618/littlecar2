@@ -227,7 +227,7 @@ class StartItem(QGraphicsPolygonItem):
 class PlannerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__(); self.setWindowTitle("LittleCar2 比赛地图路径规划"); self.resize(1420, 860); self.setMinimumSize(1024, 768)
-        self.plan = Plan(); self.active_index = -1; self.active_point_index = -1; self.mode = "select"; self.calibration_pending = True; self.calibration_stage = "choose"; self.undo_stack = []; self.redo_stack = []
+        self.plan = Plan(); self.active_index = -1; self.active_point_index = -1; self.mode = "select"; self.pending_action: str | None = None; self.calibration_pending = True; self.calibration_stage = "choose"; self.undo_stack = []; self.redo_stack = []
         self.selected_indices: set[int] = set(); self.measurement_points: list[QPointF] = []
         self.preview_paper: QPointF | None = None; self.preview_yaw_deg: float | None = None; self.preview_anchor_index: int | None = None; self.preview_shift = False
         self.timeline: list[SimulationFrame] = []; self.timeline_position = 0; self.current_frame = None; self.actual_trace = []
@@ -298,8 +298,9 @@ class PlannerWindow(QMainWindow):
         row.addWidget(self.codegen_button)
         box.addLayout(row)
         self.stop_point_label=QLabel("流程步骤"); box.addWidget(self.stop_point_label); self.waypoint_list = QListWidget(); self.waypoint_list.currentRowChanged.connect(self.activate_node); self.waypoint_list.setMinimumHeight(105); box.addWidget(self.waypoint_list)
-        action_row=QHBoxLayout(); self.append_rotation_button=QPushButton("添加原地转向"); self.insert_rotation_button=QPushButton("添加连续段")
-        self.append_rotation_button.clicked.connect(self.append_rotation); self.insert_rotation_button.clicked.connect(self.add_continuous_segment); action_row.addWidget(self.append_rotation_button); action_row.addWidget(self.insert_rotation_button); box.addLayout(action_row)
+        action_row=QHBoxLayout(); self.add_goto_button=QPushButton("新增点到点"); self.append_rotation_button=QPushButton("新增原地转向"); self.insert_rotation_button=QPushButton("新增连续段")
+        self.add_goto_button.clicked.connect(self.begin_goto_add); self.append_rotation_button.clicked.connect(self.append_rotation); self.insert_rotation_button.clicked.connect(self.add_continuous_segment)
+        action_row.addWidget(self.add_goto_button); action_row.addWidget(self.append_rotation_button); action_row.addWidget(self.insert_rotation_button); box.addLayout(action_row)
         order_row=QHBoxLayout(); self.move_up_button=QPushButton("上移"); self.move_down_button=QPushButton("下移"); self.move_up_button.clicked.connect(lambda:self.move_step(-1)); self.move_down_button.clicked.connect(lambda:self.move_step(1)); order_row.addWidget(self.move_up_button); order_row.addWidget(self.move_down_button); box.addLayout(order_row)
         self.delete_button = QPushButton("删除选中动作"); self.delete_button.clicked.connect(self.remove_waypoint); box.addWidget(self.delete_button)
         form = QFormLayout(); self.x=spin(); self.y=spin(); self.yaw=spin(0,-360,360,5); self.use_yaw=QCheckBox("启用航向约束（GOTO Pose）")
@@ -328,7 +329,8 @@ class PlannerWindow(QMainWindow):
         self.progress.sliderPressed.connect(self.pause); self.progress.valueChanged.connect(self.seek_timeline)
         box.addWidget(self.progress); self.progress_label = QLabel("进度：0.00 / 0.00 s"); box.addWidget(self.progress_label)
         self.measurement_label = QLabel("水平：--  垂直：--  欧式：--"); self.measurement_label.setWordWrap(True); box.addWidget(self.measurement_label)
-        self.status=QLabel("先选择起点，再右击蓝色箭头设置朝向并确认。"); self.status.setWordWrap(True); box.addWidget(self.status); box.addStretch()
+        self.status=QLabel("先选择起点，再右击蓝色箭头设置朝向并确认。"); self.status.setWordWrap(True); box.addWidget(self.status)
+        self.path_check=QLabel("路径检查：等待编辑"); self.path_check.setWordWrap(True); box.addWidget(self.path_check); box.addStretch()
         scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); scroll.setWidget(left)
         map_panel=QWidget(); map_box=QVBoxLayout(map_panel); map_box.setContentsMargins(0,0,0,0); map_box.setSpacing(0)
         self.calibration_bar=QWidget(); guide=QHBoxLayout(self.calibration_bar); guide.setContentsMargins(12,8,12,8)
@@ -1321,6 +1323,7 @@ class PlannerWindow(QMainWindow):
                     prior = self.paper_of(step.points[point_index - 1]); self.scene.addLine(prior.x_mm, prior.y_mm, current.x(), current.y(), QPen(color, 6))
                 radius = 13 if point_index == len(step.points) - 1 else 10
                 marker = self.scene.addEllipse(current.x() - radius, current.y() - radius, radius * 2, radius * 2, QPen(color, 3), QColor("#e0f2f1")); marker.setData(0, "continuous_endpoint" if point_index == len(step.points) - 1 else "continuous_waypoint"); marker.setZValue(12)
+                self._draw_direction_arrow(current.x(), current.y(), point.yaw_deg, color, "continuous_direction")
             if step.points:
                 last = step.points[-1]; previous = Pose(last.x_mm, last.y_mm, last.yaw_deg)
 
@@ -1374,7 +1377,7 @@ class PlannerWindow(QMainWindow):
         heading_ready = self.calibration_pending and self.calibration_stage == "heading"
         self.confirm_start_button.setVisible(heading_ready); self.confirm_start_button.setEnabled(heading_ready)
         enabled = not self.calibration_pending
-        for widget in (self.add_button, self.obstacle_button, self.save_button, self.save_as_button, self.play_button):
+        for widget in (self.add_button, self.add_goto_button, self.obstacle_button, self.save_button, self.save_as_button, self.play_button):
             widget.setEnabled(enabled)
         self.codegen_button.setEnabled(enabled and bool(self.plan.steps))
 
@@ -1413,7 +1416,77 @@ class PlannerWindow(QMainWindow):
         sweep = self.continuous_sweep(anchor, self.preview_paper, anchor_yaw, self.preview_yaw_deg) if isinstance(step, ContinuousPathSegment) else self.route_sweep(anchor, self.preview_paper, anchor_yaw, self.preview_yaw_deg)
         out_of_bounds, hit_platform = self.sweep_violations(sweep)
         color = QColor("#c62828") if out_of_bounds or not hit_platform.isEmpty() else QColor("#1565c0")
+        path = self.scene.addPath(self.sweep_path(sweep), QPen(Qt.PenStyle.NoPen), QColor(color.red(), color.green(), color.blue(), 70)); path.setData(0, "preview_sweep"); path.setZValue(2)
+        if not hit_platform.isEmpty():
+            collision = self.scene.addPath(hit_platform, QPen(Qt.PenStyle.NoPen), QColor("#d32f2f")); collision.setData(0, "preview_platform_collision"); collision.setZValue(3)
         item = CarOutlineItem(self.rotate_preview_clockwise); item.setPos(self.preview_paper); item.setRotation(-(self.preview_yaw_deg + self.plan.start_heading_deg)); item.setPen(QPen(color, 4)); item.setBrush(QColor(color.red(), color.green(), color.blue(), 42)); item.setZValue(17); self.scene.addItem(item)
+        self._draw_direction_arrow(self.preview_paper.x(), self.preview_paper.y(), self.preview_yaw_deg, color, "preview_direction")
+        self._set_path_check("预览", "可行" if not out_of_bounds and hit_platform.isEmpty() else ("越界" if out_of_bounds else "碰撞平台"))
+
+    def begin_goto_add(self):
+        self.pending_action = "goto"
+        self.set_mode("add")
+        self.status.setText("新增点到点：在地图上点击目标位置。")
+
+    def confirm_preview(self, x, y, shift=False):
+        self.update_preview(x, y, shift)
+        if self.preview_paper is None or self.preview_yaw_deg is None:
+            return
+        pose = paper_to_world(self.preview_paper.x(), self.preview_paper.y(), self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+        self.push_undo()
+        step = self._selected_step()
+        if isinstance(step, ContinuousPathSegment) and self.pending_action != "goto":
+            step.points.append(PathPosePoint(pose.x_mm, pose.y_mm, self.preview_yaw_deg, f"路径点 {len(step.points)}"))
+            self.active_point_index = len(step.points) - 1
+        else:
+            self.plan.steps.append(Waypoint(pose.x_mm, pose.y_mm, self.preview_yaw_deg, True, name=f"点到点 {len(self.plan.steps) + 1}"))
+            self.active_index, self.active_point_index = len(self.plan.steps) - 1, -1
+        self.pending_action = None
+        self.clear_preview(False); self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def _draw_direction_arrow(self, x, y, yaw, color, marker):
+        arrow = QGraphicsPolygonItem(QPolygonF([QPointF(-18, -14), QPointF(20, -14), QPointF(20, -28), QPointF(52, 0), QPointF(20, 28), QPointF(20, 14), QPointF(-18, 14)]))
+        arrow.setPos(x, y); arrow.setRotation(-(yaw + self.plan.start_heading_deg)); arrow.setBrush(color); arrow.setPen(QPen(QColor("#0d47a1"), 2)); arrow.setData(0, marker); arrow.setZValue(18); self.scene.addItem(arrow)
+
+    def _set_path_check(self, subject, result):
+        self.path_check.setText(f"路径检查：{subject} - {result}")
+
+    def _validation_reason(self):
+        if self.calibration_pending: return "未完成起点标定"
+        if not self.plan.steps: return "流程为空"
+        if not self.is_valid_start_pose(): return "起点车体越界或碰撞"
+        for index, step in enumerate(self.plan.steps):
+            if isinstance(step, ContinuousPathSegment) and len(step.points) < 2: return f"步骤 {index + 1} 连续段至少需要入口点和最终停车点"
+        invalid = self.invalid_waypoints()
+        return f"步骤 {invalid[0] + 1} 越界或碰撞平台" if invalid else "可行"
+
+    def rebuild_timeline_after_edit(self):
+        self._invalidate_timeline(); self._sync_continuous_entries()
+        reason = self._validation_reason(); self._set_path_check("流程", reason)
+        if reason != "可行": return
+        self.timeline = build_plan_timeline(copy.deepcopy(self.plan))
+        self.progress.blockSignals(True); self.progress.setRange(0, len(self.timeline)); self.progress.setValue(0); self.progress.blockSignals(False)
+        self.progress.setEnabled(bool(self.timeline))
+        self._update_progress_ui()
+
+    def play(self):
+        self._sync_continuous_entries()
+        reason = self._validation_reason()
+        self._set_path_check("仿真", reason)
+        if reason != "可行":
+            self.status.setText(f"无法播放：{reason}")
+            return
+        if not self.timeline: self.rebuild_timeline_after_edit()
+        if self.timeline:
+            if self.timeline_position >= len(self.timeline): self.progress.setValue(0)
+            self.timer.start(); self.status.setText("正在播放仿真。")
+
+    def draw_car(self, pose):
+        p = pose or self._step_end_pose(self.active_index + 1)
+        x, y = world_to_paper(p, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+        invalid = self.active_index in self.invalid_waypoints(); color = QColor("#c62828") if invalid else QColor("#455a64")
+        car = CarOutlineItem(self.rotate_car_clockwise); car.setPos(x, y); car.setRotation(-(p.yaw_deg + self.plan.start_heading_deg)); car.setPen(QPen(color, 5)); car.setBrush(QColor(120, 144, 156, 105)); car.setZValue(15); self.scene.addItem(car)
+        self._draw_direction_arrow(x, y, p.yaw_deg, QColor("#1565c0"), "car_direction")
 
 def main() -> int:
     app=QApplication(sys.argv); app.setStyleSheet("QWidget{font-family:'Microsoft YaHei';font-size:13px;} QPushButton{min-height:28px;} QScrollArea{border:0;}")

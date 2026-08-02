@@ -66,3 +66,29 @@ class GuiTests(unittest.TestCase):
             self.assertLess(code.index("FOLLOW PATH"), code.rindex("GOTO"))
         finally:
             window.close()
+
+    def test_goto_action_is_a_peer_button_and_uses_map_click(self):
+        window = self.window()
+        try:
+            window.begin_goto_add()
+            self.assertEqual(window.mode, "add")
+            window.confirm_preview(2200, 300)
+            self.assertIsInstance(window.plan.steps[-1], Waypoint)
+            self.assertIsNone(window.pending_action)
+        finally:
+            window.close()
+
+    def test_preview_draws_direction_and_reports_blocked_simulation(self):
+        window = self.window()
+        try:
+            window.add_continuous_segment()
+            window.play()
+            self.assertIn("至少需要", window.path_check.text())
+            window.begin_goto_add()
+            window.update_preview(2200, 300)
+            markers = [item.data(0) for item in window.scene.items()]
+            self.assertIn("preview_sweep", markers)
+            self.assertIn("preview_direction", markers)
+            self.assertIn("car_direction", markers)
+        finally:
+            window.close()
