@@ -187,6 +187,7 @@ def generate_task_function(plan: Plan, function_name: str) -> str:
                 f"     * 保持上一目标位置 ({format_c_float(previous_x)[:-1]}, "
                 f"{format_c_float(previous_y)[:-1]})。",
                 "     */",
+                "    /* 原地转向：保持上一目标位置并更新绝对航向。 */",
                 *_motion_block(previous_x, previous_y, action.yaw_deg),
             ]
             blocks.append(block)
