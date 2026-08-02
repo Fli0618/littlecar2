@@ -212,6 +212,38 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_code_generator_dialog_validates_name_and_previews_code(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.on_map_click(2200, 200)
+            window.open_code_generator()
+            self.app.processEvents()
+            dialog = window.codegen_dialog
+            self.assertTrue(dialog.copy_button.isEnabled())
+            self.assertIn("void Task_", dialog.code_preview.toPlainText())
+            self.assertIn("AdvanceMotion_GotoPoseBlocking", dialog.code_preview.toPlainText())
+            dialog.function_name_edit.setText("Task_1bad")
+            dialog.regenerate()
+            self.assertFalse(dialog.copy_button.isEnabled())
+            dialog.function_name_edit.setText("Task_Valid")
+            dialog.regenerate()
+            self.assertTrue(dialog.copy_button.isEnabled())
+        finally:
+            window.close()
+
+    def test_code_generator_reports_unsupported_yaw_constraint(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.on_map_click(2200, 200)
+            window.plan.waypoints[0].use_yaw = False
+            window.open_code_generator()
+            self.assertIn("未启用航向约束", window.status.text())
+            self.assertFalse(hasattr(window, "codegen_dialog"))
+        finally:
+            window.close()
+
     def test_right_click_rotation_updates_selected_rotate_action(self):
         window = PlannerWindow()
         try:

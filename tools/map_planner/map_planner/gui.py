@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDoubleSpi
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QSlider, QSplitter, QVBoxLayout, QWidget, QRubberBand)
 
 from .geometry import paper_to_world, world_to_paper
+from .codegen_c import CodeGenerationError, validate_plan_for_blocking_codegen
+from .codegen_dialog import CodeGenerationDialog
 from .models import CAR_SIZE_MM, FIELD_SIZE_MM, Obstacle, Plan, Pose, RotateInPlace, Waypoint
 from .sim import SimulationFrame, build_timeline
 from .sweep import SweepGeometry, build_goto_sweep, build_rotation_sweep
@@ -290,6 +292,9 @@ class PlannerWindow(QMainWindow):
             button = QPushButton(label); button.clicked.connect(fn); row.addWidget(button)
             if label == "保存": self.save_button = button
             elif label == "另存": self.save_as_button = button
+        self.codegen_button = QPushButton("生成业务函数")
+        self.codegen_button.clicked.connect(self.open_code_generator)
+        row.addWidget(self.codegen_button)
         box.addLayout(row)
         box.addWidget(QLabel("动作（绿色为当前 GOTO；橙色动作右键切换）")); self.waypoint_list = QListWidget(); self.waypoint_list.currentRowChanged.connect(self.activate_node); self.waypoint_list.setMinimumHeight(105); box.addWidget(self.waypoint_list)
         action_row=QHBoxLayout(); self.append_rotation_button=QPushButton("追加原地转向"); self.insert_rotation_button=QPushButton("插入当前后")
@@ -349,7 +354,7 @@ class PlannerWindow(QMainWindow):
     def begin_start(self, kind):
         self.push_undo(); self.calibration_pending=True
         if kind == "自定义":
-            self.plan.start_kind="custom"; self.calibration_stage="position"; self.mode="calibrate"; self.view.mode="calibrate"; self.calibration_label.setText("在地图上点击自定义起点位置"); self.redraw(); return
+            self.plan.start_kind="custom"; self.calibration_stage="position"; self.mode="calibrate"; self.view.mode="calibrate"; self.calibration_label.setText("在地图上点击自定义起点位置"); self.update_calibration_ui(); self.redraw(); return
         self.plan.start_kind="zone_1" if kind.endswith("1") else "zone_2"
         self.plan.start_paper_x_mm, self.plan.start_paper_y_mm = START_PRESETS[kind]; self.calibration_stage="heading"; self.mode="calibrate"; self.view.mode="calibrate"; self.update_calibration_ui(); self.redraw()
 
@@ -360,6 +365,7 @@ class PlannerWindow(QMainWindow):
         self.confirm_start_button.setVisible(heading_ready); self.confirm_start_button.setEnabled(heading_ready)
         enabled=not self.calibration_pending
         for widget in (self.add_button,self.obstacle_button,self.save_button,self.save_as_button,self.play_button): widget.setEnabled(enabled)
+        self.codegen_button.setEnabled(enabled and bool(self.plan.waypoints))
 
     def on_map_click(self, x, y, shift=False):
         if math.isnan(x):
@@ -436,6 +442,8 @@ class PlannerWindow(QMainWindow):
         self.waypoint_list.blockSignals(False)
         self.insert_rotation_button.setEnabled(0 <= self.active_index < len(self.plan.waypoints))
         if 0<=self.active_index<len(self.plan.waypoints): self.waypoint_list.setCurrentRow(self.active_index); self.show_node(self.active_index)
+        if hasattr(self, "codegen_button"):
+            self.codegen_button.setEnabled(not self.calibration_pending and bool(self.plan.waypoints))
 
     def show_node(self,index):
         if not 0<=index<len(self.plan.waypoints): return
@@ -822,6 +830,29 @@ class PlannerWindow(QMainWindow):
         if item is None:return
         try: self._invalidate_timeline(); self.plan=load_plan(item.text()); self.active_index=-1; self.calibration_pending=False; self.calibration_stage="complete"; self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
         except ValueError as error: QMessageBox.warning(self,"加载失败",str(error))
+
+    def open_code_generator(self) -> None:
+        """Validate the editable plan and open the generated C preview dialog."""
+        if self.calibration_pending:
+            self.status.setText("请先完成起点与朝向标定。")
+            return
+        if not self.is_valid_start_pose():
+            self.status.setText("起点姿态不合法，修正起点位置或朝向后才能生成代码。")
+            return
+        if not self.plan.waypoints:
+            self.status.setText("当前方案没有任何运动动作。")
+            return
+        invalid = self.invalid_waypoints()
+        if invalid:
+            self.status.setText("路径中存在越界或碰撞步骤，修正后才能生成代码。")
+            return
+        try:
+            validate_plan_for_blocking_codegen(self.plan)
+        except CodeGenerationError as error:
+            self.status.setText(str(error))
+            return
+        self.codegen_dialog = CodeGenerationDialog(self.plan, self)
+        self.codegen_dialog.show()
 
 
 def main() -> int:
