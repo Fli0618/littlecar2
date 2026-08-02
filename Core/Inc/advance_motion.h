@@ -23,10 +23,10 @@ extern "C"
 #define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
 
 /* 组合 GOTO 航向策略：复位后恢复本编译期默认值。 */
-#define ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE ((uint8_t)0U)
-#define ADVANCE_MOTION_LARGE_YAW_ALIGN_ENTER_DEG (30.0f)
-#define ADVANCE_MOTION_LARGE_YAW_ALIGN_EXIT_DEG (20.0f)
-#define ADVANCE_MOTION_LARGE_YAW_ALIGN_LINEAR_MIN_SCALE (0.35f)
+#define ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE ((uint8_t)0U) /*!< 复位后的默认策略：0 为始终并行，1 为大角度先对准。 */
+#define ADVANCE_MOTION_LARGE_YAW_ALIGN_ENTER_DEG (30.0f) /*!< 航向绝对误差达到该值时暂停平移并进入对准阶段，单位为度。 */
+#define ADVANCE_MOTION_LARGE_YAW_ALIGN_EXIT_DEG (20.0f) /*!< 对准阶段航向绝对误差降至该值后恢复组合平移，单位为度。 */
+#define ADVANCE_MOTION_LARGE_YAW_ALIGN_LINEAR_MIN_SCALE (0.35f) /*!< 组合运行时、大航向误差下允许的最小线速度比例。 */
 
 /* 位置 PID 默认参数与在线调参上限。 */
 #define ADVANCE_MOTION_DEFAULT_KP_POS (0.98f) /*!< 位置误差比例默认增益。 */
