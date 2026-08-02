@@ -34,8 +34,10 @@ from PySide6.QtWidgets import (
 from .planner import Edge, PathResult, edge_key, edges, find_best_paths, nodes
 
 
-SCALE = 180.0
-MARGIN = 100.0
+SCALE = 220.0
+MARGIN = 150.0
+START_COLOR = "#b04cff"
+GOAL_COLOR = "#e08aff"
 
 
 def scene_point(node_id: str) -> QPointF:
@@ -58,7 +60,7 @@ class EdgeItem(QGraphicsLineItem):
         self._clicked = clicked
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
         self.setZValue(2)
-        self.setToolTip(f"点击切换道路：{edge.node_a} - {edge.node_b}")
+        self.setToolTip(f"左键切换道路启用状态：{edge.node_a} - {edge.node_b}")
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
 
     def shape(self):  # type: ignore[no-untyped-def]
@@ -77,12 +79,74 @@ class EdgeItem(QGraphicsLineItem):
         super().mousePressEvent(event)
 
 
+class NodeItem(QGraphicsEllipseItem):
+    """支持左右键设置起点和终点的拓扑节点图元。"""
+
+    def __init__(
+        self,
+        node_id: str,
+        label: str,
+        radius: float,
+        set_start: Callable[[str], None],
+        set_goal: Callable[[str], None],
+    ) -> None:
+        super().__init__(-radius, -radius, radius * 2, radius * 2)
+        self.node_id = node_id
+        self._set_start = set_start
+        self._set_goal = set_goal
+        self._radius = radius
+        self.setBrush(QColor("#303b46"))
+        self.setPen(QPen(QColor("#f2f2f2"), 2.0))
+        self.setZValue(10)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)
+        self.setToolTip("左键：设为起始点\n右键：设为终止点")
+
+        self.start_ring = QGraphicsEllipseItem(
+            -radius - 8, -radius - 8, (radius + 8) * 2, (radius + 8) * 2, self
+        )
+        self.start_ring.setBrush(Qt.BrushStyle.NoBrush)
+        self.start_ring.setPen(QPen(QColor(START_COLOR), 5.0, Qt.PenStyle.SolidLine))
+        self.start_ring.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.start_ring.setVisible(False)
+
+        self.goal_ring = QGraphicsEllipseItem(
+            -radius - 15, -radius - 15, (radius + 15) * 2, (radius + 15) * 2, self
+        )
+        self.goal_ring.setBrush(Qt.BrushStyle.NoBrush)
+        self.goal_ring.setPen(QPen(QColor(GOAL_COLOR), 5.0, Qt.PenStyle.DashLine))
+        self.goal_ring.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.goal_ring.setVisible(False)
+
+        self.label_item = QGraphicsTextItem(f"{label}\n{node_id}", self)
+        self.label_item.setDefaultTextColor(QColor("#ffffff"))
+        self.label_item.setFont(QFont("Microsoft YaHei", 9 if len(label) <= 2 else 8))
+        self.label_item.setTextWidth(radius * 1.8)
+        bounds = self.label_item.boundingRect()
+        self.label_item.setPos(-bounds.width() / 2, -bounds.height() / 2)
+        self.label_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+
+    def set_role(self, is_start: bool, is_goal: bool) -> None:
+        self.start_ring.setVisible(is_start)
+        self.goal_ring.setVisible(is_goal)
+
+    def mousePressEvent(self, event):  # type: ignore[no-untyped-def]
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._set_start(self.node_id)
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.RightButton:
+            self._set_goal(self.node_id)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class PlannerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("LittleCar2 拓扑路径规划")
-        self.resize(1200, 760)
-        self.setMinimumSize(1000, 700)
+        self.resize(1440, 900)
+        self.setMinimumSize(1100, 760)
         self.blocked_edges: set[tuple[str, str]] = set()
         self.results: list[PathResult] = []
         self.selected_result = 0
@@ -135,24 +199,15 @@ class PlannerWindow(QMainWindow):
             item = EdgeItem(edge, self._toggle_edge)
             self.edge_items[edge_key(edge.node_a, edge.node_b)] = item
             self.scene.addItem(item)
-        self.node_items: dict[str, QGraphicsEllipseItem] = {}
+        self.node_items: dict[str, NodeItem] = {}
         for node_id, node in nodes.items():
-            radius = 28.0 if node.kind == "navigation" else 38.0
+            radius = 34.0 if node.kind == "navigation" else 48.0
             point = scene_point(node_id)
-            item = QGraphicsEllipseItem(-radius, -radius, radius * 2, radius * 2)
+            item = NodeItem(node_id, node.label, radius, self.set_start_node, self.set_goal_node)
             item.setPos(point)
             item.setBrush(QColor("#303b46") if node.kind == "navigation" else QColor("#6a4b32"))
-            item.setPen(QPen(QColor("#f2f2f2"), 2.0))
-            item.setZValue(5)
-            item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
             self.scene.addItem(item)
             self.node_items[node_id] = item
-            text = QGraphicsTextItem(node.id if node.kind == "navigation" else node.label, item)
-            text.setDefaultTextColor(QColor("#ffffff"))
-            text.setFont(QFont("Microsoft YaHei", 9 if node.kind == "navigation" else 8))
-            text.setTextWidth(radius * 1.8)
-            text.setPos(-radius * 0.9, -text.boundingRect().height() / 2)
-            text.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
     def _build_controls(self) -> None:
         panel = QWidget()
@@ -200,6 +255,20 @@ class PlannerWindow(QMainWindow):
             self.blocked_edges.add(key)
         self.replan()
 
+    def set_start_node(self, node_id: str) -> None:
+        index = self.start_combo.findData(node_id)
+        self.start_combo.blockSignals(True)
+        self.start_combo.setCurrentIndex(index)
+        self.start_combo.blockSignals(False)
+        self.replan()
+
+    def set_goal_node(self, node_id: str) -> None:
+        index = self.goal_combo.findData(node_id)
+        self.goal_combo.blockSignals(True)
+        self.goal_combo.setCurrentIndex(index)
+        self.goal_combo.blockSignals(False)
+        self.replan()
+
     def _restore_edges(self) -> None:
         self.blocked_edges.clear()
         self.replan()
@@ -241,6 +310,8 @@ class PlannerWindow(QMainWindow):
             + (f"可用候选路径：{len(self.results)} 条" if self.results else "当前道路配置下不存在可通行路径。")
         )
         self._refresh_edge_colors()
+        for node_id, item in self.node_items.items():
+            item.set_role(node_id == start_id, node_id == goal_id)
         self._draw_routes()
 
     @staticmethod
