@@ -50,27 +50,35 @@ def snap_to_45(anchor: QPointF, target: QPointF) -> QPointF:
 
 class MapView(QGraphicsView):
     clicked = Signal(float, float, bool)
+    hovered = Signal(float, float, bool)
+    released = Signal(float, float, bool)
+    preview_rotated = Signal()
     box_selected = Signal(QRectF, bool)
 
     def __init__(self) -> None:
         super().__init__(); self.mode = "select"; self._rubber = None; self._origin = None; self._panning = False
-        self._space_pressed = False; self._pan_origin = QPoint(); self._pan_scroll = QPoint()
+        self._space_pressed = False; self._pan_origin = QPoint(); self._pan_scroll = QPoint(); self._add_pressed = False
         self.setRenderHint(QPainter.RenderHint.Antialiasing); self.setDragMode(QGraphicsView.DragMode.NoDrag)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus); self.setMouseTracking(True); self.viewport().setMouseTracking(True)
 
     def wheelEvent(self, event):  # type: ignore[no-untyped-def]
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15; self.scale(factor, factor)
 
     def mousePressEvent(self, event):  # type: ignore[no-untyped-def]
         if event.button() == Qt.MouseButton.MiddleButton or (event.button() == Qt.MouseButton.LeftButton and self._space_pressed):
+            self.hovered.emit(float("nan"), float("nan"), False)
             self._panning = True; self._pan_origin = event.position().toPoint()
             self._pan_scroll = QPoint(self.horizontalScrollBar().value(), self.verticalScrollBar().value())
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor); event.accept(); return
         item = self.itemAt(event.position().toPoint())
+        if event.button() == Qt.MouseButton.RightButton and self.mode == "add":
+            self.preview_rotated.emit(); event.accept(); return
         if event.button() == Qt.MouseButton.RightButton and isinstance(item, StartItem):
             item.rotated(); event.accept(); return
         editable = isinstance(item, (WaypointItem, RotationHandleItem, StartItem))
-        if event.button() == Qt.MouseButton.LeftButton and self.mode in ("add", "calibrate", "measure") and not editable:
+        if event.button() == Qt.MouseButton.LeftButton and self.mode == "add" and not editable:
+            self._add_pressed = True; event.accept(); return
+        if event.button() == Qt.MouseButton.LeftButton and self.mode in ("calibrate", "measure") and not editable:
             point = self.mapToScene(event.position().toPoint()); self.clicked.emit(point.x(), point.y(), bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)); event.accept(); return
         if event.button() == Qt.MouseButton.LeftButton and self.mode == "select" and not editable:
             self._origin = event.position().toPoint(); self._rubber = QRubberBand(QRubberBand.Shape.Rectangle, self.viewport())
@@ -85,6 +93,9 @@ class MapView(QGraphicsView):
             event.accept(); return
         if self._rubber is not None:
             self._rubber.setGeometry(QRect(self._origin, event.position().toPoint()).normalized()); return
+        if self.mode == "add":
+            point = self.mapToScene(event.position().toPoint())
+            self.hovered.emit(point.x(), point.y(), bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):  # type: ignore[no-untyped-def]
@@ -96,7 +107,15 @@ class MapView(QGraphicsView):
             rect = self._rubber.geometry(); self._rubber.hide(); self._rubber = None
             if rect.width() > 3 and rect.height() > 3: self.box_selected.emit(self.mapToScene(rect).boundingRect(), bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier))
             return
+        if event.button() == Qt.MouseButton.LeftButton and self._add_pressed:
+            self._add_pressed = False
+            point = self.mapToScene(event.position().toPoint())
+            self.released.emit(point.x(), point.y(), bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+            event.accept(); return
         super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event):  # type: ignore[no-untyped-def]
+        self._add_pressed = False; self.hovered.emit(float("nan"), float("nan"), False); super().leaveEvent(event)
 
     def keyPressEvent(self, event):  # type: ignore[no-untyped-def]
         if event.key() == Qt.Key.Key_Escape and self.mode == "measure":
@@ -179,9 +198,10 @@ class PlannerWindow(QMainWindow):
         super().__init__(); self.setWindowTitle("LittleCar2 比赛地图路径规划"); self.resize(1420, 860); self.setMinimumSize(1024, 768)
         self.plan = Plan(); self.active_index = -1; self.mode = "select"; self.calibration_pending = True; self.calibration_stage = "choose"; self.undo_stack = []; self.redo_stack = []
         self.selected_indices: set[int] = set(); self.measurement_points: list[QPointF] = []
+        self.preview_paper: QPointF | None = None; self.preview_yaw_deg: float | None = None; self.preview_anchor_index: int | None = None; self.preview_shift = False
         self.timeline: list[SimulationFrame] = []; self.timeline_position = 0; self.current_frame = None; self.actual_trace = []
         self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
-        self.view.clicked.connect(self.on_map_click); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
+        self.view.clicked.connect(self.on_map_click); self.view.hovered.connect(self.update_preview); self.view.released.connect(self.confirm_preview); self.view.preview_rotated.connect(self.rotate_preview_clockwise); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
         self._build(); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_waypoint)
         self.redraw(); self.refresh_plans(); QTimer.singleShot(0,self.fit_map); QShortcut(QKeySequence(Qt.Key.Key_Home),self,activated=self.fit_map)
 
@@ -216,9 +236,6 @@ class PlannerWindow(QMainWindow):
             form.addRow(label,widget)
         form.addRow(self.use_yaw); form.addRow(self.stop); update=QPushButton("更新当前节点"); update.clicked.connect(self.update_waypoint); form.addRow(update); box.addLayout(form)
         self.goto_form_widgets.extend((self.use_yaw,self.stop)); self.update_action_button=update
-        box.addWidget(QLabel("仿真 PID 参数")); pid_form=QFormLayout(); self.kp_pos=spin(self.plan.settings.kp_pos,-100,100,.01); self.ki_pos=spin(self.plan.settings.ki_pos,-100,100,.01); self.kd_pos=spin(self.plan.settings.kd_pos,-100,100,.01); self.kp_yaw=spin(self.plan.settings.kp_yaw,-100,100,.01); self.ki_yaw=spin(self.plan.settings.ki_yaw,-100,100,.01); self.kd_yaw=spin(self.plan.settings.kd_yaw,-100,100,.01)
-        for label, widget in (("位置 Kp",self.kp_pos),("位置 Ki",self.ki_pos),("位置 Kd",self.kd_pos),("航向 Kp",self.kp_yaw),("航向 Ki",self.ki_yaw),("航向 Kd",self.kd_yaw)): pid_form.addRow(label,widget)
-        update_pid=QPushButton("更新仿真参数"); update_pid.clicked.connect(self.update_simulation_settings); pid_form.addRow(update_pid); box.addLayout(pid_form)
         box.addWidget(QLabel("仿真")); simrow=QHBoxLayout()
         for label, fn in (("播放",self.play),("暂停",self.pause),("重置",self.reset_simulation)):
             button=QPushButton(label); button.clicked.connect(fn); simrow.addWidget(button)
@@ -240,6 +257,7 @@ class PlannerWindow(QMainWindow):
         root.addWidget(scroll); root.addWidget(map_panel); root.setSizes([360,1060]); self.setCentralWidget(root); self.update_calibration_ui()
 
     def set_mode(self, mode):
+        if mode != "add": self.clear_preview()
         if mode == "add" and self.calibration_pending:
             self.select_button.setChecked(True)
             if hasattr(self,"status"): self.status.setText("请先完成起点和朝向标定。")
@@ -283,16 +301,49 @@ class PlannerWindow(QMainWindow):
             if self.calibration_stage != "position": return
             self.plan.start_paper_x_mm, self.plan.start_paper_y_mm = x, y; self.calibration_stage="heading"; self.update_calibration_ui(); self.redraw(); return
         if self.mode != "add" or self.calibration_pending: return
+        self.update_preview(x, y, shift)
+        self.confirm_preview(x, y, shift)
+
+    def _preview_anchor(self) -> tuple[QPointF, float, int]:
+        position=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm); yaw=0.0; index=-1
+        for command_index, command in enumerate(self.plan.waypoints):
+            if isinstance(command,Waypoint):
+                position=QPointF(self.paper_of(command).x_mm,self.paper_of(command).y_mm)
+                if command.use_yaw: yaw=command.yaw_deg
+            else:
+                yaw=command.yaw_deg
+            index=command_index
+        return position, yaw, index
+
+    def clear_preview(self, redraw=True):
+        self.preview_paper=None; self.preview_yaw_deg=None; self.preview_anchor_index=None; self.preview_shift=False
+        if redraw: self.redraw()
+
+    def update_preview(self, x, y, shift=False):
+        if self.mode != "add" or self.calibration_pending or math.isnan(x) or not (0 <= x <= FIELD_SIZE_MM and 0 <= y <= FIELD_SIZE_MM):
+            self.clear_preview(); return
+        anchor, anchor_yaw, anchor_index=self._preview_anchor()
+        if self.preview_anchor_index != anchor_index:
+            self.preview_yaw_deg=anchor_yaw; self.preview_anchor_index=anchor_index
+        point=QPointF(x,y)
+        self.preview_paper=snap_to_45(anchor,point) if shift else point
+        self.preview_shift=shift
+        self.redraw()
+
+    def confirm_preview(self, x, y, shift=False):
+        self.update_preview(x, y, shift)
+        if self.preview_paper is None or self.preview_yaw_deg is None: return
+        pose=paper_to_world(self.preview_paper.x(),self.preview_paper.y(),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
         self.push_undo()
-        if shift:
-            anchor=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm)
-            if self.plan.waypoints:
-                previous_goto=next((action for action in reversed(self.plan.waypoints) if isinstance(action,Waypoint)),None)
-                if previous_goto is not None:
-                    prev=self.paper_of(previous_goto); anchor=QPointF(prev.x_mm,prev.y_mm)
-            snapped=snap_to_45(anchor,QPointF(x,y)); x,y=snapped.x(),snapped.y()
-        pose=paper_to_world(x,y,self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
-        self.plan.waypoints.append(Waypoint(pose.x_mm,pose.y_mm,name=f"节点 {len(self.plan.waypoints)+1}")); self.active_index=len(self.plan.waypoints)-1; self.refresh_waypoints(); self.redraw()
+        self.plan.waypoints.append(Waypoint(pose.x_mm,pose.y_mm,yaw_deg=self.preview_yaw_deg,use_yaw=True,name=f"节点 {len(self.plan.waypoints)+1}"))
+        self.active_index=len(self.plan.waypoints)-1; self.clear_preview(redraw=False); self.refresh_waypoints(); self.redraw()
+
+    def rotate_preview_clockwise(self):
+        if self.preview_yaw_deg is not None:
+            self.preview_yaw_deg=((self.preview_yaw_deg-90+180)%360)-180; self.redraw(); return
+        if 0 <= self.active_index < len(self.plan.waypoints) and isinstance(self.plan.waypoints[self.active_index],RotateInPlace):
+            self.push_undo(); action=self.plan.waypoints[self.active_index]; action.yaw_deg=((action.yaw_deg-90+180)%360)-180
+            self.show_node(self.active_index); self.refresh_waypoints(); self.redraw()
 
     def paper_of(self, waypoint):
         x,y=world_to_paper(Pose(waypoint.x_mm, waypoint.y_mm, waypoint.yaw_deg),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg); return Pose(x,y,waypoint.yaw_deg+self.plan.start_heading_deg)
@@ -332,16 +383,6 @@ class PlannerWindow(QMainWindow):
         if 0 <= self.active_index < len(self.plan.waypoints): self.insert_rotation(self.active_index+1)
     def insert_rotation(self,index):
         self.push_undo(); self.plan.waypoints.insert(index,RotateInPlace()); self.active_index=index; self.refresh_waypoints(); self.redraw()
-
-    def update_simulation_settings(self):
-        self.push_undo(); settings=self.plan.settings
-        settings.kp_pos=self.kp_pos.value(); settings.ki_pos=self.ki_pos.value(); settings.kd_pos=self.kd_pos.value(); settings.kp_yaw=self.kp_yaw.value(); settings.ki_yaw=self.ki_yaw.value(); settings.kd_yaw=self.kd_yaw.value()
-        self.status.setText("仿真 PID 参数已更新。")
-
-    def sync_simulation_settings(self):
-        settings=self.plan.settings
-        for name in ("kp_pos", "ki_pos", "kd_pos", "kp_yaw", "ki_yaw", "kd_yaw"):
-            getattr(self, name).setValue(getattr(settings, name))
 
     def move_waypoint(self,index,before,after,shift=False):
         if index != self.active_index or before==after: return
@@ -400,10 +441,10 @@ class PlannerWindow(QMainWindow):
     def push_undo(self): self._invalidate_timeline(); self.undo_stack.append(copy.deepcopy(self.plan)); self.undo_stack=self.undo_stack[-100:]; self.redo_stack.clear()
     def undo(self):
         if not self.undo_stack:return
-        self.redo_stack.append(copy.deepcopy(self.plan)); self.plan=self.undo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self._invalidate_timeline(); self.sync_simulation_settings(); self.refresh_waypoints(); self.redraw()
+        self.redo_stack.append(copy.deepcopy(self.plan)); self.plan=self.undo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw()
     def redo(self):
         if not self.redo_stack:return
-        self.undo_stack.append(copy.deepcopy(self.plan)); self.plan=self.redo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self._invalidate_timeline(); self.sync_simulation_settings(); self.refresh_waypoints(); self.redraw()
+        self.undo_stack.append(copy.deepcopy(self.plan)); self.plan=self.redo_stack.pop(); self.active_index=min(self.active_index,len(self.plan.waypoints)-1); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw()
 
     def invalid_waypoints(self):
         margin=CAR_SIZE_MM/2.0; invalid=[]
@@ -414,7 +455,7 @@ class PlannerWindow(QMainWindow):
         return invalid
 
     def redraw(self):
-        self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_start(); self.draw_route(); self.draw_measurement(); self.draw_car(self.current_frame.actual if self.current_frame else None)
+        self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_start(); self.draw_route(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None)
         for item in self.scene.items():
             if isinstance(item,WaypointItem) and item.index in self.selected_indices: item.setSelected(True)
 
@@ -469,6 +510,16 @@ class PlannerWindow(QMainWindow):
             for p in self.actual_trace[1:]: path.lineTo(*world_to_paper(p,self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg))
             self.scene.addPath(path,QPen(QColor("#9e1b32"),4,Qt.PenStyle.DashLine))
 
+    def draw_preview(self):
+        if self.preview_paper is None or self.preview_yaw_deg is None: return
+        anchor, _, _=self._preview_anchor()
+        if self.preview_shift:
+            guide=QPen(QColor(21,101,192,120),3,Qt.PenStyle.DashLine)
+            line=self.scene.addLine(anchor.x(),anchor.y(),self.preview_paper.x(),self.preview_paper.y(),guide); line.setData(0,"snap_preview_axis"); line.setZValue(13)
+        yaw=self.preview_yaw_deg+self.plan.start_heading_deg
+        car=CarOutlineItem(self.rotate_preview_clockwise); car.setPos(self.preview_paper); car.setRotation(-yaw); car.setPen(QPen(QColor(21,101,192,125),4)); car.setBrush(QColor(21,101,192,42)); car.setZValue(17); self.scene.addItem(car)
+        arrow=QGraphicsPolygonItem(QPolygonF([QPointF(-24,-24),QPointF(32,-24),QPointF(32,-44),QPointF(72,0),QPointF(32,44),QPointF(32,24),QPointF(-24,24)])); arrow.setPos(self.preview_paper); arrow.setRotation(-yaw); arrow.setBrush(QColor(21,101,192,75)); arrow.setPen(QPen(QColor(13,71,161,125),2)); arrow.setZValue(18); self.scene.addItem(arrow)
+
     def add_measurement_point(self, point):
         if len(self.measurement_points) >= 2: self.measurement_points=[]
         self.measurement_points.append(QPointF(point)); self.update_measurement_ui(); self.redraw()
@@ -513,9 +564,9 @@ class PlannerWindow(QMainWindow):
         if self.timer.isActive(): self.status.setText("请先暂停仿真后再旋转小车。 "); return
         if not 0 <= self.active_index < len(self.plan.waypoints): self.status.setText("请先选择一个路径节点。 "); return
         waypoint=self.plan.waypoints[self.active_index]
-        if not isinstance(waypoint,Waypoint): self.status.setText("原地转向动作请在左侧编辑目标航向。 "); return
         self.push_undo()
-        waypoint.yaw_deg=((waypoint.yaw_deg-90+180)%360)-180; waypoint.use_yaw=True
+        waypoint.yaw_deg=((waypoint.yaw_deg-90+180)%360)-180
+        if isinstance(waypoint,Waypoint): waypoint.use_yaw=True
         self.show_node(self.active_index); self.refresh_waypoints(); self.redraw(); self.status.setText("当前节点航向已顺时针旋转 90 度。")
 
     def _invalidate_timeline(self):
@@ -540,7 +591,7 @@ class PlannerWindow(QMainWindow):
         if invalid: self.status.setText("以下步骤超出车体中心可移动范围："+"、".join(str(i+1) for i in invalid)); return
         if not self.plan.waypoints: self.status.setText("至少添加一个节点后才能仿真。 "); return
         if not self.timeline:
-            self.timeline=build_timeline(copy.deepcopy(self.plan.waypoints),self.plan.settings,self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
+            self.timeline=build_timeline(copy.deepcopy(self.plan.waypoints),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg)
             self.progress.blockSignals(True); self.progress.setRange(0,len(self.timeline)); self.progress.setEnabled(True); self.progress.blockSignals(False)
         if self.timeline_position >= len(self.timeline): self.progress.setValue(0)
         self.timer.start()
@@ -554,7 +605,7 @@ class PlannerWindow(QMainWindow):
         if self.timeline_position >= len(self.timeline): self.pause()
     def refresh_plans(self): self.plan_list.clear(); self.plan_list.addItems(list_plans())
     def new_plan(self):
-        self._invalidate_timeline(); self.plan=Plan(); self.active_index=-1; self.undo_stack=[]; self.redo_stack=[]; self.selected_indices=set(); self.calibration_pending=True; self.calibration_stage="choose"; self.set_mode("select"); self.update_calibration_ui(); self.sync_simulation_settings(); self.refresh_waypoints(); self.redraw()
+        self._invalidate_timeline(); self.plan=Plan(); self.active_index=-1; self.undo_stack=[]; self.redo_stack=[]; self.selected_indices=set(); self.calibration_pending=True; self.calibration_stage="choose"; self.set_mode("select"); self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
     def save(self):
         if self.calibration_pending: self.status.setText("请先完成起点标定。"); return
         invalid=self.invalid_waypoints()
@@ -570,7 +621,7 @@ class PlannerWindow(QMainWindow):
     def load_selected(self):
         item=self.plan_list.currentItem()
         if item is None:return
-        try: self._invalidate_timeline(); self.plan=load_plan(item.text()); self.active_index=-1; self.calibration_pending=False; self.calibration_stage="complete"; self.update_calibration_ui(); self.sync_simulation_settings(); self.refresh_waypoints(); self.redraw()
+        try: self._invalidate_timeline(); self.plan=load_plan(item.text()); self.active_index=-1; self.calibration_pending=False; self.calibration_stage="complete"; self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
         except ValueError as error: QMessageBox.warning(self,"加载失败",str(error))
 
 

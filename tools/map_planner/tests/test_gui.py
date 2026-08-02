@@ -109,7 +109,7 @@ class GuiTests(unittest.TestCase):
             window.on_map_click(2200, 200)
             window.on_map_click(2100, 260, True)
             self.assertTrue(window.plan.waypoints[-1].stop)
-            self.assertFalse(window.plan.waypoints[-1].use_yaw)
+            self.assertTrue(window.plan.waypoints[-1].use_yaw)
             point = window.paper_of(window.plan.waypoints[-1])
             self.assertAlmostEqual(abs(point.x_mm - 2200), abs(point.y_mm - 200), delta=1)
         finally:
@@ -125,6 +125,28 @@ class GuiTests(unittest.TestCase):
             self.assertFalse(window.add_button.isEnabled())
             window.begin_start("启停区 1")
             self.assertEqual(window.calibration_stage, "heading")
+        finally:
+            window.close()
+
+    def test_hover_preview_snaps_rotates_and_confirms_on_left_release(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.update_preview(2200, 200, True)
+            self.assertIsNotNone(window.preview_paper)
+            self.assertTrue(window.preview_shift)
+            self.assertTrue(any(item.data(0) == "snap_preview_axis" for item in window.scene.items()))
+            window.rotate_preview_clockwise()
+            self.assertEqual(window.preview_yaw_deg, -90)
+            window.show(); self.app.processEvents()
+            position = window.view.mapFromScene(QPointF(2200, 200))
+            QTest.mousePress(window.view.viewport(), Qt.MouseButton.LeftButton, pos=position)
+            self.assertEqual(window.plan.waypoints, [])
+            QTest.mouseRelease(window.view.viewport(), Qt.MouseButton.LeftButton, pos=position)
+            self.assertEqual(len(window.plan.waypoints), 1)
+            self.assertTrue(window.plan.waypoints[0].use_yaw)
+            self.assertEqual(window.plan.waypoints[0].yaw_deg, -90)
+            self.assertIsNone(window.preview_paper)
         finally:
             window.close()
 
@@ -188,6 +210,16 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_right_click_rotation_updates_selected_rotate_action(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.append_rotation()
+            window.rotate_car_clockwise()
+            self.assertEqual(window.plan.waypoints[0].yaw_deg, -90)
+        finally:
+            window.close()
+
     def test_rotation_markers_follow_last_goto_and_do_not_break_route_lines(self):
         window = PlannerWindow()
         try:
@@ -203,33 +235,6 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
-    def test_pid_settings_update_invalidates_timeline(self):
-        window = PlannerWindow()
-        try:
-            self.calibrated(window)
-            window.on_map_click(2200, 200)
-            window.play(); window.pause()
-            self.assertTrue(window.timeline)
-            window.kp_pos.setValue(2.5)
-            window.update_simulation_settings()
-            self.assertEqual(window.plan.settings.kp_pos, 2.5)
-            self.assertEqual(window.timeline, [])
-        finally:
-            window.close()
-
-    def test_pid_controls_follow_plan_after_undo_and_new_plan(self):
-        window = PlannerWindow()
-        try:
-            window.kp_pos.setValue(2.5)
-            window.update_simulation_settings()
-            window.undo()
-            self.assertEqual(window.kp_pos.value(), 1.28)
-            window.redo()
-            self.assertEqual(window.kp_pos.value(), 2.5)
-            window.new_plan()
-            self.assertEqual(window.kp_pos.value(), 1.28)
-        finally:
-            window.close()
 
     def test_selected_nodes_move_as_a_group(self):
         window = PlannerWindow()
@@ -273,7 +278,7 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(waypoint.yaw_deg, -90)
             self.assertTrue(waypoint.use_yaw)
             window.undo()
-            self.assertFalse(window.plan.waypoints[0].use_yaw)
+            self.assertTrue(window.plan.waypoints[0].use_yaw)
         finally:
             window.close()
 
