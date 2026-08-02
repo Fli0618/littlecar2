@@ -801,13 +801,9 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const WorldGoalPose2D_t *point
   g_motion.position_error_mm = 0.0f;
   g_motion.yaw_error_deg = 0.0f;
   g_motion_control.acc = acc;
-  g_motion_control.large_yaw_align_enabled = g_large_yaw_align_enabled;
-  g_motion_control.yaw_aligning =
-      ((g_motion_control.large_yaw_align_enabled != 0U) &&
-       ((g_motion.goal.goal_flags & (ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW)) ==
-        (ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW)) &&
-       (AdvanceMotion_AbsFloat(AdvanceWorld_WrapAngleDeg(g_motion.goal.yaw_deg - pose.yaw_deg)) >=
-        ADVANCE_MOTION_LARGE_YAW_ALIGN_ENTER_DEG)) ? 1U : 0U;
+  /* 路径任务必须持续平移与旋转并行，不继承单点 Goto 的先对准策略。 */
+  g_motion_control.large_yaw_align_enabled = 0U;
+  g_motion_control.yaw_aligning = 0U;
   AdvanceMotion_SavePidPose(&g_motion.pose, g_motion.started_tick);
   g_motion_state = ADVANCE_MOTION_STATE_RUNNING;
   return ADVANCE_MOTION_STATUS_OK;
@@ -887,11 +883,17 @@ void AdvanceMotion_Update(void)
     return;
   }
 
-  position_required = ((g_motion.goal.goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) != 0U) ? 1U : 0U;
-  yaw_required = ((g_motion.goal.goal_flags & ADVANCE_MOTION_GOAL_USE_YAW) != 0U) ? 1U : 0U;
-  pose_status = (position_required != 0U)
-                    ? AdvanceMotion_GetFreshPose(&g_motion.pose)
-                    : AdvanceMotion_GetFreshYaw(&g_motion.pose);
+  if (g_path.active != 0U)
+  {
+    pose_status = AdvanceMotion_GetFreshPose(&g_motion.pose);
+  }
+  else
+  {
+    position_required = ((g_motion.goal.goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) != 0U) ? 1U : 0U;
+    pose_status = (position_required != 0U)
+                      ? AdvanceMotion_GetFreshPose(&g_motion.pose)
+                      : AdvanceMotion_GetFreshYaw(&g_motion.pose);
+  }
   if (pose_status == ADVANCE_MOTION_STATUS_NO_ORIGIN)
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_ORIGIN);
@@ -916,6 +918,10 @@ void AdvanceMotion_Update(void)
       g_motion_control.pid_integral_yaw_deg_s = 0.0f;
     }
   }
+
+  /* 路径参考更新后再读取约束，保证本周期 PID 与当前参考一致。 */
+  position_required = ((g_motion.goal.goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) != 0U) ? 1U : 0U;
+  yaw_required = ((g_motion.goal.goal_flags & ADVANCE_MOTION_GOAL_USE_YAW) != 0U) ? 1U : 0U;
 
   if (position_required != 0U)
   {
