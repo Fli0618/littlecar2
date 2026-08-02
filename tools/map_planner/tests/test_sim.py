@@ -1,6 +1,6 @@
 import unittest
 
-from map_planner.models import SimulationSettings, Waypoint
+from map_planner.models import RotateInPlace, SimulationSettings, Waypoint
 from map_planner.sim import Simulation, build_timeline
 
 
@@ -78,3 +78,33 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual([frame.actual for frame in first], [frame.actual for frame in second])
         self.assertTrue(first[-1].timed_out)
         self.assertEqual(first[-1].time_s, 0.06)
+
+    def test_rotate_in_place_keeps_position_and_reaches_absolute_heading(self):
+        settings = SimulationSettings(dt_s=0.01, yaw_response_s=0.01, sensor_delay_s=0)
+        simulation = Simulation([RotateInPlace(90, wmax_deg_s=60)], settings)
+        simulation.actual.x_mm = 123
+        simulation.actual.y_mm = 456
+        for _ in range(1000):
+            simulation.step()
+            if simulation.finished: break
+        self.assertTrue(simulation.finished)
+        self.assertEqual((simulation.actual.x_mm, simulation.actual.y_mm), (123, 456))
+        self.assertAlmostEqual(simulation.actual.yaw_deg, 90, delta=3)
+
+    def test_rotate_in_place_obeys_angular_limit_and_timeout(self):
+        settings = SimulationSettings(dt_s=0.02, yaw_response_s=0.001, sensor_delay_s=0)
+        simulation = Simulation([RotateInPlace(180, wmax_deg_s=12, timeout_s=0.05)], settings)
+        for _ in range(3):
+            frame = simulation.step()
+            self.assertLessEqual(abs(simulation.wz), 12)
+        self.assertTrue(simulation.failed)
+        self.assertTrue(frame.timed_out)
+
+    def test_rotate_in_place_advances_without_dwell(self):
+        settings = SimulationSettings(dt_s=0.01, yaw_response_s=0.001, sensor_delay_s=0)
+        simulation = Simulation(
+            [RotateInPlace(0, wmax_deg_s=90), Waypoint(0, 100, stop=False)], settings
+        )
+        simulation.step()
+        self.assertEqual(simulation.command_index, 1)
+        self.assertEqual(simulation.dwell_remaining_s, 0)

@@ -8,6 +8,7 @@ from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
 from PySide6.QtTest import QTest
 
 from map_planner.gui import PlannerWindow, StartItem
+from map_planner.models import RotateInPlace
 
 
 class GuiTests(unittest.TestCase):
@@ -167,6 +168,66 @@ class GuiTests(unittest.TestCase):
             window.on_map_click(2200, 200)
             self.assertEqual(window.plan.waypoints[0].vmax_mm_s, 820)
             self.assertEqual(window.node_vmax.value(), 820)
+        finally:
+            window.close()
+
+    def test_rotation_actions_can_be_appended_and_inserted(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.on_map_click(2200, 200)
+            window.append_rotation()
+            self.assertIsInstance(window.plan.waypoints[1], RotateInPlace)
+            window.active_index = 0
+            window.insert_rotation_after_active()
+            self.assertIsInstance(window.plan.waypoints[1], RotateInPlace)
+            self.assertEqual(len(window.plan.waypoints), 3)
+            window.active_index = 1
+            window.remove_waypoint()
+            self.assertEqual(len(window.plan.waypoints), 2)
+        finally:
+            window.close()
+
+    def test_rotation_markers_follow_last_goto_and_do_not_break_route_lines(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.append_rotation()
+            marker = next(item for item in window.scene.items() if item.data(0) == "rotate_in_place_marker")
+            self.assertEqual(marker.rect().center() + marker.pos(), QPointF(2250, 150))
+            window.on_map_click(2200, 200)
+            window.append_rotation()
+            markers = [item for item in window.scene.items() if item.data(0) == "rotate_in_place_marker"]
+            self.assertEqual(len(markers), 2)
+            self.assertEqual(markers[0].rect().center() + markers[0].pos(), QPointF(2200, 200))
+        finally:
+            window.close()
+
+    def test_pid_settings_update_invalidates_timeline(self):
+        window = PlannerWindow()
+        try:
+            self.calibrated(window)
+            window.on_map_click(2200, 200)
+            window.play(); window.pause()
+            self.assertTrue(window.timeline)
+            window.kp_pos.setValue(2.5)
+            window.update_simulation_settings()
+            self.assertEqual(window.plan.settings.kp_pos, 2.5)
+            self.assertEqual(window.timeline, [])
+        finally:
+            window.close()
+
+    def test_pid_controls_follow_plan_after_undo_and_new_plan(self):
+        window = PlannerWindow()
+        try:
+            window.kp_pos.setValue(2.5)
+            window.update_simulation_settings()
+            window.undo()
+            self.assertEqual(window.kp_pos.value(), 1.28)
+            window.redo()
+            self.assertEqual(window.kp_pos.value(), 2.5)
+            window.new_plan()
+            self.assertEqual(window.kp_pos.value(), 1.28)
         finally:
             window.close()
 

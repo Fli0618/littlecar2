@@ -7,7 +7,7 @@ import math
 import random
 
 from .geometry import world_to_paper, wrap_deg
-from .models import CAR_SIZE_MM, FIELD_SIZE_MM, Pose, SimulationSettings, Waypoint
+from .models import CAR_SIZE_MM, FIELD_SIZE_MM, MotionCommand, Pose, RotateInPlace, SimulationSettings, Waypoint
 
 
 POSITION_TOLERANCE_MM = 25.0
@@ -31,7 +31,7 @@ class SimulationFrame:
 
 @dataclass
 class Simulation:
-    commands: list[Waypoint]
+    commands: list[MotionCommand]
     settings: SimulationSettings
     start_paper_x_mm: float = FIELD_SIZE_MM / 2.0
     start_paper_y_mm: float = FIELD_SIZE_MM / 2.0
@@ -77,15 +77,30 @@ class Simulation:
         command_index = self.command_index
         command = self.commands[command_index]
         sensed = self._sense(dt)
-        ex = command.x_mm - sensed.x_mm
-        ey = command.y_mm - sensed.y_mm
+        rotating = isinstance(command, RotateInPlace)
+        ex = 0.0 if rotating else command.x_mm - sensed.x_mm
+        ey = 0.0 if rotating else command.y_mm - sensed.y_mm
         eyaw = wrap_deg(command.yaw_deg - sensed.yaw_deg)
-        command_vx, command_vy = self._position_control(ex, ey, command.vmax_mm_s, dt)
+        command_vx, command_vy = (0.0, 0.0) if rotating else self._position_control(ex, ey, command.vmax_mm_s, dt)
+        if rotating:
+            # 原地转向不保留上一动作的惯性线速度，位置必须保持不变。
+            self.vx = self.vy = 0.0
         command_wz = self._yaw_control(eyaw, command, dt)
         self._apply_velocity_commands(command_vx, command_vy, command_wz, dt)
         self._integrate(dt)
         self.elapsed_s += dt
         self.command_elapsed_s += dt
+
+        if rotating and abs(wrap_deg(command.yaw_deg - self.actual.yaw_deg)) <= YAW_TOLERANCE_DEG:
+            self.actual.yaw_deg = command.yaw_deg
+            self.wz = 0.0
+            self._advance_command()
+            return self._frame(self._reference(), True, self.failed)
+
+        if rotating:
+            if self._has_timed_out(command):
+                self._fail_timeout()
+            return self._frame(self._reference(), False, self.failed)
 
         position_reached = math.hypot(command.x_mm - self.actual.x_mm, command.y_mm - self.actual.y_mm) <= POSITION_TOLERANCE_MM
         yaw_reached = not command.use_yaw or abs(wrap_deg(command.yaw_deg - self.actual.yaw_deg)) <= YAW_TOLERANCE_DEG
@@ -133,8 +148,8 @@ class Simulation:
             self.iy = max(-1000.0, min(1000.0, self.iy + ey * dt))
         return command_vx, command_vy
 
-    def _yaw_control(self, eyaw: float, command: Waypoint, dt: float) -> float:
-        if not command.use_yaw:
+    def _yaw_control(self, eyaw: float, command: MotionCommand, dt: float) -> float:
+        if isinstance(command, Waypoint) and not command.use_yaw:
             self.iyaw = 0.0
             return 0.0
         raw_wz = self.settings.kp_yaw * eyaw + self.settings.ki_yaw * self.iyaw - self.settings.kd_yaw * self.wz
@@ -156,7 +171,7 @@ class Simulation:
         self.actual.y_mm += self.vy * dt
         self.actual.yaw_deg = wrap_deg(self.actual.yaw_deg + self.wz * dt)
 
-    def _has_timed_out(self, command: Waypoint) -> bool:
+    def _has_timed_out(self, command: MotionCommand) -> bool:
         return self.command_elapsed_s >= max(0.0, command.timeout_s)
 
     def _fail_timeout(self) -> None:
@@ -177,6 +192,7 @@ class Simulation:
     def _reference(self) -> Pose:
         command = self.commands[self.command_index]
         # 未启用 yaw 时，参考航向就是当前方向，避免显示为“回零”目标。
+        if isinstance(command, RotateInPlace): return Pose(self.actual.x_mm, self.actual.y_mm, command.yaw_deg)
         yaw = command.yaw_deg if command.use_yaw else self.actual.yaw_deg
         return Pose(command.x_mm, command.y_mm, yaw)
 
@@ -203,7 +219,7 @@ class Simulation:
 
 
 def build_timeline(
-    commands: list[Waypoint],
+    commands: list[MotionCommand],
     settings: SimulationSettings,
     start_paper_x_mm: float,
     start_paper_y_mm: float,

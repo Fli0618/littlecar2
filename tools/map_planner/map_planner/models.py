@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Union
 
 
 FIELD_SIZE_MM = 2400.0
 CAR_SIZE_MM = 300.0
-MAP_VERSION = 2
+MAP_VERSION = 3
 StartKind = Literal["zone_1", "zone_2", "custom"]
 
 
@@ -37,6 +37,19 @@ class Waypoint:
 
 
 @dataclass
+class RotateInPlace:
+    """在当前位置旋转至绝对世界航向的动作。"""
+
+    yaw_deg: float = 0.0
+    wmax_deg_s: float = 90.0
+    timeout_s: float = 15.0
+    name: str = ""
+
+
+MotionCommand = Union[Waypoint, RotateInPlace]
+
+
+@dataclass
 class SimulationSettings:
     kp_pos: float = 1.28
     ki_pos: float = 0.13
@@ -60,7 +73,7 @@ class Plan:
     start_paper_x_mm: float = 2250.0
     start_paper_y_mm: float = 150.0
     start_heading_deg: float = 180.0
-    waypoints: list[Waypoint] = field(default_factory=list)
+    waypoints: list[MotionCommand] = field(default_factory=list)
     settings: SimulationSettings = field(default_factory=SimulationSettings)
 
     def normalize(self) -> None:
@@ -68,7 +81,11 @@ class Plan:
 
     def to_dict(self) -> dict[str, object]:
         self.normalize()
-        commands = [{"type": "goto_pose", **asdict(waypoint)} for waypoint in self.waypoints]
+        commands = [
+            {"type": "goto_pose", **asdict(command)} if isinstance(command, Waypoint)
+            else {"type": "rotate_in_place", **asdict(command)}
+            for command in self.waypoints
+        ]
         return {
             "map_version": MAP_VERSION,
             "name": self.name,
@@ -95,12 +112,14 @@ class Plan:
             commands = value.get("commands", [])
             if not isinstance(start, dict) or not isinstance(commands, list):
                 raise TypeError
-            waypoints: list[Waypoint] = []
+            waypoints: list[MotionCommand] = []
             for command in commands:
-                if not isinstance(command, dict) or command.get("type") != "goto_pose":
+                if not isinstance(command, dict):
                     raise ValueError
                 fields = {key: item for key, item in command.items() if key != "type"}
-                waypoints.append(Waypoint(**fields))
+                if command.get("type") == "goto_pose": waypoints.append(Waypoint(**fields))
+                elif command.get("type") == "rotate_in_place": waypoints.append(RotateInPlace(**fields))
+                else: raise ValueError
             kind = str(start["kind"])
             if kind not in ("zone_1", "zone_2", "custom"):
                 raise ValueError
