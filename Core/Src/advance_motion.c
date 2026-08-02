@@ -28,9 +28,21 @@ typedef struct
   uint8_t acc;
 } AdvanceMotion_Control_t;
 
+typedef struct
+{
+  const WorldGoalPose2D_t *points;
+  uint16_t point_count;
+  uint16_t nearest_index;
+  uint16_t target_index;
+  uint16_t progress_index;
+  uint32_t progress_tick;
+  uint8_t active;
+} AdvanceMotion_PathContext_t;
+
 static AdvanceMotion_RuntimeStatus_t g_motion = {ADVANCE_MOTION_STATE_IDLE};
 static AdvanceMotion_DebugSnapshot_t g_motion_debug = {0};
 static AdvanceMotion_Control_t g_motion_control = {0};
+static AdvanceMotion_PathContext_t g_path = {0};
 static volatile AdvanceMotion_RunState_t g_motion_state = ADVANCE_MOTION_STATE_IDLE;
 static AdvanceMotion_PidConfig_t g_pid_active;
 static AdvanceMotion_PidConfig_t g_pid_pending;
@@ -52,6 +64,11 @@ static const AdvanceMotion_PidConfig_t g_pid_default = {
 static float AdvanceMotion_AbsFloat(float value)
 {
   return (value < 0.0f) ? -value : value;
+}
+
+static void AdvanceMotion_ClearPathContext(void)
+{
+  g_path = (AdvanceMotion_PathContext_t){0};
 }
 
 /* 清除仅属于一轮 GotoPose 的 PID 与外部进展校验历史。 */
@@ -102,6 +119,10 @@ static float AdvanceMotion_GetLargeYawAlignLinearScale(float yaw_error_deg)
 
 static void AdvanceMotion_UpdateDebugSnapshot(uint32_t now_tick, uint8_t flags)
 {
+  if (g_path.active != 0U)
+  {
+    flags |= ADVANCE_MOTION_DEBUG_FLAG_PATH_ACTIVE;
+  }
   if (AdvanceWorld_GetYawSource() == ADVANCE_WORLD_YAW_SOURCE_OPS)
   {
     flags |= ADVANCE_MOTION_DEBUG_FLAG_YAW_SOURCE_OPS;
@@ -264,6 +285,21 @@ static void AdvanceMotion_UpdatePidIntegral(float vx_world_mm_s, float vy_world_
 /* 以位置误差的下降量校验外部闭环是否仍在取得进展。 */
 static uint8_t AdvanceMotion_HasNoProgress(uint32_t now_tick, float command_magnitude)
 {
+  if (g_path.active != 0U)
+  {
+    if (command_magnitude < ADVANCE_MOTION_NO_PROGRESS_MIN_COMMAND_MM_S)
+    {
+      return 0U;
+    }
+    if (g_path.nearest_index > g_path.progress_index)
+    {
+      g_path.progress_index = g_path.nearest_index;
+      g_path.progress_tick = now_tick;
+      return 0U;
+    }
+    return ((now_tick - g_path.progress_tick) >= ADVANCE_MOTION_NO_PROGRESS_WINDOW_MS) ? 1U : 0U;
+  }
+
   if ((g_motion.position_error_mm <= ADVANCE_MOTION_POS_TOLERANCE_MM) ||
       (command_magnitude < ADVANCE_MOTION_NO_PROGRESS_MIN_COMMAND_MM_S))
   {
@@ -358,6 +394,138 @@ static uint8_t AdvanceMotion_IsGoalValid(const WorldGoalPose2D_t *goal)
   return 1U;
 }
 
+static uint16_t AdvanceMotion_FindNearestPathPoint(const WorldPose2D_t *pose,
+                                                    uint16_t start_index)
+{
+  uint16_t end_index;
+  uint16_t index;
+  uint16_t nearest_index;
+  float dx;
+  float dy;
+  float distance_squared;
+  float nearest_distance_squared;
+
+  if ((pose == NULL) || (g_path.points == NULL) || (g_path.point_count == 0U))
+  {
+    return 0U;
+  }
+  if (start_index >= g_path.point_count)
+  {
+    start_index = (uint16_t)(g_path.point_count - 1U);
+  }
+  end_index = (uint16_t)(start_index + (ADVANCE_MOTION_PATH_SEARCH_POINTS - 1U));
+  if ((end_index < start_index) || (end_index >= g_path.point_count))
+  {
+    end_index = (uint16_t)(g_path.point_count - 1U);
+  }
+
+  nearest_index = start_index;
+  dx = g_path.points[start_index].x_mm - pose->x_mm;
+  dy = g_path.points[start_index].y_mm - pose->y_mm;
+  nearest_distance_squared = (dx * dx) + (dy * dy);
+  for (index = (uint16_t)(start_index + 1U); index <= end_index; ++index)
+  {
+    dx = g_path.points[index].x_mm - pose->x_mm;
+    dy = g_path.points[index].y_mm - pose->y_mm;
+    distance_squared = (dx * dx) + (dy * dy);
+    if (distance_squared < nearest_distance_squared)
+    {
+      nearest_distance_squared = distance_squared;
+      nearest_index = index;
+    }
+  }
+
+  return nearest_index;
+}
+
+static uint16_t AdvanceMotion_FindLookaheadPoint(uint16_t nearest_index)
+{
+  uint16_t index;
+  float accumulated_mm = 0.0f;
+  float dx;
+  float dy;
+  float segment_mm;
+
+  if ((g_path.points == NULL) || (g_path.point_count == 0U))
+  {
+    return 0U;
+  }
+  if (nearest_index >= (uint16_t)(g_path.point_count - 1U))
+  {
+    return (uint16_t)(g_path.point_count - 1U);
+  }
+
+  for (index = (uint16_t)(nearest_index + 1U); index < g_path.point_count; ++index)
+  {
+    dx = g_path.points[index].x_mm - g_path.points[index - 1U].x_mm;
+    dy = g_path.points[index].y_mm - g_path.points[index - 1U].y_mm;
+    segment_mm = sqrtf((dx * dx) + (dy * dy));
+    accumulated_mm += segment_mm;
+    if (accumulated_mm >= ADVANCE_MOTION_PATH_LOOKAHEAD_MM)
+    {
+      return index;
+    }
+  }
+
+  return (uint16_t)(g_path.point_count - 1U);
+}
+
+static void AdvanceMotion_UpdatePathReference(void)
+{
+  uint16_t index;
+  uint16_t new_target_index;
+  float accumulated_mm = 0.0f;
+  float dx;
+  float dy;
+  float segment_mm;
+  float remaining_mm;
+  float ratio;
+  const WorldGoalPose2D_t *from;
+  const WorldGoalPose2D_t *to;
+
+  g_path.nearest_index = AdvanceMotion_FindNearestPathPoint(&g_motion.pose, g_path.nearest_index);
+  new_target_index = AdvanceMotion_FindLookaheadPoint(g_path.nearest_index);
+  if ((new_target_index == (uint16_t)(g_path.point_count - 1U)) &&
+      (g_path.target_index != new_target_index))
+  {
+    g_motion_control.pid_integral_x_mm_s = 0.0f;
+    g_motion_control.pid_integral_y_mm_s = 0.0f;
+    g_motion_control.pid_integral_yaw_deg_s = 0.0f;
+  }
+  g_path.target_index = new_target_index;
+  if (new_target_index == (uint16_t)(g_path.point_count - 1U))
+  {
+    g_motion.goal = g_path.points[new_target_index];
+    return;
+  }
+
+  for (index = (uint16_t)(g_path.nearest_index + 1U); index <= new_target_index; ++index)
+  {
+    from = &g_path.points[index - 1U];
+    to = &g_path.points[index];
+    dx = to->x_mm - from->x_mm;
+    dy = to->y_mm - from->y_mm;
+    segment_mm = sqrtf((dx * dx) + (dy * dy));
+    if ((segment_mm > 0.0f) && ((accumulated_mm + segment_mm) >= ADVANCE_MOTION_PATH_LOOKAHEAD_MM))
+    {
+      remaining_mm = ADVANCE_MOTION_PATH_LOOKAHEAD_MM - accumulated_mm;
+      ratio = AdvanceWorld_LimitFloat(remaining_mm / segment_mm, 0.0f, 1.0f);
+      g_motion.goal.x_mm = from->x_mm + (ratio * dx);
+      g_motion.goal.y_mm = from->y_mm + (ratio * dy);
+      g_motion.goal.yaw_deg = AdvanceWorld_WrapAngleDeg(
+          from->yaw_deg + (ratio * AdvanceWorld_WrapAngleDeg(to->yaw_deg - from->yaw_deg)));
+      g_motion.goal.vmax_mm_s = from->vmax_mm_s + (ratio * (to->vmax_mm_s - from->vmax_mm_s));
+      g_motion.goal.wmax_deg_s = from->wmax_deg_s + (ratio * (to->wmax_deg_s - from->wmax_deg_s));
+      g_motion.goal.timeout_ms = g_path.points[g_path.point_count - 1U].timeout_ms;
+      g_motion.goal.goal_flags = to->goal_flags;
+      return;
+    }
+    accumulated_mm += segment_mm;
+  }
+
+  g_motion.goal = g_path.points[new_target_index];
+}
+
 static AdvanceMotion_Status_t AdvanceMotion_GetFreshYaw(WorldPose2D_t *pose)
 {
   float yaw_deg;
@@ -449,6 +617,7 @@ static void AdvanceMotion_SetTerminalState(AdvanceMotion_RunState_t state)
   g_motion_control.arrive_hold_start_tick = 0U;
   g_motion_control.arrival_stop_sent = 0U;
   AdvanceMotion_ResetPidAndProgress();
+  AdvanceMotion_ClearPathContext();
   (void)AdvanceControl_ReleaseMode();
   g_motion_state = state;
 }
@@ -501,6 +670,7 @@ void AdvanceMotion_Init(void)
 {
   g_motion = (AdvanceMotion_RuntimeStatus_t){ADVANCE_MOTION_STATE_IDLE};
   g_motion_control = (AdvanceMotion_Control_t){0};
+  AdvanceMotion_ClearPathContext();
   g_motion_state = ADVANCE_MOTION_STATE_IDLE;
   g_pid_active = g_pid_default;
   g_pid_pending = g_pid_default;
@@ -522,6 +692,7 @@ AdvanceMotion_Status_t AdvanceMotion_SetWorldVelocityEx(float vx_world_mm_s, flo
     g_motion_control.arrive_hold_start_tick = 0U;
     g_motion_control.arrival_stop_sent = 0U;
     AdvanceMotion_ResetPidAndProgress();
+    AdvanceMotion_ClearPathContext();
   }
 
   return AdvanceMotion_ApplyWorldVelocityEx(vx_world_mm_s, vy_world_mm_s, wz_ccw_deg_s, acc, NULL);
@@ -578,6 +749,70 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
   return ADVANCE_MOTION_STATUS_OK;
 }
 
+AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const WorldGoalPose2D_t *points,
+                                                   uint16_t point_count, uint8_t acc)
+{
+  WorldPose2D_t pose;
+  AdvanceMotion_Status_t pose_status;
+  uint16_t index;
+
+  if ((points == NULL) || (point_count < 2U))
+  {
+    return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+  }
+  for (index = 0U; index < point_count; ++index)
+  {
+    if ((AdvanceMotion_IsGoalValid(&points[index]) == 0U) ||
+        ((points[index].goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) == 0U))
+    {
+      return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+    }
+  }
+  if (g_motion_state == ADVANCE_MOTION_STATE_RUNNING)
+  {
+    return ADVANCE_MOTION_STATUS_BUSY;
+  }
+
+  pose_status = AdvanceMotion_GetFreshPose(&pose);
+  if (pose_status != ADVANCE_MOTION_STATUS_OK)
+  {
+    return pose_status;
+  }
+  if (AdvanceControl_SetMode(ADVANCE_CONTROL_WORLD) == 0U)
+  {
+    return ADVANCE_MOTION_STATUS_BUSY;
+  }
+
+  AdvanceMotion_ClearPathContext();
+  g_path.points = points;
+  g_path.point_count = point_count;
+  g_path.progress_tick = HAL_GetTick();
+  g_path.active = 1U;
+  g_motion.goal = points[0];
+  g_motion.pose = pose;
+  g_motion.started_tick = g_path.progress_tick;
+  g_motion.updated_tick = g_motion.started_tick;
+  g_motion_control.arrive_hold_start_tick = 0U;
+  g_motion_control.arrival_stop_sent = 0U;
+  AdvanceMotion_ResetPidAndProgress();
+  AdvanceMotion_UpdatePathReference();
+  g_motion.error_x_mm = 0.0f;
+  g_motion.error_y_mm = 0.0f;
+  g_motion.position_error_mm = 0.0f;
+  g_motion.yaw_error_deg = 0.0f;
+  g_motion_control.acc = acc;
+  g_motion_control.large_yaw_align_enabled = g_large_yaw_align_enabled;
+  g_motion_control.yaw_aligning =
+      ((g_motion_control.large_yaw_align_enabled != 0U) &&
+       ((g_motion.goal.goal_flags & (ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW)) ==
+        (ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW)) &&
+       (AdvanceMotion_AbsFloat(AdvanceWorld_WrapAngleDeg(g_motion.goal.yaw_deg - pose.yaw_deg)) >=
+        ADVANCE_MOTION_LARGE_YAW_ALIGN_ENTER_DEG)) ? 1U : 0U;
+  AdvanceMotion_SavePidPose(&g_motion.pose, g_motion.started_tick);
+  g_motion_state = ADVANCE_MOTION_STATE_RUNNING;
+  return ADVANCE_MOTION_STATUS_OK;
+}
+
 /* 启动目标后仅等待 TIM6 将运动状态推进到终态。 */
 AdvanceMotion_RunState_t AdvanceMotion_GotoGoalBlocking(const WorldGoalPose2D_t *goal, uint8_t acc)
 {
@@ -626,9 +861,11 @@ void AdvanceMotion_Update(void)
   float raw_linear_magnitude;
   float raw_wz_ccw_deg_s;
   float command_magnitude;
+  uint32_t timeout_ms;
   uint8_t position_required;
   uint8_t position_control_enabled;
   uint8_t yaw_required;
+  uint8_t path_final_stage = 0U;
   uint8_t linear_saturated;
   uint8_t yaw_saturated = 0U;
 
@@ -640,8 +877,10 @@ void AdvanceMotion_Update(void)
     return;
   }
 
-  if ((g_motion.goal.timeout_ms > 0U) &&
-      ((now_tick - g_motion.started_tick) >= g_motion.goal.timeout_ms))
+  timeout_ms = (g_path.active != 0U)
+                   ? g_path.points[g_path.point_count - 1U].timeout_ms
+                   : g_motion.goal.timeout_ms;
+  if ((timeout_ms > 0U) && ((now_tick - g_motion.started_tick) >= timeout_ms))
   {
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_TIMEOUT);
     AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
@@ -664,6 +903,18 @@ void AdvanceMotion_Update(void)
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_NO_POSE);
     AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
     return;
+  }
+
+  if (g_path.active != 0U)
+  {
+    AdvanceMotion_UpdatePathReference();
+    path_final_stage = (g_path.target_index == (uint16_t)(g_path.point_count - 1U)) ? 1U : 0U;
+    if (path_final_stage == 0U)
+    {
+      g_motion_control.pid_integral_x_mm_s = 0.0f;
+      g_motion_control.pid_integral_y_mm_s = 0.0f;
+      g_motion_control.pid_integral_yaw_deg_s = 0.0f;
+    }
   }
 
   if (position_required != 0U)
@@ -700,7 +951,8 @@ void AdvanceMotion_Update(void)
   position_control_enabled = ((position_required != 0U) &&
                               (g_motion_control.yaw_aligning == 0U)) ? 1U : 0U;
 
-  if (((position_required == 0U) || (g_motion.position_error_mm <= ADVANCE_MOTION_POS_TOLERANCE_MM)) &&
+  if (((g_path.active == 0U) || (path_final_stage != 0U)) &&
+      ((position_required == 0U) || (g_motion.position_error_mm <= ADVANCE_MOTION_POS_TOLERANCE_MM)) &&
       ((yaw_required == 0U) || (AdvanceMotion_AbsFloat(g_motion.yaw_error_deg) <= ADVANCE_MOTION_YAW_TOLERANCE_DEG)))
   {
     AdvanceMotion_ResetPidAndProgress();
@@ -780,7 +1032,13 @@ void AdvanceMotion_Update(void)
   }
 
   AdvanceMotion_UpdatePidIntegral(vx_world_mm_s, vy_world_mm_s, wz_ccw_deg_s, dt_s,
-                                    linear_saturated, yaw_saturated, position_control_enabled, yaw_required);
+                                    linear_saturated, yaw_saturated,
+                                    ((g_path.active == 0U) || (path_final_stage != 0U))
+                                        ? position_control_enabled
+                                        : 0U,
+                                    ((g_path.active == 0U) || (path_final_stage != 0U))
+                                        ? yaw_required
+                                        : 0U);
   command_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
                              (vy_world_mm_s * vy_world_mm_s));
   if ((position_control_enabled != 0U) && (AdvanceMotion_HasNoProgress(now_tick, command_magnitude) != 0U))
