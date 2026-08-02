@@ -229,7 +229,7 @@ class PlannerWindow(QMainWindow):
         super().__init__(); self.setWindowTitle("LittleCar2 比赛地图路径规划"); self.resize(1420, 860); self.setMinimumSize(1024, 768)
         self.plan = Plan(); self.active_index = -1; self.active_point_index = -1; self.mode = "select"; self.pending_action: str | None = None; self.calibration_pending = True; self.calibration_stage = "choose"; self.undo_stack = []; self.redo_stack = []
         self.selected_indices: set[int] = set(); self.measurement_points: list[QPointF] = []
-        self.preview_paper: QPointF | None = None; self.preview_yaw_deg: float | None = None; self.preview_anchor_index: int | None = None; self.preview_shift = False
+        self.preview_paper: QPointF | None = None; self.preview_yaw_deg: float | None = None; self.preview_anchor_index: int | None = None; self.preview_anchor_signature = None; self.preview_shift = False
         self.timeline: list[SimulationFrame] = []; self.timeline_position = 0; self.current_frame = None; self.actual_trace = []
         self._layout_slider_before: Plan | None = None; self._layout_slider_changed = False
         self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
@@ -1487,6 +1487,58 @@ class PlannerWindow(QMainWindow):
         invalid = self.active_index in self.invalid_waypoints(); color = QColor("#c62828") if invalid else QColor("#455a64")
         car = CarOutlineItem(self.rotate_car_clockwise); car.setPos(x, y); car.setRotation(-(p.yaw_deg + self.plan.start_heading_deg)); car.setPen(QPen(color, 5)); car.setBrush(QColor(120, 144, 156, 105)); car.setZValue(15); self.scene.addItem(car)
         self._draw_direction_arrow(x, y, p.yaw_deg, QColor("#1565c0"), "car_direction")
+
+    def clear_preview(self, redraw=True):
+        self.preview_paper = None; self.preview_yaw_deg = None; self.preview_anchor_index = None; self.preview_anchor_signature = None; self.preview_shift = False
+        if redraw: self.redraw()
+
+    def _current_preview_anchor(self):
+        step = self._selected_step()
+        if isinstance(step, ContinuousPathSegment) and step.points and self.pending_action != "goto":
+            point = step.points[-1]; paper = self.paper_of(point)
+            return QPointF(paper.x_mm, paper.y_mm), point.yaw_deg, (self.active_index, len(step.points) - 1, point.x_mm, point.y_mm, point.yaw_deg)
+        anchor, yaw = self._step_anchor(len(self.plan.steps))
+        return anchor, yaw, (len(self.plan.steps), anchor.x(), anchor.y(), yaw)
+
+    def update_preview(self, x, y, shift=False):
+        if math.isnan(x) or self.mode != "add" or self.calibration_pending or not (0 <= x <= FIELD_SIZE_MM and 0 <= y <= FIELD_SIZE_MM):
+            self.clear_preview(); return
+        anchor, anchor_yaw, signature = self._current_preview_anchor()
+        if signature != self.preview_anchor_signature:
+            self.preview_yaw_deg = anchor_yaw
+            self.preview_anchor_signature = signature
+        target = QPointF(x, y)
+        self.preview_paper = snap_to_45(anchor, target) if shift else target
+        self.preview_anchor_index, self.preview_shift = self.active_index, shift
+        self.redraw()
+
+    def rotate_preview_clockwise(self):
+        if self.preview_yaw_deg is not None:
+            self.preview_yaw_deg = ((self.preview_yaw_deg - 90 + 180) % 360) - 180
+            self._set_path_check("预览", f"目标朝向 {self.preview_yaw_deg:.0f} deg")
+            self.redraw(); return
+        step = self._selected_step()
+        if not isinstance(step, RotateInPlace):
+            return
+        self.push_undo(); step.yaw_deg = ((step.yaw_deg - 90 + 180) % 360) - 180
+        self._sync_continuous_entries(); self.show_node(self.active_index); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def confirm_preview(self, x, y, shift=False):
+        self.update_preview(x, y, shift)
+        if self.preview_paper is None or self.preview_yaw_deg is None:
+            return
+        pose = paper_to_world(self.preview_paper.x(), self.preview_paper.y(), self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+        yaw = self.preview_yaw_deg
+        self.push_undo()
+        step = self._selected_step()
+        if isinstance(step, ContinuousPathSegment) and self.pending_action != "goto":
+            step.points.append(PathPosePoint(pose.x_mm, pose.y_mm, yaw, f"路径点 {len(step.points)}"))
+            self.active_point_index = len(step.points) - 1
+        else:
+            self.plan.steps.append(Waypoint(pose.x_mm, pose.y_mm, yaw, True, name=f"点到点 {len(self.plan.steps) + 1}"))
+            self.active_index, self.active_point_index = len(self.plan.steps) - 1, -1
+        self.pending_action = None
+        self.clear_preview(False); self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
 def main() -> int:
     app=QApplication(sys.argv); app.setStyleSheet("QWidget{font-family:'Microsoft YaHei';font-size:13px;} QPushButton{min-height:28px;} QScrollArea{border:0;}")

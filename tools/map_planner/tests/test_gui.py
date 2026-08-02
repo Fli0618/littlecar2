@@ -92,3 +92,17 @@ class GuiTests(unittest.TestCase):
             self.assertIn("car_direction", markers)
         finally:
             window.close()
+
+    def test_preview_rotation_persists_to_confirmed_goto_and_rotate_step(self):
+        window = self.window()
+        try:
+            window.begin_goto_add(); window.update_preview(2200, 300)
+            window.rotate_preview_clockwise(); yaw = window.preview_yaw_deg
+            window.update_preview(2190, 300); self.assertEqual(window.preview_yaw_deg, yaw)
+            window.confirm_preview(2190, 300)
+            self.assertEqual(window.plan.steps[-1].yaw_deg, yaw)
+            window.plan.steps.append(RotateInPlace(0)); window.active_index = len(window.plan.steps) - 1
+            window.clear_preview(False); window.rotate_preview_clockwise()
+            self.assertEqual(window.plan.steps[-1].yaw_deg, -90)
+        finally:
+            window.close()

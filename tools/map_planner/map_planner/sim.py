@@ -260,8 +260,7 @@ def build_plan_timeline(plan: Plan) -> list[SimulationFrame]:
                         not (margin <= paper_x <= FIELD_SIZE_MM - margin and margin <= paper_y <= FIELD_SIZE_MM - margin), False))
             current = Pose(points[-1].x_mm, points[-1].y_mm, points[-1].yaw_deg)
             continue
-        command = copy_command(step, current)
-        segment = build_timeline([command], plan.start_paper_x_mm, plan.start_paper_y_mm, plan.start_heading_deg)
+        segment = build_timeline_from_pose(step, current, plan.start_paper_x_mm, plan.start_paper_y_mm, plan.start_heading_deg)
         for frame in segment:
             frame.time_s += elapsed_s
             frame.command_index = command_index
@@ -272,6 +271,17 @@ def build_plan_timeline(plan: Plan) -> list[SimulationFrame]:
             current = Pose(step.x_mm, step.y_mm, step.yaw_deg if step.use_yaw else current.yaw_deg)
         elif isinstance(step, RotateInPlace):
             current.yaw_deg = step.yaw_deg
+    return frames
+
+
+def build_timeline_from_pose(
+    command: MotionCommand, initial: Pose, start_paper_x_mm: float, start_paper_y_mm: float, start_heading_deg: float
+) -> list[SimulationFrame]:
+    """Execute one discrete step from the preceding flow pose, not world origin."""
+    simulation = Simulation([command], start_paper_x_mm, start_paper_y_mm, start_heading_deg, Pose(initial.x_mm, initial.y_mm, initial.yaw_deg))
+    frames: list[SimulationFrame] = []
+    while not simulation.finished and not simulation.failed:
+        frames.append(simulation.step())
     return frames
 
 
