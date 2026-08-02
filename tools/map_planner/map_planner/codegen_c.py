@@ -31,24 +31,27 @@ def _finite(value: float, label: str, step: int) -> None:
 
 def validate_plan_for_blocking_codegen(plan: Plan) -> list[str]:
     if not plan.steps: raise CodeGenerationError("当前方案没有任何运动步骤。")
-    current_x = current_y = 0.0
+    current_x = current_y = current_yaw = 0.0
     for index, step in enumerate(plan.steps, 1):
         if isinstance(step, Waypoint):
             for value, label in ((step.x_mm, "X 坐标"), (step.y_mm, "Y 坐标"), (step.yaw_deg, "航向角"), (step.dwell_s, "停留时间")): _finite(value, label, index)
             if not step.use_yaw or not step.stop or step.dwell_s < 0: raise CodeGenerationError(f"步骤 {index} 的 GOTO 语义不受阻塞接口支持。")
-            current_x, current_y = step.x_mm, step.y_mm
+            current_x, current_y, current_yaw = step.x_mm, step.y_mm, step.yaw_deg
         elif isinstance(step, RotateInPlace):
             _finite(step.yaw_deg, "航向角", index)
+            current_yaw = step.yaw_deg
         elif isinstance(step, ContinuousPathSegment):
             if len(step.points) < 2: raise CodeGenerationError(f"步骤 {index} 的连续路径至少需要两个点。")
             first = step.points[0]
-            if not math.isclose(first.x_mm, current_x, abs_tol=1e-6) or not math.isclose(first.y_mm, current_y, abs_tol=1e-6):
+            if (not math.isclose(first.x_mm, current_x, abs_tol=1e-6)
+                    or not math.isclose(first.y_mm, current_y, abs_tol=1e-6)
+                    or not math.isclose(first.yaw_deg, current_yaw, abs_tol=1e-6)):
                 raise CodeGenerationError(f"步骤 {index} 的入口点必须与上一动作终点一致。")
             for point_index, point in enumerate(step.points):
                 for value, label in ((point.x_mm, "X 坐标"), (point.y_mm, "Y 坐标"), (point.yaw_deg, "航向角")): _finite(value, label, index)
                 if point_index and math.hypot(point.x_mm - step.points[point_index-1].x_mm, point.y_mm - step.points[point_index-1].y_mm) < 1.0:
                     raise CodeGenerationError(f"步骤 {index} 的连续路径相邻点距离必须至少为 1 mm。")
-            current_x, current_y = step.points[-1].x_mm, step.points[-1].y_mm
+            current_x, current_y, current_yaw = step.points[-1].x_mm, step.points[-1].y_mm, step.points[-1].yaw_deg
         else: raise CodeGenerationError(f"步骤 {index} 使用了不支持的动作类型。")
     return []
 

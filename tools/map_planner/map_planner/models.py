@@ -10,11 +10,8 @@ from typing import Literal, Union
 FIELD_SIZE_MM = 2400.0
 CAR_SIZE_MM = 300.0
 MAP_VERSION = 7
-MAP_VERSION_V5 = 5
-MAP_VERSION_V6 = 6
 StartKind = Literal["zone_1", "zone_2", "custom"]
 # 仅用于旧调用方的类型兼容；v7 的持久化语义由 steps 决定。
-PlanMode = Literal["stop_point", "continuous"]
 
 
 @dataclass
@@ -91,20 +88,10 @@ class Plan:
     start_heading_deg: float = 180.0
     steps: list[MotionStep] = field(default_factory=list)
     layout: MapLayout = field(default_factory=MapLayout)
-    migration_warnings: list[str] = field(default_factory=list, repr=False, compare=False)
-
     # 临时兼容旧 GUI：v7 的持久化和代码生成只使用 steps。
     @property
-    def mode(self) -> PlanMode:
-        return "stop_point"
-
-    @property
-    def waypoints(self) -> list[MotionStep]:
-        return self.steps
-
-    @property
-    def path_points(self) -> list[PathPosePoint]:
-        return []
+    def _legacy_normalize_property(self) -> None:
+        self.updated_at = datetime.now(timezone.utc).isoformat()
 
     def normalize(self) -> None:
         self.updated_at = datetime.now(timezone.utc).isoformat()
@@ -135,14 +122,8 @@ class Plan:
     def from_dict(cls, value: dict[str, object]) -> "Plan":
         if not isinstance(value, dict):
             raise ValueError("方案 JSON 格式无效")
-        warnings: list[str] = []
-        version = value.get("map_version")
-        if version == MAP_VERSION_V5:
-            value, warnings = migrate_v5_plan(value)
-        elif version == MAP_VERSION_V6:
-            value, warnings = migrate_v6_plan(value)
         if value.get("map_version") != MAP_VERSION:
-            raise ValueError("不支持的地图方案版本")
+            raise ValueError("仅支持 map_version: 7 的流程方案")
         try:
             start, steps_value, layout = value["start"], value.get("steps", []), value["layout"]
             if not isinstance(start, dict) or not isinstance(steps_value, list) or not isinstance(layout, dict):
@@ -168,28 +149,6 @@ class Plan:
                 start_kind=kind, start_paper_x_mm=float(start["paper_x_mm"]), start_paper_y_mm=float(start["paper_y_mm"]),
                 start_heading_deg=float(start["heading_deg"]), steps=steps,
                 layout=MapLayout(obstacles=[Obstacle(float(item["paper_x_mm"]), float(item["paper_y_mm"])) for item in obstacles],
-                    raw_center_x_mm=float(layout["raw_center_x_mm"]), qr_center_y_mm=float(layout["qr_center_y_mm"])), migration_warnings=warnings)
+                    raw_center_x_mm=float(layout["raw_center_x_mm"]), qr_center_y_mm=float(layout["qr_center_y_mm"])))
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("方案 JSON 格式无效") from error
-
-
-def _migrate_legacy(value: dict[str, object], version: int) -> tuple[dict[str, object], list[str]]:
-    if value.get("map_version") != version: raise ValueError(f"仅支持迁移 map_version: {version} 的方案")
-    steps = value.get("commands", []) if value.get("mode", "stop_point") == "stop_point" else [{"type": "continuous_path", "points": value.get("path_points", [])}]
-    migrated = {key: item for key, item in value.items() if key not in ("mode", "commands", "path_points")}
-    migrated.update({"map_version": MAP_VERSION, "steps": steps})
-    return migrated, [f"已从 map_version: {version} 迁移为统一步骤流程。"]
-
-
-def migrate_v5_plan(value: dict[str, object]) -> tuple[dict[str, object], list[str]]:
-    return _migrate_legacy(value, MAP_VERSION_V5)
-
-
-def migrate_v6_plan(value: dict[str, object]) -> tuple[dict[str, object], list[str]]:
-    return _migrate_legacy(value, MAP_VERSION_V6)
-
-
-def convert_plan_mode(plan: Plan, mode: PlanMode) -> None:
-    """旧 GUI 的兼容入口；v7 新流程不再以全局模式切换。"""
-    if mode != "stop_point":
-        raise ValueError("请在流程列表中新增连续路径段，而非切换全局模式。")
