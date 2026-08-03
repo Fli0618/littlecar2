@@ -46,10 +46,13 @@ from vision import (
     render_camera_preview,
 )
 
+# Jetson 与 STM32 的固定串口链路；修改时需与下位机串口配置保持一致。
 SERIAL_PORT = "/dev/ttyTHS1"
 SERIAL_BAUDRATE = 115200
+# 两路相机的 V4L2 设备路径，二维码任务使用 QR，相机视觉任务使用 VISION。
 CAMERA_QR_DEVICE = "/dev/video0"
 CAMERA_VISION_DEVICE = "/dev/video2"
+# 原始相机帧尺寸契约；STM32 按 640x480 像素坐标解释检测结果，不能改为模型 imgsz。
 QR_FRAME_WIDTH = 640
 QR_FRAME_HEIGHT = 480
 VISION_FRAME_WIDTH = 640
@@ -57,6 +60,7 @@ VISION_FRAME_HEIGHT = 480
 MODEL_BACKEND = "engine"  # "pt" or "engine"
 DEFAULT_PERIOD_MS = 40
 MAX_TARGETS = 8
+# 仅用于方形模型预热输入，不代表相机原始帧尺寸或 STM32 坐标系。
 MODEL_WARMUP_FRAME_SIZE = 640
 SERVICE_POLL_INTERVAL_MS = 1
 ELAPSED_UPDATE_INTERVAL_MS = 200
@@ -66,6 +70,7 @@ PWM_DUTY_CYCLE_PERCENT = 100.0
 LIGHT_SETTLE_SECONDS = 0.3
 ENABLE_CAMERA_PREVIEW_UI = True
 CAMERA_PREVIEW_PERIOD_MS = 100
+# 仅调整 GUI 准星显示位置；不会修改检测结果或 STM32 视觉伺服参考点。
 QR_PREVIEW_AIM_OFFSET_X_PX = 0
 QR_PREVIEW_AIM_OFFSET_Y_PX = 0
 VISION_PREVIEW_AIM_OFFSET_X_PX = 0
