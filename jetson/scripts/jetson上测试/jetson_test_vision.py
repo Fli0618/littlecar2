@@ -6,6 +6,7 @@ import json
 import time
 
 import cv2
+import Jetson.GPIO as GPIO
 
 from vision import advance_detect_circle, advance_detect_color, configure_model_backend, reset_advance_tracking
 
@@ -14,6 +15,10 @@ CAMERA_DEVICE = "/dev/video0"
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
 DETECTION_PERIOD_MS = 40
+PWM_PIN = 32  # BOARD 编号：40 针排针的物理脚 32，也就是 GPIO07
+PWM_FREQUENCY_HZ = 10000
+PWM_DUTY_CYCLE_PERCENT = 100.0
+LIGHT_SETTLE_SECONDS = 0.3
 
 
 def _print_result(name: str, result: dict[str, object], inference_ms: float) -> None:
@@ -22,6 +27,33 @@ def _print_result(name: str, result: dict[str, object], inference_ms: float) -> 
         f"inference_ms={inference_ms:.1f}",
         flush=True,
     )
+
+
+def _start_fill_light():
+    """初始化物理脚 32 的 PWM 补光灯并以最大亮度开启。"""
+    pwm = GPIO.PWM(PWM_PIN, PWM_FREQUENCY_HZ)
+    pwm.start(PWM_DUTY_CYCLE_PERCENT)
+    print(
+        f"fill light enabled pin={PWM_PIN} frequency_hz={PWM_FREQUENCY_HZ} "
+        f"duty_cycle_percent={PWM_DUTY_CYCLE_PERCENT:.1f}",
+        flush=True,
+    )
+    return pwm
+
+
+def _stop_fill_light(pwm, gpio_configured: bool) -> None:
+    """将补光灯置低并释放 GPIO，避免视觉测试退出后灯常亮。"""
+    if pwm is not None:
+        try:
+            pwm.ChangeDutyCycle(0)
+            pwm.stop()
+        except Exception as error:
+            print(f"fill light stop failed: {error}", flush=True)
+    if gpio_configured:
+        try:
+            GPIO.output(PWM_PIN, GPIO.LOW)
+        finally:
+            GPIO.cleanup(PWM_PIN)
 
 
 def main() -> None:
@@ -35,8 +67,16 @@ def main() -> None:
     camera.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
     reset_advance_tracking()
     frame_number = 0
+    pwm = None
+    gpio_configured = False
 
     try:
+        GPIO.setmode(GPIO.BOARD)
+        GPIO.setup(PWM_PIN, GPIO.OUT, initial=GPIO.LOW)
+        gpio_configured = True
+        pwm = _start_fill_light()
+        time.sleep(LIGHT_SETTLE_SECONDS)
+
         while True:
             started = time.perf_counter()
             ok, frame_bgr = camera.read()
@@ -65,6 +105,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nVision test stopped.", flush=True)
     finally:
+        _stop_fill_light(pwm, gpio_configured)
         reset_advance_tracking()
         camera.release()
 
