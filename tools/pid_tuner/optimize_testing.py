@@ -120,7 +120,8 @@ def main() -> int:
     print(f"我们将测试 {args.iterations} 组特制的 PID 参数。")
     print(f"每组进行：【更新PID】->【归零】->【跑2000往返】->【性能打分比对】")
 
-    # 准备进行比对的六组实验参数（依次渐进增加阻尼和增益，寻找最优峰值）
+    # 准备进行比对的三组实验参数（依次渐进增加阻尼和增益，寻找最优峰值）
+    # 第一组：更灵敏的位置环
     configs_to_test = [
         # 1. 探索位置Kp大、Kd阻尼提升
         PidConfig(kp_pos=1.40, ki_pos=0.12, kd_pos=0.72, kp_yaw=2.60, ki_yaw=1.0, kd_yaw=0.85),
@@ -128,12 +129,6 @@ def main() -> int:
         PidConfig(kp_pos=1.30, ki_pos=0.15, kd_pos=0.70, kp_yaw=2.80, ki_yaw=1.0, kd_yaw=0.90),
         # 3. 探索极速位置响应、中航向纠偏
         PidConfig(kp_pos=1.50, ki_pos=0.10, kd_pos=0.78, kp_yaw=2.50, ki_yaw=1.0, kd_yaw=0.80),
-        # 4. 探索更柔和的位置与高航向阻尼
-        PidConfig(kp_pos=1.20, ki_pos=0.10, kd_pos=0.65, kp_yaw=2.70, ki_yaw=1.0, kd_yaw=0.85),
-        # 5. 原厂参数微调
-        PidConfig(kp_pos=1.45, ki_pos=0.11, kd_pos=0.75, kp_yaw=2.65, ki_yaw=1.0, kd_yaw=0.82),
-        # 6. 高位置高航向强约束组合
-        PidConfig(kp_pos=1.55, ki_pos=0.12, kd_pos=0.80, kp_yaw=2.75, ki_yaw=1.0, kd_yaw=0.88),
     ]
 
     # 必要时截断超出参数项

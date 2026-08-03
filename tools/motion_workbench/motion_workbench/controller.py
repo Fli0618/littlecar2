@@ -15,7 +15,8 @@ from map_planner.bezier import generate_bezier_path_points
 from map_planner.models import (BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan, Pose, RotateInPlace,
                                 Waypoint)
 
-from .models import (ExperimentResult, PathTelemetry, PlanExecution, PlanExecutionState, SinglePointState, TargetPose)
+from .models import (ExperimentResult, PathTelemetry, PlanExecution, PlanExecutionState, SinglePointState, TargetPose,
+                     inverse_transform_target_pose)
 from .path_transfer import build_path_begin, build_path_chunks, build_path_commit, build_path_start
 
 
@@ -57,6 +58,9 @@ class MotionWorkbenchController(QObject):
         self._plan_active_step_name = ""
         self._plan_reason = ""
         self._plan_path_id = 100
+        self._command_swap_xy = False
+        self._command_flip_x = False
+        self._command_flip_y = False
         self.session.telemetry.connect(self.on_telemetry)
         self.session.motion_changed.connect(self._on_motion_changed)
         self.session.status.connect(self.status_changed)
@@ -137,8 +141,33 @@ class MotionWorkbenchController(QObject):
         self._started_at = time.monotonic()
         self._last_state = SinglePointState.RUNNING
         self.motion_state_changed.emit(self._last_state.value)
-        self.session.start_motion(goal)
+        self.session.start_motion(self._transform_goal_for_command(goal))
         return True
+
+    def set_command_axis_transform(
+        self, swap_xy: bool, flip_x: bool, flip_y: bool
+    ) -> None:
+        """Use the inverse display transform for every board-bound pose."""
+        self._command_swap_xy = bool(swap_xy)
+        self._command_flip_x = bool(flip_x)
+        self._command_flip_y = bool(flip_y)
+
+    def _transform_goal_for_command(self, goal: MotionGoal) -> MotionGoal:
+        pose = inverse_transform_target_pose(
+            TargetPose(goal.x_mm, goal.y_mm, goal.yaw_deg),
+            self._command_swap_xy, self._command_flip_x, self._command_flip_y)
+        return replace(goal, x_mm=pose.x_mm, y_mm=pose.y_mm, yaw_deg=pose.yaw_deg)
+
+    def _transform_path_for_command(
+        self, points: list[PathPosePoint]
+    ) -> list[PathPosePoint]:
+        transformed: list[PathPosePoint] = []
+        for point in points:
+            pose = inverse_transform_target_pose(
+                TargetPose(point.x_mm, point.y_mm, point.yaw_deg),
+                self._command_swap_xy, self._command_flip_x, self._command_flip_y)
+            transformed.append(PathPosePoint(pose.x_mm, pose.y_mm, pose.yaw_deg))
+        return transformed
 
     def stop(self) -> None:
         if self._plan_state == PlanExecutionState.RUNNING:
@@ -181,7 +210,8 @@ class MotionWorkbenchController(QObject):
         self.path_telemetry_changed.emit(item)
 
     def upload_path(self, path_id: int, points: list[PathPosePoint]) -> None:
-        self.session.upload_path(build_path_begin(path_id, points), build_path_chunks(path_id, points),
+        command_points = self._transform_path_for_command(points)
+        self.session.upload_path(build_path_begin(path_id, command_points), build_path_chunks(path_id, command_points),
                                  build_path_commit(path_id))
 
     def start_path(self, path_id: int) -> None:
@@ -278,15 +308,15 @@ class MotionWorkbenchController(QObject):
         self._emit_plan_execution()
         try:
             if isinstance(step, Waypoint):
-                self.session.start_motion(MotionGoal(
+                self.session.start_motion(self._transform_goal_for_command(MotionGoal(
                     step.x_mm, step.y_mm, step.yaw_deg, step.vmax_mm_s, step.wmax_deg_s,
                     round(step.timeout_s * 1000), step.use_yaw, True,
-                ))
+                )))
             elif isinstance(step, RotateInPlace):
-                self.session.start_motion(MotionGoal(
+                self.session.start_motion(self._transform_goal_for_command(MotionGoal(
                     self._plan_pose.x_mm, self._plan_pose.y_mm, step.yaw_deg, 0.0, step.wmax_deg_s,
                     round(step.timeout_s * 1000), True, False,
-                ))
+                )))
             elif isinstance(step, ContinuousPathSegment):
                 self._send_plan_path(step.points)
             elif isinstance(step, BezierPathSegment):
@@ -308,7 +338,8 @@ class MotionWorkbenchController(QObject):
     def _send_plan_path(self, points: list[PathPosePoint]) -> None:
         path_id = self._plan_path_id
         self._plan_path_id += 1
-        self.session.upload_path(build_path_begin(path_id, points), build_path_chunks(path_id, points),
+        command_points = self._transform_path_for_command(points)
+        self.session.upload_path(build_path_begin(path_id, command_points), build_path_chunks(path_id, command_points),
                                  build_path_commit(path_id))
         self.session.start_path(build_path_start(path_id))
 

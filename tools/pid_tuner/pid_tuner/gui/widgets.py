@@ -23,6 +23,9 @@ GOTO_VMAX_MM_S = 1200.0
 GOTO_WMAX_DEG_S = 120.0
 GOTO_TIMEOUT_MS = 15000
 GOTO_YAW_LABEL = "yaw 相对初始化零点 deg"
+HEADING_MODE_WIT = "WIT"
+HEADING_MODE_OPS = "OPS"
+HEADING_MODE_NONE = "NONE"
 
 
 def number(value: float = 0.0, minimum: float = -100000.0,
@@ -163,13 +166,15 @@ class ConnectionMotionPanel(QWidget):
         self.timeout = QSpinBox()
         self.timeout.setRange(1, GOTO_TIMEOUT_MS)
         self.timeout.setValue(GOTO_TIMEOUT_MS)
-        self.use_yaw = QCheckBox("启用航向约束")
-        self.use_yaw.setChecked(True)
         self.large_yaw_align = QCheckBox("航向误差大时先对准")
         self.large_yaw_align.setEnabled(False)
         self.large_yaw_align.setToolTip("仅对位置和航向同时启用的 GOTO 生效。")
         self.yaw_source = QComboBox()
-        self.yaw_source.addItems(["WIT", "OPS"])
+        self.yaw_source.addItem("WIT yaw（用于航向控制）", HEADING_MODE_WIT)
+        self.yaw_source.addItem("OPS yaw（用于航向控制）", HEADING_MODE_OPS)
+        self.yaw_source.addItem("不使用航向（仅控制 X/Y）", HEADING_MODE_NONE)
+        self._connected = False
+        self._motion_active = False
         self.reset_origin = QPushButton("重置零点")
         self.goto = QPushButton("开始组合 GOTO")
         self.goto_position = QPushButton("发送位置 GOTO")
@@ -190,9 +195,8 @@ class ConnectionMotionPanel(QWidget):
         for name, widget in zip(
                 ("X mm", "Y mm", GOTO_YAW_LABEL, "vmax mm/s", "wmax deg/s"), self.goal):
             motion.addRow(name, widget)
-        motion.addRow(self.use_yaw)
         motion.addRow(self.large_yaw_align)
-        motion.addRow("航向 PID 源", self.yaw_source)
+        motion.addRow("航向控制模式", self.yaw_source)
         motion.addRow(self.reset_origin)
         motion.addRow("超时 ms", self.timeout)
         motion.addRow(self.goto)
@@ -203,20 +207,61 @@ class ConnectionMotionPanel(QWidget):
 
         self.refresh_ports_button.clicked.connect(self.refresh_ports_requested)
         self.connect_button.clicked.connect(self._toggle_connection)
-        self.goto.clicked.connect(lambda: self._emit_motion(True, self.use_yaw.isChecked()))
+        self.goto.clicked.connect(lambda: self._emit_motion(True, self.uses_yaw()))
         self.goto_position.clicked.connect(lambda: self._emit_motion(True, False))
         self.goto_yaw.clicked.connect(lambda: self._emit_motion(False, True))
         self.stop.clicked.connect(self.stop_requested)
-        self.yaw_source.currentTextChanged.connect(self.yaw_source_requested)
+        self.yaw_source.currentIndexChanged.connect(self._heading_mode_changed)
         self.reset_origin.clicked.connect(self.origin_reset_requested)
         self.large_yaw_align.toggled.connect(self.goto_strategy_requested)
+        self._update_heading_controls()
 
     def set_available_ports(self, ports: list[str]) -> None:
         self.port.clear()
         self.port.addItems(ports)
 
     def set_connected(self, connected: bool) -> None:
+        self._connected = connected
         self.connect_button.setText("断开" if connected else "连接")
+        self._update_heading_controls()
+
+    def set_motion_active(self, active: bool) -> None:
+        """锁定运行中的航向模式，避免一次 GOTO 中途改变控制语义。"""
+        self._motion_active = active
+        self._update_heading_controls()
+
+    def heading_mode(self) -> str:
+        """返回协议使用的航向模式标识。"""
+        return str(self.yaw_source.currentData())
+
+    def uses_yaw(self) -> bool:
+        return self.heading_mode() != HEADING_MODE_NONE
+
+    def set_heading_mode(self, mode: str) -> None:
+        """同步板端实际航向源，但不再次发送设置命令。"""
+        index = self.yaw_source.findData(mode.upper())
+        if index < 0:
+            raise ValueError(f"unknown heading mode: {mode}")
+        self.yaw_source.blockSignals(True)
+        self.yaw_source.setCurrentIndex(index)
+        self.yaw_source.blockSignals(False)
+        self._update_heading_controls()
+
+    def _heading_mode_changed(self) -> None:
+        mode = self.heading_mode()
+        self._update_heading_controls()
+        self.yaw_source_requested.emit(mode)
+
+    def _update_heading_controls(self) -> None:
+        uses_yaw = self.uses_yaw()
+        self.goal[2].setEnabled(uses_yaw)
+        self.goal[4].setEnabled(uses_yaw)
+        self.goto_yaw.setEnabled(uses_yaw)
+        self.large_yaw_align.setEnabled(
+            uses_yaw and self._connected and not self._motion_active
+        )
+        self.yaw_source.setEnabled(not self._motion_active)
+        self.goto.setText("开始位置+航向 GOTO" if uses_yaw else "开始仅位置 GOTO")
 
     def current_motion_goal(self, use_position: bool, use_yaw: bool) -> MotionGoal:
         return MotionGoal(*(widget.value() for widget in self.goal), self.timeout.value(),

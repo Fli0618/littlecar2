@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+import os
+import unittest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QWheelEvent
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+
+from motion_workbench.control_panel import (
+    HEADING_MODE_NONE,
+    HEADING_MODE_OPS,
+    PointControlPanel,
+    ProtectedDoubleSpinBox,
+    WorkbenchPidControlPanel,
+)
+from pid_tuner.models import PidConfig
+
+
+class ControlPanelTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_protected_spinbox_ignores_wheel_and_allows_double_click_edit(self) -> None:
+        box = ProtectedDoubleSpinBox()
+        box.setRange(0.0, 10.0)
+        box.setSingleStep(0.5)
+        box.setValue(1.0)
+        editor = box.lineEdit()
+
+        wheel = QWheelEvent(
+            QPointF(2.0, 2.0), QPointF(2.0, 2.0), QPoint(), QPoint(0, 120),
+            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.ScrollUpdate, False,
+        )
+        box.wheelEvent(wheel)
+        self.assertEqual(box.value(), 1.0)
+        self.assertFalse(wheel.isAccepted())
+        self.assertTrue(editor.isReadOnly())
+
+        box.show()
+        QTest.mouseDClick(editor, Qt.MouseButton.LeftButton)
+        self.assertFalse(editor.isReadOnly())
+        editor.setText("2.5")
+        box.interpretText()
+        box.editingFinished.emit()
+        self.assertEqual(box.value(), 2.5)
+        self.assertTrue(editor.isReadOnly())
+
+        box.stepUp()
+        self.assertEqual(box.value(), 3.0)
+        box.close()
+
+    def test_workbench_pid_panel_round_trips_values(self) -> None:
+        panel = WorkbenchPidControlPanel()
+        expected = PidConfig(1.1, 0.02, 0.3, 2.2, 0.04, 0.5)
+        applied: list[PidConfig] = []
+        panel.apply_requested.connect(applied.append)
+        try:
+            panel.set_pid(expected)
+            panel.apply_pid.click()
+            self.assertEqual(panel.current_pid(), expected)
+            self.assertEqual(applied, [expected])
+            self.assertTrue(all(box.lineEdit().isReadOnly() for box in panel.pid))
+        finally:
+            panel.close()
+
+    def test_heading_mode_controls_single_point_goal_flags(self) -> None:
+        panel = PointControlPanel()
+        modes: list[str] = []
+        goals = []
+        panel.heading_mode_requested.connect(modes.append)
+        panel.send_requested.connect(goals.append)
+        try:
+            panel.heading_mode.setCurrentIndex(panel.heading_mode.findData(HEADING_MODE_NONE))
+            panel.goto.click()
+            self.assertEqual(modes[-1], HEADING_MODE_NONE)
+            self.assertFalse(goals[-1].use_yaw)
+            self.assertTrue(goals[-1].use_position)
+            self.assertFalse(panel.yaw.isEnabled())
+            self.assertFalse(panel.wmax.isEnabled())
+            self.assertFalse(panel.rotate.isEnabled())
+
+            panel.heading_mode.setCurrentIndex(panel.heading_mode.findData(HEADING_MODE_OPS))
+            panel.goto.click()
+            self.assertEqual(modes[-1], HEADING_MODE_OPS)
+            self.assertTrue(goals[-1].use_yaw)
+            self.assertTrue(panel.yaw.isEnabled())
+            self.assertTrue(panel.rotate.isEnabled())
+        finally:
+            panel.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

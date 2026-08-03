@@ -31,7 +31,8 @@ from .plots import TelemetryPlots
 from .session import SessionController
 from .smooth_scroll import SmoothScrollArea
 from .widgets import (GOTO_TIMEOUT_MS, GOTO_VMAX_MM_S, GOTO_WMAX_DEG_S,
-                      GOTO_YAW_LABEL, ConnectionMotionPanel, PidControlPanel)
+                      GOTO_YAW_LABEL, HEADING_MODE_NONE,
+                      ConnectionMotionPanel, PidControlPanel)
 
 
 HEARTBEAT_INTERVAL_MS = 250
@@ -87,6 +88,7 @@ class MainWindow(QMainWindow):
         self.session = SessionController()
         self.recording = False
         self.recorded: list[Telemetry] = []
+        self._active_heading_mode = "WIT"
         self._build()
         self._wire()
         self.timer = QTimer(self)
@@ -116,7 +118,6 @@ class MainWindow(QMainWindow):
         self.status = self.connection_motion.status
         self.goal = self.connection_motion.goal
         self.timeout = self.connection_motion.timeout
-        self.use_yaw = self.connection_motion.use_yaw
         self.large_yaw_align = self.connection_motion.large_yaw_align
         self.yaw_source = self.connection_motion.yaw_source
         self.reset_origin = self.connection_motion.reset_origin
@@ -178,7 +179,7 @@ class MainWindow(QMainWindow):
         self.connection_motion.disconnect_requested.connect(self.disconnect_port)
         self.connection_motion.motion_requested.connect(self.request_motion)
         self.connection_motion.stop_requested.connect(self.session.stop)
-        self.connection_motion.yaw_source_requested.connect(self.session.set_yaw_source)
+        self.connection_motion.yaw_source_requested.connect(self.request_heading_mode)
         self.connection_motion.origin_reset_requested.connect(self.session.reset_origin)
         self.connection_motion.goto_strategy_requested.connect(self.session.set_goto_strategy)
         self.pid_control.read_requested.connect(self.session.read_pid)
@@ -233,7 +234,8 @@ class MainWindow(QMainWindow):
         self.status.setText(f"PID 修订号 {revision}")
 
     def start_motion(self) -> None:
-        self.request_motion(self.connection_motion.current_motion_goal(True, self.use_yaw.isChecked()))
+        self.request_motion(self.connection_motion.current_motion_goal(
+            True, self.connection_motion.uses_yaw()))
 
     def start_position_motion(self) -> None:
         self.request_motion(self.connection_motion.current_motion_goal(True, False))
@@ -247,24 +249,42 @@ class MainWindow(QMainWindow):
             self.status.setText(f"错误: {error}")
             return
         self.session.start_motion(goal)
+        self._active_heading_mode = (
+            self.connection_motion.heading_mode() if goal.use_yaw else HEADING_MODE_NONE
+        )
+        self.plots.set_heading_mode(self._active_heading_mode)
         kind = "组合" if goal.use_position and goal.use_yaw else ("位置" if goal.use_position else "角度")
         self.status.setText(f"已请求 {kind} GOTO")
         self.buffer.add_event(f"{kind} GOTO")
+
+    def request_heading_mode(self, mode: str) -> None:
+        """将三态 UI 映射为板端航向源和 GOTO 航向约束。"""
+        self._active_heading_mode = mode
+        self.plots.set_heading_mode(mode)
+        if mode == HEADING_MODE_NONE:
+            self.status.setText("已关闭航向控制；后续组合 GOTO 仅控制 X/Y")
+            self.buffer.add_event("航向控制关闭")
+            return
+        self.session.set_yaw_source(mode)
 
     def on_telemetry(self, item: Telemetry) -> None:
         self.buffer.append(item)
         if self.recording:
             self.recorded.append(item)
         status = format_telemetry_status(item)
+        status += (" 航向控制=关闭" if self._active_heading_mode == HEADING_MODE_NONE
+                   else f" 航向控制={self._active_heading_mode}")
         if item.heartbeat_timed_out:
             status += " 心跳超时停车"
         elif item.remote_goal_active:
             status += f" 心跳正常/{item.heartbeat_age_ms}ms"
         self.status.setText(status)
-        if item.yaw_source != self.yaw_source.currentText():
-            self.yaw_source.blockSignals(True)
-            self.yaw_source.setCurrentText(item.yaw_source)
-            self.yaw_source.blockSignals(False)
+        if (self.connection_motion.heading_mode() != HEADING_MODE_NONE and
+                item.yaw_source != self.connection_motion.heading_mode()):
+            self.connection_motion.set_heading_mode(item.yaw_source)
+            if self._active_heading_mode != HEADING_MODE_NONE:
+                self._active_heading_mode = item.yaw_source
+                self.plots.set_heading_mode(item.yaw_source)
 
     def refresh(self) -> None:
         self.plots.refresh(self.buffer)
@@ -275,6 +295,11 @@ class MainWindow(QMainWindow):
         self.status.setText(f"PID 已应用，修订号 {revision}")
 
     def on_yaw_source_changed(self, source: str) -> None:
+        if self.connection_motion.heading_mode() != HEADING_MODE_NONE:
+            self.connection_motion.set_heading_mode(source)
+        if self._active_heading_mode != HEADING_MODE_NONE:
+            self._active_heading_mode = source
+            self.plots.set_heading_mode(source)
         self.status.setText(f"航向 PID 数据源已切换为 {source}")
         self.buffer.add_event(f"航向源 {source}")
 
@@ -282,12 +307,13 @@ class MainWindow(QMainWindow):
         self.large_yaw_align.blockSignals(True)
         self.large_yaw_align.setChecked(enabled)
         self.large_yaw_align.blockSignals(False)
-        self.large_yaw_align.setEnabled(self.session.connected and not self.session.motion_active)
+        self.connection_motion.set_connected(self.session.connected)
+        self.connection_motion.set_motion_active(self.session.motion_active)
         self.status.setText("大航向误差先对准已启用" if enabled else "大航向误差先对准已关闭")
         self.buffer.add_event("GOTO 策略: 先对准航向" if enabled else "GOTO 策略: 并行控制")
 
     def on_motion_changed(self, active: bool) -> None:
-        self.large_yaw_align.setEnabled(self.session.connected and not active)
+        self.connection_motion.set_motion_active(active)
         self.buffer.add_event("运动状态改变")
 
     def on_origin_reset(self) -> None:
@@ -343,6 +369,8 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "通信错误", message)
 
     def closeEvent(self, event: object) -> None:
+        self.timer.stop()
+        self.heartbeat_timer.stop()
         self.session.shutdown()
         event.accept()  # type: ignore[attr-defined]
 

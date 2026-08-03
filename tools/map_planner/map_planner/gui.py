@@ -234,7 +234,7 @@ class MapEditorWidget(QWidget):
     hardware_enabled_changed = Signal(bool)
     single_step_requested = Signal(int)
     continuous_requested = Signal(int)
-    runtime_axis_flip_changed = Signal(bool, bool)
+    runtime_axis_transform_changed = Signal(bool, bool, bool)
     execution_stop_requested = Signal()
     execution_state_changed = Signal(object)
 
@@ -406,9 +406,18 @@ class MapEditorWidget(QWidget):
                 return
             self.continuous_requested.emit(self.active_index)
 
-    def _emit_runtime_axis_flip(self) -> None:
-            self.runtime_axis_flip_changed.emit(self.execution_flip_x.isChecked(),
-                                                self.execution_flip_y.isChecked())
+    def _emit_runtime_axis_transform(self) -> None:
+            self.runtime_axis_transform_changed.emit(
+                self.execution_swap_xy.isChecked(),
+                self.execution_flip_x.isChecked(),
+                self.execution_flip_y.isChecked())
+
+    def _set_yellow_zone_passage(self, allowed: bool) -> None:
+            self.yellow_zone_status_label.setText(
+                "黄色区限制已关闭：实车运行前请确认平台可安全通行。"
+                if allowed else "黄色区限制已启用：车体扫掠不得接触黄色平台。")
+            self.redraw()
+            self.rebuild_timeline_after_edit()
 
     def _refresh_execution_status(self) -> None:
             if not hasattr(self, "execution_status_label"):
@@ -529,6 +538,7 @@ class MapEditorWidget(QWidget):
             self.execution_step_button = QPushButton("单步执行")
             self.execution_run_button = QPushButton("连贯执行")
             self.execution_stop_button = QPushButton("停止")
+            self.execution_swap_xy = QCheckBox("显示交换 X/Y")
             self.execution_flip_x = QCheckBox("显示反转 X")
             self.execution_flip_y = QCheckBox("显示反转 Y")
             self.execution_step_button.clicked.connect(self._request_single_execution)
@@ -538,14 +548,25 @@ class MapEditorWidget(QWidget):
             execution_row.addWidget(self.execution_step_button)
             execution_row.addWidget(self.execution_run_button)
             execution_row.addWidget(self.execution_stop_button)
+            execution_row.addWidget(self.execution_swap_xy)
             execution_row.addWidget(self.execution_flip_x)
             execution_row.addWidget(self.execution_flip_y)
             box.addLayout(execution_row)
-            self.execution_flip_x.toggled.connect(self._emit_runtime_axis_flip)
-            self.execution_flip_y.toggled.connect(self._emit_runtime_axis_flip)
+            self.execution_swap_xy.toggled.connect(self._emit_runtime_axis_transform)
+            self.execution_flip_x.toggled.connect(self._emit_runtime_axis_transform)
+            self.execution_flip_y.toggled.connect(self._emit_runtime_axis_transform)
             self.execution_status_label = QLabel("实机执行未启用")
             self.execution_status_label.setWordWrap(True)
             box.addWidget(self.execution_status_label)
+            self.allow_yellow_zone = QCheckBox("允许通过黄色区")
+            self.allow_yellow_zone.setChecked(True)
+            self.allow_yellow_zone.toggled.connect(self._set_yellow_zone_passage)
+            box.addWidget(self.allow_yellow_zone)
+            self.yellow_zone_status_label = QLabel(
+                "黄色区限制已关闭：实车运行前请确认平台可安全通行。")
+            self.yellow_zone_status_label.setWordWrap(True)
+            self.yellow_zone_status_label.setStyleSheet("color: #ef6c00;")
+            box.addWidget(self.yellow_zone_status_label)
             self.progress = QSlider(Qt.Orientation.Horizontal); self.progress.setRange(0, 0); self.progress.setEnabled(False)
             self.progress.sliderPressed.connect(self.pause); self.progress.valueChanged.connect(self.seek_timeline)
             box.addWidget(self.progress); self.progress_label = QLabel("进度：0.00 / 0.00 s"); box.addWidget(self.progress_label)
@@ -675,8 +696,8 @@ class MapEditorWidget(QWidget):
             return path
 
     def sweep_violations(self, sweep):
-            field=QRectF(0,0,FIELD_SIZE_MM,FIELD_SIZE_MM)
-            platforms=[QRectF(x,y,450,450) for x,y in PLATFORMS]
+            platforms = [] if self.allow_yellow_zone.isChecked() else [
+                QRectF(x, y, 450, 450) for x, y in PLATFORMS]
             platform_paths=[QPainterPath() for _ in platforms]
             for path,rect in zip(platform_paths,platforms): path.addRect(rect)
             hit_platform=QPainterPath(); out_of_bounds=False
