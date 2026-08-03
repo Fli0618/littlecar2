@@ -1,5 +1,7 @@
 # Core/Src 目录说明
 
+`AdvanceWorld_ResetOrigin()` 在 OPS 航向模式仅依赖新鲜 OPS 数据，在 WIT 航向模式额外要求新鲜 WIT 航向；重置先使用局部候选状态完成计算，失败不会清除已建立的原点或世界位姿。`advance_motion.c` 对位置、位姿和路径控制同时校验 OPS 位置与当前航向时间戳，航向超时时进入安全停止。
+
 `advance_test.c` 包含现场调试入口。`Test_MMCL()` 会使用当前底盘四个电机验证多电机速度命令的批量装载、广播发送、同步启动、正反转、停止和失能流程。调用前必须将车辆架空，并准备断电或急停措施；该函数不会自动接入启动流程。
 
 本目录保存 STM32 源文件和 HAL 回调入口。`comm_jetson.c` 负责 USART6 DMA + IDLE 接收、CRC 校验、SESSION 过滤、命令发送、结果缓存和二维码等待超时；`comm_stdio.c` 负责禁用 ARMCC5 semihosting 并将 `printf` 重定向到 USART1；`comm_tuner.c` 负责 USART1 DMA + IDLE 的二进制调参协议、PID/位姿命令分发、响应队列和心跳超时停车；`main.c` 负责初始化、TIM6 周期入口和 HAL 回调分发。

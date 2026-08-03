@@ -1,5 +1,7 @@
 # Core/Inc 目录说明
 
+世界坐标完整位姿要求 OPS 位置与当前选中航向均有效且未超时；调试 flags 中 `POSE_FRESH` 和 `YAW_FRESH` 分别表示两类时间戳的新鲜度，不改变调参遥测协议。
+
 `advance_test.h` 声明现场调试测试入口，包括仅手动调用的 `Test_MMCL()`。该测试会驱动当前底盘四个电机，使用前必须确认车辆架空并具备急停条件。
 
 本目录保存 STM32 业务模块的公共头文件。`advance_control.h` 定义底盘控制权，`advance_motion.h` 定义位姿外环运行时 PID 配置、版本化提交和读取接口；`comm_jetson.h` 定义 USART6 Jetson 视觉服务接口、检测结果和默认发送周期；`comm_tuner.h` 定义 USART1 在线调参协议的初始化、前台解析、心跳超时和 HAL 回调转发接口。
