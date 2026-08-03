@@ -37,8 +37,7 @@ typedef enum
   ADVANCE_WORLD_YAW_SOURCE_OPS
 } AdvanceWorld_YawSource_t;
 
-// #define ADVANCE_WORLD_DEFAULT_YAW_SOURCE ADVANCE_WORLD_YAW_SOURCE_WIT /*!< 上电默认航向 PID 数据源。 */
-#define ADVANCE_WORLD_DEFAULT_YAW_SOURCE ADVANCE_WORLD_YAW_SOURCE_OPS
+#define ADVANCE_WORLD_DEFAULT_YAW_SOURCE ADVANCE_WORLD_YAW_SOURCE_OPS /*!< 上电默认航向 PID 数据源。 */
 
   /* ResetOrigin: NO_OPS 表示 OPS 位置不可用；NOT_READY 可表示当前 WIT 航向不可用。 */
   typedef enum

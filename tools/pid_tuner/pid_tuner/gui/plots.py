@@ -10,14 +10,14 @@ class TelemetryPlots(QWidget):
     """Display pose and per-axis diagnostic values on a shared time axis."""
 
     _LINEAR_DEFAULT_RANGE_MM = 500.0
+    _SPEED_DEFAULT_RANGE_MM_S = 100.0
     _YAW_DEFAULT_RANGE_DEG = 180.0
     _MINIMUM_WIDTH = 900
     _MINIMUM_HEIGHT = 820
 
     _DIAGNOSTIC_TITLES = (
         ("X 误差 (mm)", "Y 误差 (mm)"),
-        ("X 命令-实际速度 (mm/s)", "Y 命令-实际速度 (mm/s)"),
-        ("X PID 积分项", "Y PID 积分项"),
+        ("X 误差积分累计 (mm*s)", "Y 误差积分累计 (mm*s)"),
     )
 
     def __init__(self) -> None:
@@ -26,7 +26,7 @@ class TelemetryPlots(QWidget):
         self.window_s = 30.0
         self.follow_latest = True
         self.mode = QComboBox()
-        self.mode.addItems(["误差", "速度", "积分项"])
+        self.mode.addItems(["误差", "积分累计"])
         self.follow = QPushButton("跟随最新")
         self.fit = QPushButton("适配纵轴")
         controls = QHBoxLayout()
@@ -42,11 +42,15 @@ class TelemetryPlots(QWidget):
         self.error_x = self.graphics.addPlot(row=0, col=1, title=self._DIAGNOSTIC_TITLES[0][0])
         self.position_y = self.graphics.addPlot(row=1, col=0, title="OPS Y 位置 (世界坐标, mm)")
         self.error_y = self.graphics.addPlot(row=1, col=1, title=self._DIAGNOSTIC_TITLES[0][1])
-        self.wit_yaw = self.graphics.addPlot(row=2, col=0, title="WIT 相对航向 (deg)")
-        self.error_wit_yaw = self.graphics.addPlot(row=2, col=1, title="WIT 航向误差 (deg)")
-        self.ops_yaw = self.graphics.addPlot(row=3, col=0, title="OPS 相对 Z 航向 (deg)")
-        self.error_ops_yaw = self.graphics.addPlot(row=3, col=1, title="OPS 航向误差 (deg)")
-        self.plots = (self.position_x, self.position_y, self.wit_yaw, self.ops_yaw, self.error_x, self.error_y, self.error_wit_yaw, self.error_ops_yaw)
+        self.speed_x = self.graphics.addPlot(row=2, col=0, title="X 速度 (mm/s)")
+        self.speed_y = self.graphics.addPlot(row=2, col=1, title="Y 速度 (mm/s)")
+        self.wit_yaw = self.graphics.addPlot(row=3, col=0, title="WIT 相对航向 (deg)")
+        self.error_wit_yaw = self.graphics.addPlot(row=3, col=1, title="WIT 航向误差 (deg)")
+        self.ops_yaw = self.graphics.addPlot(row=4, col=0, title="OPS 相对 Z 航向 (deg)")
+        self.error_ops_yaw = self.graphics.addPlot(row=4, col=1, title="OPS 航向误差 (deg)")
+        self.plots = (self.position_x, self.position_y, self.speed_x, self.speed_y,
+                      self.wit_yaw, self.ops_yaw, self.error_x, self.error_y,
+                      self.error_wit_yaw, self.error_ops_yaw)
         for plot in self.plots:
             plot.setXLink(self.position_x)
             plot.showGrid(x=True, y=True, alpha=0.25)
@@ -58,6 +62,10 @@ class TelemetryPlots(QWidget):
             "actual_x": self.position_x.plot(pen=pg.mkPen("#4ecdc4", width=2), name="实际 X"),
             "target_y": self.position_y.plot(pen=pg.mkPen("#c792ea", width=2), name="目标 Y"),
             "actual_y": self.position_y.plot(pen=pg.mkPen("#82aaff", width=2), name="实际 Y"),
+            "command_vx": self.speed_x.plot(pen=pg.mkPen("#f6c85f", width=2), name="命令 vx"),
+            "measured_vx": self.speed_x.plot(pen=pg.mkPen("#4ecdc4", width=2), name="实测 vx"),
+            "command_vy": self.speed_y.plot(pen=pg.mkPen("#c792ea", width=2), name="命令 vy"),
+            "measured_vy": self.speed_y.plot(pen=pg.mkPen("#82aaff", width=2), name="实测 vy"),
             "target_wit_yaw": self.wit_yaw.plot(pen=pg.mkPen("#f6c85f", width=2), name="目标 yaw"),
             "actual_wit_yaw": self.wit_yaw.plot(pen=pg.mkPen("#4ecdc4", width=2), name="WIT yaw"),
             "target_ops_yaw": self.ops_yaw.plot(pen=pg.mkPen("#f6c85f", width=2), name="目标 yaw"),
@@ -101,6 +109,10 @@ class TelemetryPlots(QWidget):
         self.curves["actual_x"].setData(times, [sample.actual[0] for sample in samples])
         self.curves["target_y"].setData(times, [sample.target[1] for sample in samples])
         self.curves["actual_y"].setData(times, [sample.actual[1] for sample in samples])
+        self.curves["command_vx"].setData(times, [sample.command_velocity[0] for sample in samples])
+        self.curves["measured_vx"].setData(times, [sample.measured_velocity[0] for sample in samples])
+        self.curves["command_vy"].setData(times, [sample.command_velocity[1] for sample in samples])
+        self.curves["measured_vy"].setData(times, [sample.measured_velocity[1] for sample in samples])
         targets = [sample.target[2] for sample in samples]
         wit_values = [sample.wit_yaw_deg for sample in samples]
         ops_values = [sample.ops_yaw_deg for sample in samples]
@@ -111,11 +123,6 @@ class TelemetryPlots(QWidget):
 
         if self.mode.currentIndex() == 0:
             data = [sample.error for sample in samples]
-        elif self.mode.currentIndex() == 1:
-            data = [
-                tuple(command - measured for command, measured in zip(sample.command_velocity, sample.measured_velocity))
-                for sample in samples
-            ]
         else:
             data = [sample.integrals for sample in samples]
         for index, curve in enumerate(self.diag[:2]):
@@ -158,6 +165,16 @@ class TelemetryPlots(QWidget):
             self._LINEAR_DEFAULT_RANGE_MM,
         )
         self._set_default_or_adaptive_y_range(
+            self.speed_x,
+            [value for sample in samples for value in (sample.command_velocity[0], sample.measured_velocity[0])],
+            self._SPEED_DEFAULT_RANGE_MM_S,
+        )
+        self._set_default_or_adaptive_y_range(
+            self.speed_y,
+            [value for sample in samples for value in (sample.command_velocity[1], sample.measured_velocity[1])],
+            self._SPEED_DEFAULT_RANGE_MM_S,
+        )
+        self._set_default_or_adaptive_y_range(
             self.wit_yaw,
             [value for sample in samples for value in (sample.target[2], sample.wit_yaw_deg)],
             self._YAW_DEFAULT_RANGE_DEG,
@@ -168,14 +185,11 @@ class TelemetryPlots(QWidget):
             self._YAW_DEFAULT_RANGE_DEG,
         )
 
-        if self.mode.currentIndex() == 0:
-            self._set_default_or_adaptive_y_range(self.error_x, [item[0] for item in diagnostic_data], self._LINEAR_DEFAULT_RANGE_MM)
-            self._set_default_or_adaptive_y_range(self.error_y, [item[1] for item in diagnostic_data], self._LINEAR_DEFAULT_RANGE_MM)
-            self._set_default_or_adaptive_y_range(self.error_wit_yaw, [self._wrap_angle(sample.target[2] - sample.wit_yaw_deg) for sample in samples], self._YAW_DEFAULT_RANGE_DEG)
-            self._set_default_or_adaptive_y_range(self.error_ops_yaw, [self._wrap_angle(sample.target[2] - sample.ops_yaw_deg) for sample in samples], self._YAW_DEFAULT_RANGE_DEG)
-        else:
-            for plot in self.diag_plots:
-                plot.enableAutoRange(axis="y", enable=True)
+        linear_limit = self._LINEAR_DEFAULT_RANGE_MM if self.mode.currentIndex() == 0 else 1000.0
+        self._set_default_or_adaptive_y_range(self.error_x, [item[0] for item in diagnostic_data], linear_limit)
+        self._set_default_or_adaptive_y_range(self.error_y, [item[1] for item in diagnostic_data], linear_limit)
+        self._set_default_or_adaptive_y_range(self.error_wit_yaw, [self._wrap_angle(sample.target[2] - sample.wit_yaw_deg) for sample in samples], self._YAW_DEFAULT_RANGE_DEG)
+        self._set_default_or_adaptive_y_range(self.error_ops_yaw, [self._wrap_angle(sample.target[2] - sample.ops_yaw_deg) for sample in samples], self._YAW_DEFAULT_RANGE_DEG)
 
     @property
     def diag_plots(self) -> tuple[pg.PlotItem, pg.PlotItem, pg.PlotItem, pg.PlotItem]:

@@ -18,11 +18,13 @@ class TelemetryPlotsTests(unittest.TestCase):
     def test_pose_and_diagnostics_are_split_by_axis(self) -> None:
         plots = TelemetryPlots()
 
-        self.assertEqual(len(plots.plots), 8)
+        self.assertEqual(len(plots.plots), 10)
         self.assertIsNot(plots.position_x, plots.position_y)
         self.assertEqual(len(plots.diag), 4)
         self.assertIn("X 误差", plots.error_x.titleLabel.text)
         self.assertIn("Y 误差", plots.error_y.titleLabel.text)
+        self.assertIn("X 速度", plots.speed_x.titleLabel.text)
+        self.assertIn("Y 速度", plots.speed_y.titleLabel.text)
         self.assertIn("WIT 航向误差", plots.error_wit_yaw.titleLabel.text)
         self.assertIn("OPS 航向误差", plots.error_ops_yaw.titleLabel.text)
 
@@ -34,9 +36,23 @@ class TelemetryPlotsTests(unittest.TestCase):
         plots.mode.setCurrentIndex(1)
         plots.refresh(buffer)
 
-        self.assertIn("X 命令-实际速度", plots.error_x.titleLabel.text)
-        self.assertIn("Y 命令-实际速度", plots.error_y.titleLabel.text)
+        self.assertIn("X 误差积分累计", plots.error_x.titleLabel.text)
+        self.assertIn("Y 误差积分累计", plots.error_y.titleLabel.text)
         self.assertIn("WIT 航向误差", plots.error_wit_yaw.titleLabel.text)
+
+    def test_error_and_command_measured_speed_are_visible_together(self) -> None:
+        plots = TelemetryPlots()
+        buffer = TelemetryBuffer()
+        buffer.append(Telemetry(0, 1, 0, 1, 3, (100, 200, 0), (90, 180, 0), (10, 20, 0),
+                                (120, 240, 0), (110, 220, 0), (1, 2, 0)))
+
+        plots.refresh(buffer)
+
+        self.assertEqual(plots.mode.currentText(), "误差")
+        self.assertEqual(plots.curves["command_vx"].getData()[1].tolist(), [120.0])
+        self.assertEqual(plots.curves["measured_vx"].getData()[1].tolist(), [110.0])
+        self.assertEqual(plots.curves["command_vy"].getData()[1].tolist(), [240.0])
+        self.assertEqual(plots.curves["measured_vy"].getData()[1].tolist(), [220.0])
 
     def test_normal_pose_and_error_ranges_are_fixed(self) -> None:
         plots = TelemetryPlots()
@@ -47,6 +63,8 @@ class TelemetryPlotsTests(unittest.TestCase):
 
         self.assertEqual(plots.position_x.viewRange()[1], [-500.0, 500.0])
         self.assertEqual(plots.position_y.viewRange()[1], [-500.0, 500.0])
+        self.assertEqual(plots.speed_x.viewRange()[1], [-100.0, 100.0])
+        self.assertEqual(plots.speed_y.viewRange()[1], [-100.0, 100.0])
         self.assertEqual(plots.wit_yaw.viewRange()[1], [-180.0, 180.0])
         self.assertEqual(plots.error_x.viewRange()[1], [-500.0, 500.0])
         self.assertEqual(plots.error_wit_yaw.viewRange()[1], [-180.0, 180.0])
