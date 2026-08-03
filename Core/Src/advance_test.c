@@ -802,47 +802,83 @@ void Test_jetson(Competition_StartArea_t start_area)
   Detect_TargetList_t target_list = {0};
   Detect_Status_t status;
   uint8_t received;
-  uint32_t elapsed;
+  uint32_t started_tick;
+  uint32_t target_frame_count = 0U;
+  uint32_t qr_frame_count = 0U;
+  const uint32_t observe_ms = 20000U;
+  const uint32_t poll_period_ms = 20U;
   char code[DETECT_QR_CODE_LENGTH + 1U] = {0};
-
 
   printf("[TEST][JETSON] competition start area=%u (%s)\r\n",
           (unsigned int)start_area,
           (start_area == COMPETITION_START_AREA_1) ? "AREA_1" : "AREA_2");
 
-
-  HAL_Delay(500U);
   status = detect_color_start();
   printf("[TEST][JETSON] color detection start status=%u\r\n", (unsigned int)status);
-  received = 0U;
-  for (elapsed = 0U; (elapsed < 2000U) && (received == 0U); elapsed += 20U)
+  if (status == DETECT_STATUS_OK)
   {
-    received = detect_get_targets(&target_list);
-    if (received == 0U)
+    started_tick = HAL_GetTick();
+    while ((HAL_GetTick() - started_tick) < observe_ms)
     {
-      HAL_Delay(20U);
+      received = detect_get_targets(&target_list);
+      if (received != 0U)
+      {
+        ++target_frame_count;
+        printf("[TEST][JETSON] target frame=%lu count=%u\r\n",
+               (unsigned long)target_frame_count, (unsigned int)target_list.count);
+        for (uint8_t i = 0U; i < target_list.count; ++i)
+        {
+          const Detect_Target_t *target = &target_list.targets[i];
+          printf("[TEST][JETSON] target[%u] type=%u x=%d y=%d confidence=%u measured=%u support=%u\r\n",
+                 (unsigned int)i, (unsigned int)target->type, (int)target->x, (int)target->y,
+                 (unsigned int)target->confidence, (unsigned int)target->measured,
+                 (unsigned int)target->support_count);
+        }
+      }
+      HAL_Delay(poll_period_ms);
     }
-  }
-  if (received != 0U)
-  {
-    printf("[TEST][JETSON] target count=%u\r\n", (unsigned int)target_list.count);
-    for (uint8_t i = 0U; i < target_list.count; ++i)
+    printf("[TEST][JETSON] color detection finished frames=%lu\r\n",
+           (unsigned long)target_frame_count);
+    if (target_frame_count == 0U)
     {
-      const Detect_Target_t *target = &target_list.targets[i];
-      printf("[TEST][JETSON] target[%u] type=%u x=%d y=%d confidence=%u measured=%u support=%u\r\n",
-             (unsigned int)i, (unsigned int)target->type, (int)target->x, (int)target->y,
-             (unsigned int)target->confidence, (unsigned int)target->measured,
-             (unsigned int)target->support_count);
+      printf("[TEST][JETSON] target result: no result in %lu ms\r\n",
+             (unsigned long)observe_ms);
     }
+    status = detect_stop();
+    printf("[TEST][JETSON] color detection stop status=%u\r\n", (unsigned int)status);
   }
   else
   {
-    printf("[TEST][JETSON] target result: timeout\r\n");
+    printf("[TEST][JETSON] color detection skipped due to start failure\r\n");
   }
-  HAL_Delay(500U);
-  status = detect_stop();
-  printf("[TEST][JETSON] color detection stop status=%u\r\n", (unsigned int)status);
 
-  status = detect_qr_read_blocking(code);
-  printf("[TEST][JETSON] QR status=%u code=%s\r\n", (unsigned int)status, code);
+  status = detect_qr_start();
+  printf("[TEST][JETSON] QR detection start status=%u\r\n", (unsigned int)status);
+  if (status == DETECT_STATUS_OK)
+  {
+    started_tick = HAL_GetTick();
+    while ((HAL_GetTick() - started_tick) < observe_ms)
+    {
+      if (detect_get_qr(code) != 0U)
+      {
+        ++qr_frame_count;
+        printf("[TEST][JETSON] QR frame=%lu code=%s\r\n",
+               (unsigned long)qr_frame_count, code);
+      }
+      HAL_Delay(poll_period_ms);
+    }
+    printf("[TEST][JETSON] QR detection finished frames=%lu\r\n",
+           (unsigned long)qr_frame_count);
+    if (qr_frame_count == 0U)
+    {
+      printf("[TEST][JETSON] QR result: no result in %lu ms\r\n",
+             (unsigned long)observe_ms);
+    }
+    status = detect_stop();
+    printf("[TEST][JETSON] QR detection stop status=%u\r\n", (unsigned int)status);
+  }
+  else
+  {
+    printf("[TEST][JETSON] QR detection skipped due to start failure\r\n");
+  }
 }
