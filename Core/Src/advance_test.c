@@ -795,3 +795,70 @@ void AdvanceTest_VerifyYawSourceFreshness(void)
 }
 
 // ----------------------------------------------------------------------------------
+
+void Test_jetson(void)
+{
+  Competition_StartArea_t start_area;
+  Detect_TargetList_t target_list = {0};
+  Detect_Status_t status;
+  uint8_t received;
+  uint32_t elapsed;
+  char code[DETECT_QR_CODE_LENGTH + 1U] = {0};
+
+  /* Competition start frames are asynchronous, so allow time for either area
+   * selection to arrive before moving on to the detector tests. */
+  received = 0U;
+  for (elapsed = 0U; elapsed < 3000U; elapsed += 20U)
+  {
+    if (CommJetson_TakeCompetitionStart(&start_area) != 0U)
+    {
+      received = 1U;
+      break;
+    }
+    HAL_Delay(20U);
+  }
+  if (received != 0U)
+  {
+    printf("[TEST][JETSON] competition start area=%u (%s)\r\n",
+           (unsigned int)start_area,
+           (start_area == COMPETITION_START_AREA_1) ? "AREA_1" : "AREA_2");
+  }
+  else
+  {
+    printf("[TEST][JETSON] competition start area: timeout\r\n");
+  }
+  HAL_Delay(500U);
+  status = detect_color_start();
+  printf("[TEST][JETSON] color detection start status=%u\r\n", (unsigned int)status);
+  received = 0U;
+  for (elapsed = 0U; (elapsed < 2000U) && (received == 0U); elapsed += 20U)
+  {
+    received = detect_get_targets(&target_list);
+    if (received == 0U)
+    {
+      HAL_Delay(20U);
+    }
+  }
+  if (received != 0U)
+  {
+    printf("[TEST][JETSON] target count=%u\r\n", (unsigned int)target_list.count);
+    for (uint8_t i = 0U; i < target_list.count; ++i)
+    {
+      const Detect_Target_t *target = &target_list.targets[i];
+      printf("[TEST][JETSON] target[%u] type=%u x=%d y=%d confidence=%u measured=%u support=%u\r\n",
+             (unsigned int)i, (unsigned int)target->type, (int)target->x, (int)target->y,
+             (unsigned int)target->confidence, (unsigned int)target->measured,
+             (unsigned int)target->support_count);
+    }
+  }
+  else
+  {
+    printf("[TEST][JETSON] target result: timeout\r\n");
+  }
+  HAL_Delay(500U);
+  status = detect_stop();
+  printf("[TEST][JETSON] color detection stop status=%u\r\n", (unsigned int)status);
+
+  status = detect_qr_read_blocking(code);
+  printf("[TEST][JETSON] QR status=%u code=%s\r\n", (unsigned int)status, code);
+}
