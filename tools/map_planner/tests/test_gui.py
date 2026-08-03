@@ -179,6 +179,20 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_bezier_endpoint_hover_preview_rotates_with_right_click_action(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add(); window.update_preview(1950, 150)
+            initial_yaw = window.preview_yaw_deg
+            markers = [item.data(0) for item in window.scene.items()]
+            self.assertIn("bezier_endpoint_preview_car", markers)
+            self.assertIn("bezier_endpoint_preview_direction", markers)
+            window.rotate_preview_clockwise()
+            self.assertEqual(window.preview_yaw_deg, ((initial_yaw - 90 + 180) % 360) - 180)
+            self.assertIn("bezier_endpoint_preview_car", [item.data(0) for item in window.scene.items()])
+        finally:
+            window.close()
+
     def test_preview_draws_direction_and_reports_blocked_simulation(self):
         window = self.window()
         try:

@@ -1122,6 +1122,11 @@ class PlannerWindow(QMainWindow):
                     # 选择终点阶段仅给出轻量级直线提示；控制点尚未确定，不采样也不做区域校验。
                     start_p = self.paper_of(start)
                     self.scene.addLine(start_p.x_mm, start_p.y_mm, self.preview_paper.x(), self.preview_paper.y(), QPen(QColor("#1565c0"), 4, Qt.PenStyle.DashLine))
+                    car = CarOutlineItem(self.rotate_preview_clockwise)
+                    car.setPos(self.preview_paper); car.setRotation(-(self.preview_yaw_deg + self.plan.start_heading_deg))
+                    car.setPen(QPen(QColor("#1565c0"), 4)); car.setBrush(QColor(21, 101, 192, 45)); car.setZValue(19)
+                    car.setData(0, "bezier_endpoint_preview_car"); self.scene.addItem(car)
+                    self._draw_direction_arrow(self.preview_paper.x(), self.preview_paper.y(), self.preview_yaw_deg, QColor("#1565c0"), "bezier_endpoint_preview_direction")
                     self._set_path_check("曲线预览", "请选择终点")
                     return
                 start = self._step_end_pose(len(self.plan.steps))
