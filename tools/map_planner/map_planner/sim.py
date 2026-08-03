@@ -6,7 +6,8 @@ from dataclasses import dataclass, field
 import math
 
 from .geometry import world_to_paper, wrap_deg
-from .models import CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, MotionStep, Plan, Pose, RotateInPlace, Waypoint
+from .bezier import generate_bezier_path_points
+from .models import BezierPathSegment, CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, MotionStep, Plan, Pose, RotateInPlace, Waypoint
 
 
 POSITION_TOLERANCE_MM = 25.0
@@ -189,8 +190,11 @@ def build_plan_timeline(plan: Plan) -> list[SimulationFrame]:
     current = Pose()
     elapsed_s = 0.0
     for command_index, step in enumerate(plan.steps):
-        if isinstance(step, ContinuousPathSegment):
-            points = step.points
+        if isinstance(step, (ContinuousPathSegment, BezierPathSegment)):
+            if isinstance(step, ContinuousPathSegment):
+                points = step.points
+            else:
+                points = generate_bezier_path_points(current, (step.control_1_x_mm, step.control_1_y_mm), (step.control_2_x_mm, step.control_2_y_mm), Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg), step.yaw_mode, step.sample_spacing_mm)
             if len(points) < 2:
                 continue
             for previous, target in zip(points, points[1:]):

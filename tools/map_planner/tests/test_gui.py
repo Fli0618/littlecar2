@@ -9,7 +9,7 @@ from map_planner.codegen_c import CodeGenerationMode, generate_task_function
 from map_planner.codegen_dialog import CodeGenerationDialog
 import map_planner.gui as gui_module
 from map_planner.gui import PlannerWindow
-from map_planner.models import ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace, Waypoint
+from map_planner.models import BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace, Waypoint
 
 
 class GuiTests(unittest.TestCase):
@@ -80,6 +80,33 @@ class GuiTests(unittest.TestCase):
             window.confirm_preview(2200, 300)
             self.assertIsInstance(window.plan.steps[-1], Waypoint)
             self.assertIsNone(window.pending_action)
+        finally:
+            window.close()
+
+    def test_bezier_creation_stays_transient_until_confirmed(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add()
+            window.confirm_preview(1950, 150)
+            self.assertEqual(len(window.plan.steps), 0)
+            self.assertIsInstance(window.bezier_draft, BezierPathSegment)
+            self.assertIn("bezier_sample", [item.data(0) for item in window.scene.items()])
+            window.confirm_bezier_draft()
+            self.assertEqual(len(window.plan.steps), 1)
+            self.assertIsInstance(window.plan.steps[-1], BezierPathSegment)
+        finally:
+            window.close()
+
+    def test_bezier_cancel_discards_draft_and_validation_does_not_access_points(self):
+        window = self.window()
+        try:
+            window.plan.steps = [BezierPathSegment(100, 0, 200, 0, 300, 0, 0)]
+            self.assertIsInstance(window.invalid_waypoints(), list)
+            window.begin_bezier_add()
+            window.confirm_preview(1950, 150)
+            window.cancel_bezier_draft()
+            self.assertIsNone(window.bezier_draft)
+            self.assertEqual(len(window.plan.steps), 1)
         finally:
             window.close()
 

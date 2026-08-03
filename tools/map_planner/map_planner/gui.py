@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDoubleSpi
 from .geometry import paper_to_world, world_to_paper
 from .codegen_c import CodeGenerationError, validate_plan_for_blocking_codegen
 from .codegen_dialog import CodeGenerationDialog
-from .models import CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, Obstacle, PathPosePoint, Plan, Pose, RotateInPlace, Waypoint
+from .bezier import generate_bezier_path_points
+from .models import BezierPathSegment, CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, Obstacle, PathPosePoint, Plan, Pose, RotateInPlace, Waypoint
 from .sim import SimulationFrame, build_plan_timeline
 from .sweep import SweepGeometry, build_continuous_segment_sweep, build_goto_sweep, build_rotation_sweep
 from .storage import list_plans, load_plan, rename_plan, save_plan
@@ -231,11 +232,13 @@ class PlannerWindow(QMainWindow):
             self.plan = Plan(); self.active_index = -1; self.active_point_index = -1; self.mode = "select"; self.pending_action: str | None = None; self.calibration_pending = True; self.calibration_stage = "choose"; self.undo_stack = []; self.redo_stack = []
             self.selected_indices: set[int] = set(); self.measurement_points: list[QPointF] = []
             self.preview_paper: QPointF | None = None; self.preview_yaw_deg: float | None = None; self.preview_anchor_index: int | None = None; self.preview_anchor_signature = None; self.preview_shift = False
+            # 曲线在确认前只保存在此临时对象中，避免半成品进入 Plan.steps。
+            self.bezier_draft: BezierPathSegment | None = None
             self.timeline: list[SimulationFrame] = []; self.timeline_position = 0; self.current_frame = None; self.actual_trace = []
             self._layout_slider_before: Plan | None = None; self._layout_slider_changed = False
             self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
             self.view.clicked.connect(self.on_map_click); self.view.hovered.connect(self.update_preview); self.view.released.connect(self.on_map_release); self.view.preview_rotated.connect(self.rotate_preview_clockwise); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
-            self._build(); self._build_layout_sliders(); self.view.view_changed.connect(self.position_layout_sliders); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_selected_step)
+            self._build(); self._build_layout_sliders(); self.view.view_changed.connect(self.position_layout_sliders); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_selected_step); QShortcut(QKeySequence(Qt.Key.Key_Return), self, activated=self.confirm_bezier_draft); QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.cancel_bezier_draft)
             self.refresh_mode_ui(); self.redraw(); self.refresh_plans(); QTimer.singleShot(0,self.fit_map); QShortcut(QKeySequence(Qt.Key.Key_Home),self,activated=self.fit_map)
 
     def fit_map(self):
@@ -299,9 +302,12 @@ class PlannerWindow(QMainWindow):
             row.addWidget(self.codegen_button)
             box.addLayout(row)
             self.steps_label=QLabel("流程步骤"); box.addWidget(self.steps_label); self.waypoint_list = QListWidget(); self.waypoint_list.currentRowChanged.connect(self.activate_node); self.waypoint_list.setMinimumHeight(105); box.addWidget(self.waypoint_list)
-            action_row=QHBoxLayout(); self.add_goto_button=QPushButton("新增点到点"); self.append_rotation_button=QPushButton("新增原地转向"); self.add_continuous_button=QPushButton("新增连续段")
-            self.add_goto_button.clicked.connect(self.begin_goto_add); self.append_rotation_button.clicked.connect(self.append_rotation); self.add_continuous_button.clicked.connect(self.add_continuous_segment)
-            action_row.addWidget(self.add_goto_button); action_row.addWidget(self.append_rotation_button); action_row.addWidget(self.add_continuous_button); box.addLayout(action_row)
+            action_row=QHBoxLayout(); self.add_goto_button=QPushButton("新增点到点"); self.append_rotation_button=QPushButton("新增原地转向"); self.add_continuous_button=QPushButton("新增连续段"); self.add_bezier_button=QPushButton("新增曲线路径")
+            self.add_goto_button.clicked.connect(self.begin_goto_add); self.append_rotation_button.clicked.connect(self.append_rotation); self.add_continuous_button.clicked.connect(self.add_continuous_segment); self.add_bezier_button.clicked.connect(self.begin_bezier_add)
+            action_row.addWidget(self.add_goto_button); action_row.addWidget(self.append_rotation_button); action_row.addWidget(self.add_continuous_button); action_row.addWidget(self.add_bezier_button); box.addLayout(action_row)
+            bezier_row=QHBoxLayout(); self.confirm_bezier_button=QPushButton("确认曲线"); self.cancel_bezier_button=QPushButton("取消曲线")
+            self.confirm_bezier_button.clicked.connect(self.confirm_bezier_draft); self.cancel_bezier_button.clicked.connect(self.cancel_bezier_draft)
+            bezier_row.addWidget(self.confirm_bezier_button); bezier_row.addWidget(self.cancel_bezier_button); box.addLayout(bezier_row)
             order_row=QHBoxLayout(); self.move_up_button=QPushButton("上移"); self.move_down_button=QPushButton("下移"); self.move_up_button.clicked.connect(lambda:self.move_step(-1)); self.move_down_button.clicked.connect(lambda:self.move_step(1)); order_row.addWidget(self.move_up_button); order_row.addWidget(self.move_down_button); box.addLayout(order_row)
             self.delete_button = QPushButton("删除选中动作"); self.delete_button.clicked.connect(self.remove_selected_step); box.addWidget(self.delete_button)
             form = QFormLayout(); self.x=spin(); self.y=spin(); self.yaw=spin(0,-360,360,5); self.use_yaw=QCheckBox("启用航向约束（GOTO Pose）")
@@ -675,6 +681,8 @@ class PlannerWindow(QMainWindow):
                 elif isinstance(step, ContinuousPathSegment) and step.points:
                     point = step.points[-1]
                     pose = Pose(point.x_mm, point.y_mm, point.yaw_deg)
+                elif isinstance(step, BezierPathSegment):
+                    pose = Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg)
             return pose
 
     def _step_anchor(self, index):
@@ -705,8 +713,10 @@ class PlannerWindow(QMainWindow):
                     text = f"{index + 1}. 到点停靠 ({step.x_mm:.0f}, {step.y_mm:.0f})"
                 elif isinstance(step, RotateInPlace):
                     text = f"{index + 1}. 原地转向 {step.yaw_deg:.0f} deg"
-                else:
+                elif isinstance(step, ContinuousPathSegment):
                     text = f"{index + 1}. 连续路径段 {step.name} ({max(0, len(step.points) - 1)} 点)"
+                else:
+                    text = f"{index + 1}. 曲线路径 {step.name}"
                 self.waypoint_list.addItem(text)
             if 0 <= self.active_index < self.waypoint_list.count():
                 self.waypoint_list.setCurrentRow(self.active_index)
@@ -729,6 +739,13 @@ class PlannerWindow(QMainWindow):
             if step is None:
                 return
             continuous, rotating = isinstance(step, ContinuousPathSegment), isinstance(step, RotateInPlace)
+            if isinstance(step, BezierPathSegment):
+                self.continuous_panel.setVisible(False)
+                for widget in self.goto_form_widgets:
+                    widget.setVisible(False)
+                for widget in (self.yaw, self.node_wmax, self.timeout, self.update_action_button):
+                    widget.setVisible(False)
+                return
             self.continuous_panel.setVisible(continuous)
             for widget in self.goto_form_widgets:
                 widget.setVisible(not continuous and not rotating)
@@ -847,14 +864,33 @@ class PlannerWindow(QMainWindow):
                 elif isinstance(step, RotateInPlace):
                     paper = self.paper_of(previous)
                     if not self.is_valid_rotation(QPointF(paper.x_mm, paper.y_mm), previous.yaw_deg, step.yaw_deg, step.wmax_deg_s, step.timeout_s): invalid.append(index)
-                elif len(step.points) < 2:
+                elif isinstance(step, ContinuousPathSegment) and len(step.points) < 2:
                     invalid.append(index)
-                else:
+                elif isinstance(step, ContinuousPathSegment):
                     for first, second in zip(step.points, step.points[1:]):
                         a, b = self.paper_of(first), self.paper_of(second)
                         if not self.is_valid_continuous_segment(QPointF(a.x_mm, a.y_mm), QPointF(b.x_mm, b.y_mm), first.yaw_deg, second.yaw_deg):
                             invalid.append(index); break
+                elif isinstance(step, BezierPathSegment):
+                    try:
+                        points = self._bezier_points(previous, step)
+                    except ValueError:
+                        invalid.append(index); continue
+                    for first, second in zip(points, points[1:]):
+                        a, b = self.paper_of(first), self.paper_of(second)
+                        if not self.is_valid_continuous_segment(QPointF(a.x_mm, a.y_mm), QPointF(b.x_mm, b.y_mm), first.yaw_deg, second.yaw_deg):
+                            invalid.append(index); break
             return invalid
+
+    def _bezier_points(self, start, step):
+            return generate_bezier_path_points(start, (step.control_1_x_mm, step.control_1_y_mm), (step.control_2_x_mm, step.control_2_y_mm), Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg), step.yaw_mode, step.sample_spacing_mm)
+
+    def _bezier_sweep(self, points):
+            polygons = []
+            for first, second in zip(points, points[1:]):
+                a, b = self.paper_of(first), self.paper_of(second)
+                polygons.extend(self.continuous_sweep(QPointF(a.x_mm, a.y_mm), QPointF(b.x_mm, b.y_mm), first.yaw_deg, second.yaw_deg).polygons)
+            return SweepGeometry(list(points), polygons)
 
     def draw_route(self):
             previous = self._step_end_pose(0)
@@ -868,6 +904,16 @@ class PlannerWindow(QMainWindow):
                     self.scene.addLine(before.x_mm, before.y_mm, current.x(), current.y(), QPen(color, 7))
                     self.scene.addItem(WaypointItem(index, current.x(), current.y(), index == self.active_index, index in invalid, self.move_waypoint, self.rotate_waypoint, self.set_active_from_context))
                     previous = Pose(step.x_mm, step.y_mm, step.yaw_deg if step.use_yaw else previous.yaw_deg); continue
+                if isinstance(step, BezierPathSegment):
+                    try:
+                        points = self._bezier_points(previous, step)
+                    except ValueError:
+                        continue
+                    for first, second in zip(points, points[1:]):
+                        a, b = self.paper_of(first), self.paper_of(second); self.scene.addLine(a.x_mm, a.y_mm, b.x_mm, b.y_mm, QPen(QColor("#1565c0") if index == self.active_index else QColor("#00897b"), 6))
+                    if index == self.active_index:
+                        self._draw_bezier_controls(previous, step, points, False)
+                    previous = Pose(points[-1].x_mm, points[-1].y_mm, points[-1].yaw_deg); continue
                 for point_index, point in enumerate(step.points):
                     paper = self.paper_of(point); current = QPointF(paper.x_mm, paper.y_mm)
                     if point_index:
@@ -877,6 +923,40 @@ class PlannerWindow(QMainWindow):
                     self._draw_direction_arrow(current.x(), current.y(), point.yaw_deg, color, "continuous_direction")
                 if step.points:
                     last = step.points[-1]; previous = Pose(last.x_mm, last.y_mm, last.yaw_deg)
+
+    def _draw_bezier_controls(self, start, step, points, draft):
+            start_p = self.paper_of(start); end_p = self.paper_of(Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg))
+            c1_p = self.paper_of(Pose(step.control_1_x_mm, step.control_1_y_mm, 0)); c2_p = self.paper_of(Pose(step.control_2_x_mm, step.control_2_y_mm, 0))
+            pen = QPen(QColor("#ef6c00"), 3, Qt.PenStyle.DashLine)
+            self.scene.addLine(start_p.x_mm, start_p.y_mm, c1_p.x_mm, c1_p.y_mm, pen)
+            self.scene.addLine(end_p.x_mm, end_p.y_mm, c2_p.x_mm, c2_p.y_mm, pen)
+            for point in points:
+                paper = self.paper_of(point)
+                dot = self.scene.addEllipse(paper.x_mm - 3, paper.y_mm - 3, 6, 6, QPen(Qt.PenStyle.NoPen), QColor("#1565c0")); dot.setData(0, "bezier_sample"); dot.setZValue(14)
+            for control_index, control in enumerate((c1_p, c2_p)):
+                handle = DraggableEllipseItem((-10, -10, 20, 20), lambda paper, i=control_index: self.move_bezier_handle(i, paper, draft))
+                handle.setPos(control.x_mm, control.y_mm); handle.setBrush(QColor("#ff9800")); handle.setPen(QPen(QColor("#e65100"), 2)); handle.setZValue(20); self.scene.addItem(handle)
+
+    def move_bezier_handle(self, control_index, paper, draft):
+            target = paper_to_world(paper.x(), paper.y(), self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+            if draft:
+                step = self.bezier_draft
+            else:
+                step = self._selected_step()
+                self.push_undo()
+            if not isinstance(step, BezierPathSegment):
+                return
+            if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+                anchor = self._step_end_pose(len(self.plan.steps)) if control_index == 0 else Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg)
+                angle = math.atan2(target.y_mm - anchor.y_mm, target.x_mm - anchor.x_mm)
+                distance = math.hypot(target.x_mm - anchor.x_mm, target.y_mm - anchor.y_mm)
+                angle = round(angle / (math.pi / 4)) * math.pi / 4
+                target = Pose(anchor.x_mm + distance * math.cos(angle), anchor.y_mm + distance * math.sin(angle))
+            if control_index == 0:
+                step.control_1_x_mm, step.control_1_y_mm = target.x_mm, target.y_mm
+            else:
+                step.control_2_x_mm, step.control_2_y_mm = target.x_mm, target.y_mm
+            self.redraw()
 
     def move_waypoint(self, index, before, after, shift=False):
             if not isinstance(index, int) or index != self.active_index or before == after:
@@ -920,9 +1000,11 @@ class PlannerWindow(QMainWindow):
             heading_ready = self.calibration_pending and self.calibration_stage == "heading"
             self.confirm_start_button.setVisible(heading_ready); self.confirm_start_button.setEnabled(heading_ready)
             enabled = not self.calibration_pending
-            for widget in (self.add_button, self.add_goto_button, self.obstacle_button, self.save_button, self.save_as_button, self.play_button):
+            for widget in (self.add_button, self.add_goto_button, self.add_continuous_button, self.add_bezier_button, self.append_rotation_button, self.move_up_button, self.move_down_button, self.delete_button, self.obstacle_button, self.save_button, self.save_as_button, self.play_button):
                 widget.setEnabled(enabled)
             self.codegen_button.setEnabled(enabled and bool(self.plan.steps))
+            self.confirm_bezier_button.setEnabled(enabled and self.bezier_draft is not None)
+            self.cancel_bezier_button.setEnabled(self.bezier_draft is not None)
 
     def undo(self):
             if not self.undo_stack:
@@ -940,6 +1022,27 @@ class PlannerWindow(QMainWindow):
 
     def draw_preview(self):
             if self.preview_paper is None or self.preview_yaw_deg is None:
+                return
+            if self.pending_action == "bezier" or self.bezier_draft is not None:
+                draft = self.bezier_draft
+                if draft is None:
+                    start = self._step_end_pose(len(self.plan.steps))
+                    end = paper_to_world(self.preview_paper.x(), self.preview_paper.y(), self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                    dx, dy = end.x_mm - start.x_mm, end.y_mm - start.y_mm
+                    draft = BezierPathSegment(start.x_mm + dx / 3, start.y_mm + dy / 3, start.x_mm + 2 * dx / 3, start.y_mm + 2 * dy / 3, end.x_mm, end.y_mm, self.preview_yaw_deg)
+                start = self._step_end_pose(len(self.plan.steps))
+                try:
+                    points = self._bezier_points(start, draft); sweep = self._bezier_sweep(points)
+                except ValueError:
+                    self._set_path_check("曲线预览", "无效曲线"); return
+                out_of_bounds, hit_platform = self.sweep_violations(sweep)
+                color = QColor("#c62828") if out_of_bounds or not hit_platform.isEmpty() else QColor("#1565c0")
+                path = self.scene.addPath(self.sweep_path(sweep), QPen(Qt.PenStyle.NoPen), QColor(color.red(), color.green(), color.blue(), 70)); path.setZValue(2)
+                for first, second in zip(points, points[1:]):
+                    a, b = self.paper_of(first), self.paper_of(second); self.scene.addLine(a.x_mm, a.y_mm, b.x_mm, b.y_mm, QPen(color, 6))
+                self._draw_bezier_controls(start, draft, points, True)
+                self._set_path_check("曲线预览", "可行" if not out_of_bounds and hit_platform.isEmpty() else ("越界" if out_of_bounds else "碰撞平台"))
+                self.confirm_bezier_button.setEnabled(not self.calibration_pending and self.bezier_draft is not None and not out_of_bounds and hit_platform.isEmpty())
                 return
             step = self._selected_step()
             anchor, anchor_yaw = self._step_anchor(self.active_index + 1 if isinstance(step, ContinuousPathSegment) else len(self.plan.steps))
@@ -959,6 +1062,35 @@ class PlannerWindow(QMainWindow):
             self.pending_action = "goto"
             self.set_mode("add")
             self.status.setText("新增点到点：在地图上点击目标位置。")
+
+    def begin_bezier_add(self):
+            if self.calibration_pending:
+                return
+            self.bezier_draft = None
+            self.pending_action = "bezier"
+            self.set_mode("add")
+            self.status.setText("新增曲线路径：点击设置曲线终点。")
+
+    def confirm_bezier_draft(self):
+            if self.bezier_draft is None or self.calibration_pending:
+                return
+            start = self._step_end_pose(len(self.plan.steps))
+            try:
+                out_of_bounds, hit_platform = self.sweep_violations(self._bezier_sweep(self._bezier_points(start, self.bezier_draft)))
+            except ValueError:
+                return
+            if out_of_bounds or not hit_platform.isEmpty():
+                self.status.setText("曲线越界或碰撞平台，不能确认。")
+                return
+            self.push_undo(); self.bezier_draft.name = f"曲线 {len(self.plan.steps) + 1}"; self.plan.steps.append(self.bezier_draft)
+            self.active_index, self.active_point_index = len(self.plan.steps) - 1, -1
+            self.bezier_draft = None; self.pending_action = None; self.set_mode("select"); self.clear_preview(False)
+            self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def cancel_bezier_draft(self):
+            if self.bezier_draft is None and self.pending_action != "bezier":
+                return
+            self.bezier_draft = None; self.pending_action = None; self.set_mode("select"); self.clear_preview(False); self.update_calibration_ui(); self.status.setText("已取消曲线路径创建。")
 
     def _draw_direction_arrow(self, x, y, yaw, color, marker):
             arrow = QGraphicsPolygonItem(QPolygonF([QPointF(-18, -14), QPointF(20, -14), QPointF(20, -28), QPointF(52, 0), QPointF(20, 28), QPointF(20, 14), QPointF(-18, 14)]))
@@ -1042,6 +1174,14 @@ class PlannerWindow(QMainWindow):
     def confirm_preview(self, x, y, shift=False):
             self.update_preview(x, y, shift)
             if self.preview_paper is None or self.preview_yaw_deg is None:
+                return
+            if self.pending_action == "bezier":
+                start = self._step_end_pose(len(self.plan.steps))
+                end = paper_to_world(self.preview_paper.x(), self.preview_paper.y(), self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                dx, dy = end.x_mm - start.x_mm, end.y_mm - start.y_mm
+                self.bezier_draft = BezierPathSegment(start.x_mm + dx / 3, start.y_mm + dy / 3, start.x_mm + 2 * dx / 3, start.y_mm + 2 * dy / 3, end.x_mm, end.y_mm, self.preview_yaw_deg)
+                self.pending_action = None; self.mode = "select"; self.view.mode = "select"; self.redraw(); self.update_calibration_ui()
+                self.status.setText("拖动橙色手柄调整曲线，点击确认曲线保存。")
                 return
             pose = paper_to_world(self.preview_paper.x(), self.preview_paper.y(), self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
             yaw = self.preview_yaw_deg
