@@ -225,10 +225,15 @@ class StartItem(QGraphicsPolygonItem):
         super().mousePressEvent(event)
 
 
-class PlannerWindow(QMainWindow):
+class MapEditorWidget(QWidget):
+    """可嵌入的地图编辑器，保留原有地图、规划与仿真交互。"""
 
-    def __init__(self) -> None:
-            super().__init__(); self.setWindowTitle("LittleCar2 比赛地图路径规划"); self.resize(1420, 860); self.setMinimumSize(1024, 768)
+    plan_changed = Signal(object)
+    candidate_selected = Signal(int)
+    runtime_overlay_changed = Signal(object)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+            super().__init__(parent)
             self.plan = Plan(); self.active_index = -1; self.active_point_index = -1; self.mode = "select"; self.pending_action: str | None = None; self.calibration_pending = True; self.calibration_stage = "choose"; self.undo_stack = []; self.redo_stack = []
             self.selected_indices: set[int] = set(); self.measurement_points: list[QPointF] = []
             self.preview_paper: QPointF | None = None; self.preview_yaw_deg: float | None = None; self.preview_anchor_index: int | None = None; self.preview_anchor_signature = None; self.preview_shift = False
@@ -238,10 +243,52 @@ class PlannerWindow(QMainWindow):
             self._bezier_preview_cache_key = None; self._bezier_preview_points = None
             self.timeline: list[SimulationFrame] = []; self.timeline_position = 0; self.current_frame = None; self.actual_trace = []
             self._layout_slider_before: Plan | None = None; self._layout_slider_changed = False
+            self._last_plan_signature = None
+            self._runtime_pose: Pose | None = None
             self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
             self.view.clicked.connect(self.on_map_click); self.view.hovered.connect(self.update_preview); self.view.released.connect(self.on_map_release); self.view.preview_rotated.connect(self.rotate_preview_clockwise); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
             self._build(); self._build_layout_sliders(); self.view.view_changed.connect(self.position_layout_sliders); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_selected_step); QShortcut(QKeySequence(Qt.Key.Key_Return), self, activated=self.confirm_bezier_draft); QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.cancel_bezier_draft)
             self.refresh_mode_ui(); self.redraw(); self.refresh_plans(); QTimer.singleShot(0,self.fit_map); QShortcut(QKeySequence(Qt.Key.Key_Home),self,activated=self.fit_map)
+
+    @property
+    def canvas(self) -> MapView:
+            """工作台可直接嵌入或观察的地图画布。"""
+            return self.view
+
+    @property
+    def selected_candidate_index(self) -> int:
+            return self.active_index
+
+    def get_plan(self) -> Plan:
+            """返回当前方案副本，避免外部绕过编辑器状态直接修改。"""
+            return copy.deepcopy(self.plan)
+
+    def set_plan(self, plan: Plan, *, calibrated: bool = True) -> None:
+            """装载工作台提供的方案，并重置编辑器的短暂交互状态。"""
+            if not isinstance(plan, Plan):
+                raise TypeError("plan 必须是 Plan 实例")
+            self._discard_bezier_draft(); self._invalidate_timeline()
+            self.plan = copy.deepcopy(plan); self.active_index = -1; self.active_point_index = -1
+            self.selected_indices.clear(); self.undo_stack.clear(); self.redo_stack.clear()
+            self.calibration_pending = not calibrated; self.calibration_stage = "complete" if calibrated else "choose"
+            self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
+
+    def select_candidate(self, index: int) -> None:
+            """选择工作台当前关注的流程候选项。"""
+            if not 0 <= index < len(self.plan.steps):
+                raise IndexError("候选项索引超出范围")
+            self.activate_node(index)
+
+    def set_runtime_pose(self, pose: Pose | None) -> None:
+            """显示工作台运行时车辆位姿；传入 None 可清除覆盖层。"""
+            if pose is not None and not isinstance(pose, Pose):
+                raise TypeError("pose 必须是 Pose 实例或 None")
+            self._runtime_pose = copy.deepcopy(pose)
+            self.runtime_overlay_changed.emit(copy.deepcopy(self._runtime_pose))
+            self.redraw()
+
+    def clear_runtime_pose(self) -> None:
+            self.set_runtime_pose(None)
 
     def fit_map(self):
             self.view.fitInView(QRectF(-260,-260,2920,2920),Qt.AspectRatioMode.KeepAspectRatio); self.position_layout_sliders()
@@ -357,7 +404,9 @@ class PlannerWindow(QMainWindow):
                 button=QPushButton(label); button.clicked.connect(lambda checked=False,value=label:self.begin_start(value)); guide.addWidget(button)
             self.confirm_start_button=QPushButton("确认朝向"); self.confirm_start_button.clicked.connect(self.confirm_start_heading); guide.addWidget(self.confirm_start_button)
             map_box.addWidget(self.calibration_bar); map_box.addWidget(self.view)
-            root.addWidget(scroll); root.addWidget(map_panel); root.setSizes([360,1060]); self.setCentralWidget(root); self.update_calibration_ui()
+            root.addWidget(scroll); root.addWidget(map_panel); root.setSizes([360,1060])
+            layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.addWidget(root)
+            self.update_calibration_ui()
 
     def set_mode(self, mode):
             if mode != "add": self._discard_bezier_draft(); self.clear_preview()
@@ -503,9 +552,13 @@ class PlannerWindow(QMainWindow):
             if hasattr(self,"raw_slider"):
                 for slider,value in ((self.raw_slider,self.plan.layout.raw_center_x_mm),(self.qr_slider,self.plan.layout.qr_center_y_mm)):
                     slider.blockSignals(True); slider.setValue(round(value)); slider.blockSignals(False)
-            self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_start(); self.draw_route(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None); self.position_layout_sliders()
+            self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_start(); self.draw_route(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None); self.draw_runtime_overlay(); self.position_layout_sliders()
             for item in self.scene.items():
                 if isinstance(item,WaypointItem) and item.index in self.selected_indices: item.setSelected(True)
+            signature = repr(self.plan)
+            if signature != self._last_plan_signature:
+                self._last_plan_signature = signature
+                self.plan_changed.emit(copy.deepcopy(self.plan))
 
     def static(self,item,marker): item.setData(0,marker); item.setZValue(-20); item.setAcceptedMouseButtons(Qt.MouseButton.NoButton); return item
 
@@ -742,7 +795,7 @@ class PlannerWindow(QMainWindow):
             self.active_index, self.active_point_index = index, -1
             self.show_node(index)
             self.refresh_mode_ui()
-            self.redraw()
+            self.redraw(); self.candidate_selected.emit(index)
 
     def show_node(self, index):
             step = self._selected_step()
@@ -1235,6 +1288,17 @@ class PlannerWindow(QMainWindow):
             car = CarOutlineItem(self.rotate_car_clockwise); car.setPos(x, y); car.setRotation(-(p.yaw_deg + self.plan.start_heading_deg)); car.setPen(QPen(color, 5)); car.setBrush(QColor(120, 144, 156, 105)); car.setZValue(15); self.scene.addItem(car)
             self._draw_direction_arrow(x, y, p.yaw_deg, QColor("#1565c0"), "car_direction")
 
+    def draw_runtime_overlay(self):
+            """绘制工作台注入的实时车辆位姿，不参与编辑或仿真状态。"""
+            if self._runtime_pose is None:
+                return
+            x, y = world_to_paper(self._runtime_pose, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+            car = CarOutlineItem(lambda: None); car.setPos(x, y)
+            car.setRotation(-(self._runtime_pose.yaw_deg + self.plan.start_heading_deg))
+            car.setPen(QPen(QColor("#e53935"), 5)); car.setBrush(QColor(229, 57, 53, 65)); car.setZValue(40)
+            car.setAcceptedMouseButtons(Qt.MouseButton.NoButton); car.setData(0, "runtime_car"); self.scene.addItem(car)
+            self._draw_direction_arrow(x, y, self._runtime_pose.yaw_deg, QColor("#e53935"), "runtime_direction")
+
     def clear_preview(self, redraw=True):
             self.preview_paper = None; self.preview_yaw_deg = None; self.preview_anchor_index = None; self.preview_anchor_signature = None; self.preview_shift = False
             if redraw: self.redraw()
@@ -1303,6 +1367,41 @@ class PlannerWindow(QMainWindow):
                 self.active_index, self.active_point_index = len(self.plan.steps) - 1, -1
             self.pending_action = None
             self.clear_preview(False); self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+
+class PlannerWindow(QMainWindow):
+    """独立启动器，复用可嵌入的 ``MapEditorWidget``。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("LittleCar2 比赛地图路径规划")
+        self.resize(1420, 860)
+        self.setMinimumSize(1024, 768)
+        self.editor = MapEditorWidget(self)
+        self.setCentralWidget(self.editor)
+
+    # QMainWindow 自带 x()/y()，这里显式保留旧编辑器表单属性的访问语义。
+    @property
+    def x(self) -> NumericSpinBox:
+        return self.editor.x
+
+    @property
+    def y(self) -> NumericSpinBox:
+        return self.editor.y
+
+    def __getattr__(self, name):  # type: ignore[no-untyped-def]
+        """兼容旧版 ``PlannerWindow`` 对编辑器成员的直接访问。"""
+        editor = self.__dict__.get("editor")
+        if editor is not None:
+            return getattr(editor, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):  # type: ignore[no-untyped-def]
+        editor = self.__dict__.get("editor")
+        if editor is not None and hasattr(editor, name):
+            setattr(editor, name, value)
+            return
+        super().__setattr__(name, value)
 
 
 def main() -> int:

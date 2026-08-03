@@ -7,6 +7,7 @@ from PySide6.QtCore import QObject, Signal
 
 from ..models import MotionGoal, PidConfig, Telemetry
 from ..serial_client import SerialClient
+from ..protocol import Frame
 
 
 class SessionController(QObject):
@@ -20,6 +21,8 @@ class SessionController(QObject):
     goto_strategy_changed = Signal(bool)
     origin_reset = Signal()
     motion_changed = Signal(bool)
+    path_telemetry = Signal(object)
+    path_upload_changed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -34,6 +37,7 @@ class SessionController(QObject):
         def action() -> tuple[SerialClient, tuple[int, PidConfig], bool]:
             client = SerialClient.open_port(port, baud)
             client.start(); client.add_telemetry_callback(self._handle_telemetry)
+            client.add_path_telemetry_callback(self._handle_path_telemetry)
             return client, client.get_pid(), client.get_goto_strategy()
         future = self._executor.submit(action)
         future.add_done_callback(self._connected)
@@ -141,6 +145,27 @@ class SessionController(QObject):
         def done(_: object) -> None:
             self.motion_active = False; self.motion_changed.emit(False); self.status.emit("已发送 STOP")
         self._submit(lambda client: client.stop(), done)
+
+    def upload_path(self, begin: bytes, chunks: list[bytes], commit: bytes) -> None:
+        """Upload one path through the existing single-session executor."""
+        def upload(client: SerialClient) -> None:
+            client.path_begin(begin)
+            for chunk in chunks:
+                client.path_chunk(chunk)
+            client.path_commit(commit)
+        self.path_upload_changed.emit("正在上传")
+        self._submit(upload, lambda _: self.path_upload_changed.emit("路径已提交"))
+
+    def start_path(self, payload: bytes) -> None:
+        self._submit(lambda client: client.path_start(payload), lambda _: self._set_motion_active(True))
+
+    def abort_path(self) -> None:
+        self._motion_generation += 1
+        self._set_motion_active(False)
+        self._submit(lambda client: client.path_abort(), lambda _: self.path_upload_changed.emit("路径已中止"))
+
+    def _handle_path_telemetry(self, frame: Frame) -> None:
+        self.path_telemetry.emit(frame)
 
     def shutdown(self) -> None:
         self.disconnect(); self._executor.shutdown(wait=False)

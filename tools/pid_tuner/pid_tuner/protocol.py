@@ -22,13 +22,22 @@ CMD_SET_YAW_SOURCE = 0x13
 CMD_RESET_ORIGIN = 0x14
 CMD_GET_GOTO_STRATEGY = 0x15
 CMD_SET_GOTO_STRATEGY = 0x16
+CMD_PATH_BEGIN = 0x20
+CMD_PATH_CHUNK = 0x21
+CMD_PATH_COMMIT = 0x22
+CMD_PATH_START = 0x23
+CMD_PATH_ABORT = 0x24
+CMD_PATH_STATUS = 0x25
 CMD_ACK = 0x80
 CMD_PID = 0x81
 CMD_TELEMETRY = 0x82
 CMD_GOTO_STRATEGY = 0x83
+CMD_PATH_STATUS_RESPONSE = 0x84
+CMD_PATH_TELEMETRY = 0x85
 CMD_ERROR = 0xE0
 
 TELEMETRY_PAYLOAD_SIZE = 96
+PATH_TELEMETRY_PAYLOAD_SIZE = 50
 
 
 class ProtocolError(ValueError):
@@ -124,6 +133,13 @@ def decode_telemetry(frame: Frame) -> Telemetry:
         wit_yaw_deg=values[24],
         ops_yaw_deg=values[25],
     )
+
+
+def decode_path_telemetry(frame: Frame) -> tuple[int, ... | float]:
+    """Decode the fixed V2 path diagnostics frame without changing normal telemetry."""
+    if frame.command != CMD_PATH_TELEMETRY or len(frame.payload) != PATH_TELEMETRY_PAYLOAD_SIZE:
+        raise ProtocolError("invalid path telemetry frame")
+    return struct.unpack("<IBHH10fB", frame.payload)
 
 
 class StreamDecoder:
