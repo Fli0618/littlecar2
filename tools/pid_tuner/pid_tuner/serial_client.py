@@ -8,15 +8,19 @@ import threading
 import time
 from typing import Protocol
 
-from .models import BoardError, MotionGoal, PidConfig, RequestTimeout, Telemetry
+from .models import (BoardError, MotionGoal, PathControlConfig, PidConfig,
+                     RequestTimeout, Telemetry)
 from .protocol import (
     CMD_ACK, CMD_ERROR, CMD_GET_GOTO_STRATEGY, CMD_GET_PID, CMD_GOTO_POSE,
     CMD_GOTO_STRATEGY, CMD_HEARTBEAT, CMD_PATH_ABORT, CMD_PATH_BEGIN, CMD_PATH_CHUNK,
-    CMD_PATH_COMMIT, CMD_PATH_START, CMD_PATH_TELEMETRY, CMD_PID, CMD_RESET_ORIGIN, CMD_RESTORE_PID,
-    CMD_SET_GOTO_STRATEGY, CMD_SET_PID, CMD_SET_YAW_SOURCE, CMD_STOP, CMD_TELEMETRY,
-    Frame, ProtocolError, StreamDecoder, decode_goto_strategy, decode_pid,
-    decode_telemetry, encode_frame, encode_goal, encode_goto_strategy, encode_pid,
-    encode_yaw_source,
+    CMD_GET_PATH_CONFIG, CMD_PATH_COMMIT, CMD_PATH_CONFIG, CMD_PATH_START,
+    CMD_PATH_TELEMETRY, CMD_PID, CMD_RESET_ORIGIN, CMD_RESTORE_PATH_CONFIG,
+    CMD_RESTORE_PID,
+    CMD_SET_GOTO_STRATEGY, CMD_SET_PATH_CONFIG, CMD_SET_PID, CMD_SET_YAW_SOURCE,
+    CMD_STOP, CMD_TELEMETRY, Frame, ProtocolError, StreamDecoder,
+    decode_goto_strategy, decode_path_config, decode_pid,
+    decode_telemetry, encode_frame, encode_goal, encode_goto_strategy,
+    encode_path_config, encode_pid, encode_yaw_source,
 )
 
 
@@ -109,6 +113,22 @@ class SerialClient:
         frame = self.request(CMD_RESTORE_PID)
         if len(frame.payload) != 5:
             raise ProtocolError("RESTORE_PID ACK payload must contain a revision")
+        return int.from_bytes(frame.payload[1:], "little")
+
+    def get_path_config(self) -> tuple[int, PathControlConfig]:
+        frame = self.request(CMD_GET_PATH_CONFIG, expected_command=CMD_PATH_CONFIG)
+        return decode_path_config(frame.payload)
+
+    def set_path_config(self, config: PathControlConfig) -> int:
+        frame = self.request(CMD_SET_PATH_CONFIG, encode_path_config(config))
+        if len(frame.payload) != 5:
+            raise ProtocolError("SET_PATH_CONFIG ACK payload must contain a revision")
+        return int.from_bytes(frame.payload[1:], "little")
+
+    def restore_path_config(self) -> int:
+        frame = self.request(CMD_RESTORE_PATH_CONFIG)
+        if len(frame.payload) != 5:
+            raise ProtocolError("RESTORE_PATH_CONFIG ACK payload must contain a revision")
         return int.from_bytes(frame.payload[1:], "little")
 
     def goto(self, goal: MotionGoal) -> None:

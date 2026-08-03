@@ -19,6 +19,29 @@ class PidConfig:
 
 
 @dataclass(frozen=True)
+class PathControlConfig:
+    """Runtime-tunable continuous-path controller and speed-planner values."""
+
+    kp_cross_track: float
+    kd_cross_track_velocity: float
+    kp_yaw: float
+    kd_yaw_rate: float
+    cruise_speed_mm_s: float
+    max_yaw_rate_deg_s: float
+    accel_mm_s2: float
+    decel_mm_s2: float
+    max_lateral_accel_mm_s2: float
+    lookahead_min_mm: float
+    lookahead_base_mm: float
+    lookahead_speed_gain_s: float
+    lookahead_curve_gain_mm: float
+    lookahead_max_mm: float
+
+    def to_dict(self) -> dict[str, float]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class MotionGoal:
     x_mm: float
     y_mm: float

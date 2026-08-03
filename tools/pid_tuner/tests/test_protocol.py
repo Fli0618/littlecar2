@@ -2,12 +2,20 @@ import struct
 import unittest
 
 from pid_tuner.protocol import (
-    CMD_TELEMETRY, decode_goto_strategy, encode_goal, encode_goto_strategy, encode_yaw_source,
+    CMD_TELEMETRY, decode_goto_strategy, decode_path_config, encode_goal,
+    encode_goto_strategy, encode_path_config, encode_yaw_source,
     Frame,
     StreamDecoder,
     crc16_ccitt_false,
     decode_telemetry,
     encode_frame,
+)
+from pid_tuner.models import PathControlConfig
+
+
+PATH_CONFIG = PathControlConfig(
+    0.98, 0.62, 1.42, 0.427, 820.0, 100.0, 800.0, 1000.0,
+    600.0, 60.0, 60.0, 0.15, 120.0, 180.0,
 )
 
 
@@ -61,6 +69,19 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(decode_goto_strategy(b"\x01"))
         with self.assertRaises(ValueError):
             decode_goto_strategy(b"\x02")
+
+    def test_path_config_round_trip_and_validation(self) -> None:
+        encoded = encode_path_config(PATH_CONFIG)
+        self.assertEqual(len(encoded), 56)
+        revision, decoded = decode_path_config(struct.pack("<I", 7) + encoded)
+        self.assertEqual(revision, 7)
+        for actual, expected in zip(decoded.to_dict().values(), PATH_CONFIG.to_dict().values()):
+            self.assertAlmostEqual(actual, expected, places=5)
+        with self.assertRaises(ValueError):
+            encode_path_config(PathControlConfig(
+                **{**PATH_CONFIG.to_dict(), "lookahead_min_mm": 200.0,
+                   "lookahead_max_mm": 100.0}
+            ))
 
 
 if __name__ == "__main__":

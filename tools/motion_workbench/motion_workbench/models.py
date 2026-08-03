@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import math
 
 
 @dataclass(frozen=True)
@@ -11,6 +12,22 @@ class TargetPose:
     x_mm: float
     y_mm: float
     yaw_deg: float
+
+
+def reflect_target_pose(pose: TargetPose, flip_x: bool, flip_y: bool) -> TargetPose:
+    """Reflect a runtime pose about the world origin, including its heading."""
+    if not flip_x and not flip_y:
+        return pose
+    direction_x = math.sin(math.radians(pose.yaw_deg))
+    direction_y = math.cos(math.radians(pose.yaw_deg))
+    if flip_x:
+        direction_x = -direction_x
+    if flip_y:
+        direction_y = -direction_y
+    yaw_deg = (math.degrees(math.atan2(direction_x, direction_y)) + 180.0) % 360.0 - 180.0
+    return TargetPose(-pose.x_mm if flip_x else pose.x_mm,
+                      -pose.y_mm if flip_y else pose.y_mm,
+                      yaw_deg)
 
 
 class SinglePointState(str, Enum):
