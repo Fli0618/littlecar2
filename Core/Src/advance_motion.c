@@ -136,8 +136,61 @@ static float AdvanceMotion_GetLargeYawAlignLinearScale(float yaw_error_deg)
   return 1.0f - ((1.0f - ADVANCE_MOTION_LARGE_YAW_ALIGN_LINEAR_MIN_SCALE) * ratio);
 }
 
+/* 读取当前航向源对应的有效标志与更新时间戳，避免跨源配对。 */
+static uint8_t AdvanceMotion_GetSelectedYawState(const WorldPose2D_t *pose,
+                                                 uint8_t *valid,
+                                                 uint32_t *updated_tick)
+{
+  if ((pose == NULL) || (valid == NULL) || (updated_tick == NULL))
+  {
+    return 0U;
+  }
+
+  if (AdvanceWorld_GetYawSource() == ADVANCE_WORLD_YAW_SOURCE_OPS)
+  {
+    *valid = pose->ops_yaw_valid;
+    *updated_tick = pose->ops_yaw_updated_tick;
+  }
+  else
+  {
+    *valid = pose->wit_yaw_valid;
+    *updated_tick = pose->wit_yaw_updated_tick;
+  }
+
+  return 1U;
+}
+
+static uint8_t AdvanceMotion_GetFreshnessFlags(const WorldPose2D_t *pose, uint32_t now_tick)
+{
+  uint8_t flags = 0U;
+  uint8_t yaw_valid;
+  uint32_t yaw_updated_tick;
+
+  if (pose == NULL)
+  {
+    return 0U;
+  }
+
+  if ((pose->origin_ready != 0U) &&
+      ((now_tick - pose->updated_tick) <= ADVANCE_MOTION_POSE_TIMEOUT_MS))
+  {
+    flags |= ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH;
+  }
+
+  if ((AdvanceMotion_GetSelectedYawState(pose, &yaw_valid, &yaw_updated_tick) != 0U) &&
+      (yaw_valid != 0U) &&
+      ((now_tick - yaw_updated_tick) <= ADVANCE_MOTION_YAW_TIMEOUT_MS))
+  {
+    flags |= ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH;
+  }
+
+  return flags;
+}
+
 static void AdvanceMotion_UpdateDebugSnapshot(uint32_t now_tick, uint8_t flags)
 {
+  uint8_t freshness_flags;
+
   if (g_path.active != 0U)
   {
     flags |= ADVANCE_MOTION_DEBUG_FLAG_PATH_ACTIVE;
@@ -145,6 +198,17 @@ static void AdvanceMotion_UpdateDebugSnapshot(uint32_t now_tick, uint8_t flags)
   if (AdvanceWorld_GetYawSource() == ADVANCE_WORLD_YAW_SOURCE_OPS)
   {
     flags |= ADVANCE_MOTION_DEBUG_FLAG_YAW_SOURCE_OPS;
+  }
+  freshness_flags = AdvanceMotion_GetFreshnessFlags(&g_motion.pose, now_tick);
+  flags &= (uint8_t)~(ADVANCE_MOTION_DEBUG_FLAG_VALID |
+                      ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH |
+                      ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH);
+  flags |= freshness_flags;
+  if ((g_motion.pose.valid != 0U) &&
+      (freshness_flags == (ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH |
+                           ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH)))
+  {
+    flags |= ADVANCE_MOTION_DEBUG_FLAG_VALID;
   }
   g_motion_debug.tick = now_tick;
   g_motion_debug.pid_revision = g_pid_active_revision;
@@ -747,9 +811,11 @@ static AdvanceMotion_Status_t AdvanceMotion_GetFreshYaw(WorldPose2D_t *pose)
 }
 
 /* 获取未超时的有效世界坐标，并转换为运动控制状态码。 */
-static AdvanceMotion_Status_t AdvanceMotion_GetFreshPose(WorldPose2D_t *pose)
+static AdvanceMotion_Status_t AdvanceMotion_GetFreshPose(WorldPose2D_t *pose, uint32_t now_tick)
 {
   AdvanceWorld_Status_t world_status;
+  uint8_t yaw_valid;
+  uint32_t yaw_updated_tick;
 
   if (pose == 0)
   {
@@ -767,8 +833,21 @@ static AdvanceMotion_Status_t AdvanceMotion_GetFreshPose(WorldPose2D_t *pose)
     return ADVANCE_MOTION_STATUS_NO_POSE;
   }
 
-  if ((HAL_GetTick() - pose->updated_tick) > ADVANCE_MOTION_POSE_TIMEOUT_MS)
+  if ((now_tick - pose->updated_tick) > ADVANCE_MOTION_POSE_TIMEOUT_MS)
   {
+    /* OPS 位置时间戳超时，世界线速度无法安全转换到车体坐标。 */
+    return ADVANCE_MOTION_STATUS_POSE_TIMEOUT;
+  }
+
+  if ((AdvanceMotion_GetSelectedYawState(pose, &yaw_valid, &yaw_updated_tick) == 0U) ||
+      (yaw_valid == 0U))
+  {
+    /* 当前航向源无有效样本，即使 OPS 位置仍新鲜也不能继续世界坐标控制。 */
+    return ADVANCE_MOTION_STATUS_NO_POSE;
+  }
+  if ((now_tick - yaw_updated_tick) > ADVANCE_MOTION_YAW_TIMEOUT_MS)
+  {
+    /* 当前航向时间戳超时，禁止继续世界速度到车体速度的转换。 */
     return ADVANCE_MOTION_STATUS_POSE_TIMEOUT;
   }
 
@@ -779,14 +858,8 @@ static void AdvanceMotion_UpdateInactiveDebugSnapshot(uint32_t now_tick)
 {
   uint8_t flags = 0U;
 
-  if (AdvanceMotion_GetFreshPose(&g_motion.pose) == ADVANCE_MOTION_STATUS_OK)
+  if (AdvanceMotion_GetFreshPose(&g_motion.pose, now_tick) == ADVANCE_MOTION_STATUS_OK)
   {
-    flags = ADVANCE_MOTION_DEBUG_FLAG_VALID |
-            ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH;
-    if ((now_tick - g_motion.pose.yaw_updated_tick) <= ADVANCE_MOTION_YAW_TIMEOUT_MS)
-    {
-      flags |= ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH;
-    }
     g_motion.error_x_mm = g_motion.goal.x_mm - g_motion.pose.x_mm;
     g_motion.error_y_mm = g_motion.goal.y_mm - g_motion.pose.y_mm;
     g_motion.position_error_mm = sqrtf((g_motion.error_x_mm * g_motion.error_x_mm) +
@@ -828,7 +901,7 @@ static AdvanceMotion_Status_t AdvanceMotion_ApplyWorldVelocityEx(float vx_world_
 
   if (pose == NULL)
   {
-    pose_status = AdvanceMotion_GetFreshPose(&current_pose);
+    pose_status = AdvanceMotion_GetFreshPose(&current_pose, HAL_GetTick());
     if (pose_status == ADVANCE_MOTION_STATUS_NO_ORIGIN)
     {
       Chassis_SmoothStop(acc);
@@ -911,7 +984,7 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
   }
 
   pose_status = ((goal->goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) != 0U)
-                    ? AdvanceMotion_GetFreshPose(&pose)
+                    ? AdvanceMotion_GetFreshPose(&pose, HAL_GetTick())
                     : AdvanceMotion_GetFreshYaw(&pose);
   if (pose_status != ADVANCE_MOTION_STATUS_OK)
   {
@@ -988,7 +1061,7 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_
     return ADVANCE_MOTION_STATUS_BUSY;
   }
 
-  pose_status = AdvanceMotion_GetFreshPose(&pose);
+  pose_status = AdvanceMotion_GetFreshPose(&pose, HAL_GetTick());
   if (pose_status != ADVANCE_MOTION_STATUS_OK)
   {
     return pose_status;
@@ -1126,13 +1199,13 @@ void AdvanceMotion_Update(void)
 
   if (g_path.active != 0U)
   {
-    pose_status = AdvanceMotion_GetFreshPose(&g_motion.pose);
+    pose_status = AdvanceMotion_GetFreshPose(&g_motion.pose, now_tick);
   }
   else
   {
     position_required = ((g_motion.goal.goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) != 0U) ? 1U : 0U;
     pose_status = (position_required != 0U)
-                      ? AdvanceMotion_GetFreshPose(&g_motion.pose)
+                      ? AdvanceMotion_GetFreshPose(&g_motion.pose, now_tick)
                       : AdvanceMotion_GetFreshYaw(&g_motion.pose);
   }
   if (pose_status == ADVANCE_MOTION_STATUS_NO_ORIGIN)
@@ -1218,9 +1291,7 @@ void AdvanceMotion_Update(void)
       if (g_motion_control.arrival_stop_sent == 0U)
       {
         AdvanceMotion_UpdateDebugSnapshot(now_tick,
-                                          ADVANCE_MOTION_DEBUG_FLAG_VALID |
-                                              ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH |
-                                              ((yaw_required != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH : 0U));
+                                          0U);
         return;
       }
     }
@@ -1233,9 +1304,7 @@ void AdvanceMotion_Update(void)
       AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_ARRIVED);
     }
     AdvanceMotion_UpdateDebugSnapshot(now_tick,
-                                      ADVANCE_MOTION_DEBUG_FLAG_VALID |
-                                          ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH |
-                                          ((yaw_required != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH : 0U));
+                                      0U);
     return;
   }
   g_motion_control.arrive_hold_start_tick = 0U;
@@ -1350,10 +1419,7 @@ void AdvanceMotion_Update(void)
   }
   g_motion.updated_tick = now_tick;
   AdvanceMotion_UpdateDebugSnapshot(now_tick,
-                                    ADVANCE_MOTION_DEBUG_FLAG_VALID |
-                                        ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH |
-                                         ((yaw_required != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH : 0U) |
-                                         ((linear_saturated != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_LINEAR_SATURATED : 0U) |
+                                    ((linear_saturated != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_LINEAR_SATURATED : 0U) |
                                          ((yaw_saturated != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_SATURATED : 0U) |
                                          ((g_motion_control.yaw_aligning != 0U) ? ADVANCE_MOTION_DEBUG_FLAG_YAW_ALIGNING : 0U));
 }

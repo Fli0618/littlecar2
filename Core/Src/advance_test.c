@@ -713,4 +713,85 @@ void Test_Motion_GotoPoseYawAndCancel(void)
   Chassis_Enable(false);
 }
 
+static void AdvanceTest_PrintYawFreshnessSnapshot(const char *source_name)
+{
+  AdvanceMotion_DebugSnapshot_t snapshot;
+  AdvanceMotion_Status_t status;
+  uint8_t yaw_valid;
+  uint32_t yaw_updated_tick;
+
+  status = AdvanceMotion_GetDebugSnapshot(&snapshot);
+  if (status != ADVANCE_MOTION_STATUS_OK)
+  {
+    printf("[TEST][YAW] %s snapshot status=%d\r\n", source_name, (int)status);
+    return;
+  }
+
+  if (AdvanceWorld_GetYawSource() == ADVANCE_WORLD_YAW_SOURCE_OPS)
+  {
+    yaw_valid = snapshot.pose.ops_yaw_valid;
+    yaw_updated_tick = snapshot.pose.ops_yaw_updated_tick;
+  }
+  else
+  {
+    yaw_valid = snapshot.pose.wit_yaw_valid;
+    yaw_updated_tick = snapshot.pose.wit_yaw_updated_tick;
+  }
+
+  printf("[TEST][YAW] source=%s flags=0x%02X pose_fresh=%u yaw_fresh=%u valid=%u yaw_valid=%u yaw_tick=%lu\r\n",
+         source_name, (unsigned int)snapshot.flags,
+         (unsigned int)((snapshot.flags & ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH) != 0U),
+         (unsigned int)((snapshot.flags & ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH) != 0U),
+         (unsigned int)((snapshot.flags & ADVANCE_MOTION_DEBUG_FLAG_VALID) != 0U),
+         (unsigned int)yaw_valid, (unsigned long)yaw_updated_tick);
+}
+
+void AdvanceTest_VerifyYawSourceFreshness(void)
+{
+  AdvanceMotion_RuntimeStatus_t motion_status;
+  AdvanceMotion_Status_t status;
+  AdvanceWorld_YawSource_t original_source;
+  AdvanceWorld_YawSource_t sources[2] = {
+      ADVANCE_WORLD_YAW_SOURCE_WIT,
+      ADVANCE_WORLD_YAW_SOURCE_OPS};
+  uint8_t index;
+
+  status = AdvanceMotion_GetStatus(&motion_status);
+  if ((status != ADVANCE_MOTION_STATUS_OK) ||
+      ((motion_status.state != ADVANCE_MOTION_STATE_IDLE) &&
+       (motion_status.state != ADVANCE_MOTION_STATE_ARRIVED) &&
+       (motion_status.state != ADVANCE_MOTION_STATE_CANCELED) &&
+       (motion_status.state != ADVANCE_MOTION_STATE_TIMEOUT) &&
+       (motion_status.state != ADVANCE_MOTION_STATE_NO_POSE) &&
+       (motion_status.state != ADVANCE_MOTION_STATE_NO_ORIGIN)))
+  {
+    printf("[TEST][YAW] motion active, skip source switch\r\n");
+    return;
+  }
+
+  original_source = AdvanceWorld_GetYawSource();
+  printf("[TEST][YAW] freshness switch test start\r\n");
+  for (index = 0U; index < 2U; ++index)
+  {
+    if (AdvanceWorld_SetYawSource(sources[index]) != ADVANCE_WORLD_STATUS_OK)
+    {
+      printf("[TEST][YAW] source=%u switch failed\r\n", (unsigned int)sources[index]);
+      continue;
+    }
+    AdvanceMotion_ResetYawControl();
+    HAL_Delay(25U);
+    AdvanceTest_PrintYawFreshnessSnapshot((sources[index] == ADVANCE_WORLD_YAW_SOURCE_OPS) ? "OPS" : "WIT");
+  }
+
+  if (AdvanceWorld_SetYawSource(original_source) == ADVANCE_WORLD_STATUS_OK)
+  {
+    AdvanceMotion_ResetYawControl();
+    printf("[TEST][YAW] source restored=%u\r\n", (unsigned int)original_source);
+  }
+  else
+  {
+    printf("[TEST][YAW] source restore failed=%u\r\n", (unsigned int)original_source);
+  }
+}
+
 // ----------------------------------------------------------------------------------

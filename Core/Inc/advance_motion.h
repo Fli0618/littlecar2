@@ -196,6 +196,7 @@ extern "C"
     uint8_t path_final_stage; /*!< 非零表示已进入最终 Goto PID 捕获阶段。 */
   } AdvanceMotion_DebugSnapshot_t;
 
+/* POSE_FRESH 与 YAW_FRESH 分别反映 OPS 位置和当前航向源的真实时间戳新鲜度。 */
 #define ADVANCE_MOTION_DEBUG_FLAG_VALID ((uint8_t)0x01U)
 #define ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH ((uint8_t)0x02U)
 #define ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH ((uint8_t)0x04U)

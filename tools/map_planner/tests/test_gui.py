@@ -5,9 +5,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from map_planner.codegen_c import generate_task_function
+from map_planner.codegen_c import CodeGenerationMode, generate_task_function
+from map_planner.codegen_dialog import CodeGenerationDialog
+import map_planner.gui as gui_module
 from map_planner.gui import PlannerWindow
-from map_planner.models import ContinuousPathSegment, RotateInPlace, Waypoint
+from map_planner.models import BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace, Waypoint
 
 
 class GuiTests(unittest.TestCase):
@@ -21,6 +23,9 @@ class GuiTests(unittest.TestCase):
         result.calibration_stage = "complete"
         result.update_calibration_ui()
         return result
+
+    def test_gui_module_exposes_launch_entrypoint(self):
+        self.assertTrue(callable(gui_module.main))
 
     def test_flow_list_and_locked_continuous_entry(self):
         window = self.window()
@@ -78,6 +83,116 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_bezier_creation_stays_transient_until_confirmed(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add()
+            window.on_map_release(1950, 150)
+            self.assertEqual(len(window.plan.steps), 0)
+            self.assertIsInstance(window.bezier_draft, BezierPathSegment)
+            self.assertIn("bezier_sample", [item.data(0) for item in window.scene.items()])
+            window.confirm_bezier_draft()
+            self.assertEqual(len(window.plan.steps), 1)
+            self.assertIsInstance(window.plan.steps[-1], BezierPathSegment)
+        finally:
+            window.close()
+
+    def test_bezier_cancel_discards_draft_and_validation_does_not_access_points(self):
+        window = self.window()
+        try:
+            window.plan.steps = [BezierPathSegment(100, 0, 200, 0, 300, 0, 0)]
+            self.assertIsInstance(window.invalid_waypoints(), list)
+            window.begin_bezier_add()
+            window.confirm_preview(1950, 150)
+            window.cancel_bezier_draft()
+            self.assertIsNone(window.bezier_draft)
+            self.assertEqual(len(window.plan.steps), 1)
+        finally:
+            window.close()
+
+    def test_bezier_preview_and_confirmation_skip_region_validation(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add()
+            window.confirm_preview(1950, 150)
+            self.assertIsNotNone(window.bezier_draft)
+            original_sweep_violations = window.sweep_violations
+            window.sweep_violations = lambda sweep: self.fail("Bezier preview must not run region validation")
+            window.redraw()
+            self.assertIn("bezier_preview_coverage", [item.data(0) for item in window.scene.items()])
+            window.sweep_violations = original_sweep_violations
+            window.confirm_bezier_draft()
+            self.assertIsInstance(window.plan.steps[-1], BezierPathSegment)
+            self.assertEqual(window.invalid_waypoints(), [])
+            self.assertIn("FOLLOW BEZIER PATH", generate_task_function(window.plan, "Task_Bezier"))
+        finally:
+            window.close()
+
+    def test_bezier_interpolated_heading_inserts_start_rotation(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add()
+            window.on_map_release(1950, 150)
+            window.bezier_start_yaw.setValue(90)
+            window.bezier_end_yaw.setValue(-90)
+            window.bezier_yaw_mode.setCurrentIndex(0)
+            window.apply_bezier_heading()
+            window.confirm_bezier_draft()
+            self.assertIsInstance(window.plan.steps[0], RotateInPlace)
+            self.assertEqual(window.plan.steps[0].yaw_deg, 90)
+            curve = window.plan.steps[1]
+            self.assertIsInstance(curve, BezierPathSegment)
+            self.assertEqual(curve.end_yaw_deg, -90)
+            code = generate_task_function(window.plan, "Task_BezierHeading")
+            self.assertIn("90.0f", code)
+            self.assertIn("-90.0f", code)
+        finally:
+            window.close()
+
+    def test_undo_and_tool_switch_clear_bezier_draft_preview(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add(); window.on_map_release(1950, 150); window.confirm_bezier_draft()
+            window.undo()
+            self.assertIsNone(window.bezier_draft)
+            self.assertIsNone(window.pending_action)
+            window.update_preview(1900, 200)
+            self.assertNotIn("bezier_sample", [item.data(0) for item in window.scene.items()])
+            window.begin_bezier_add(); window.on_map_release(1950, 150)
+            window.begin_goto_add(); window.update_preview(1900, 200)
+            markers = [item.data(0) for item in window.scene.items()]
+            self.assertIsNone(window.bezier_draft)
+            self.assertIn("preview_sweep", markers)
+            self.assertNotIn("bezier_sample", markers)
+        finally:
+            window.close()
+
+    def test_curve_start_rotation_is_simulated_and_seekable(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add(); window.on_map_release(1950, 150)
+            window.bezier_start_yaw.setValue(90); window.apply_bezier_heading(); window.confirm_bezier_draft()
+            self.assertTrue(window.progress.isEnabled())
+            self.assertGreater(len(window.timeline), 1)
+            window.seek_timeline(len(window.timeline) // 2)
+            self.assertIsNotNone(window.current_frame)
+        finally:
+            window.close()
+
+    def test_bezier_endpoint_hover_preview_rotates_with_right_click_action(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add(); window.update_preview(1950, 150)
+            initial_yaw = window.preview_yaw_deg
+            markers = [item.data(0) for item in window.scene.items()]
+            self.assertIn("bezier_endpoint_preview_car", markers)
+            self.assertIn("bezier_endpoint_preview_direction", markers)
+            window.rotate_preview_clockwise()
+            self.assertEqual(window.preview_yaw_deg, ((initial_yaw - 90 + 180) % 360) - 180)
+            self.assertIn("bezier_endpoint_preview_car", [item.data(0) for item in window.scene.items()])
+        finally:
+            window.close()
+
     def test_preview_draws_direction_and_reports_blocked_simulation(self):
         window = self.window()
         try:
@@ -104,5 +219,43 @@ class GuiTests(unittest.TestCase):
             window.plan.steps.append(RotateInPlace(0)); window.active_index = len(window.plan.steps) - 1
             window.clear_preview(False); window.rotate_preview_clockwise()
             self.assertEqual(window.plan.steps[-1].yaw_deg, -90)
+        finally:
+            window.close()
+
+    def test_codegen_dialog_switches_between_feedback_and_open_loop_modes(self):
+        dialog = CodeGenerationDialog(Plan(steps=[Waypoint(10, 20, 30)]))
+        try:
+            self.assertEqual(dialog.mode, CodeGenerationMode.FEEDBACK)
+            self.assertIn("AdvanceMotion_Cancel();", dialog.generated_code)
+            self.assertIn("严谨反馈", dialog.mode_button.text())
+
+            dialog.mode_button.click()
+            self.assertEqual(dialog.mode, CodeGenerationMode.OPEN_LOOP)
+            self.assertNotIn("AdvanceMotion_Cancel();", dialog.generated_code)
+            self.assertIn("(void)AdvanceMotion_GotoPoseBlocking(", dialog.generated_code)
+            self.assertIn("开环忽略结果", dialog.mode_button.text())
+
+            dialog.mode_button.click()
+            self.assertEqual(dialog.mode, CodeGenerationMode.FEEDBACK)
+            self.assertIn("AdvanceMotion_Cancel();", dialog.generated_code)
+        finally:
+            dialog.close()
+
+    def test_batch_delete_uses_step_indices_and_resynchronizes_continuous_entry(self):
+        window = self.window()
+        try:
+            window.plan.steps = [
+                Waypoint(100, 200, 0),
+                ContinuousPathSegment([PathPosePoint(100, 200, 0), PathPosePoint(300, 200, 0)]),
+                Waypoint(400, 200, 0),
+            ]
+            window.selected_indices = {0, 2}
+            window.active_index = 2
+            window.remove_selected_step()
+
+            self.assertEqual(len(window.plan.steps), 1)
+            segment = window.plan.steps[0]
+            self.assertIsInstance(segment, ContinuousPathSegment)
+            self.assertEqual((segment.points[0].x_mm, segment.points[0].y_mm, segment.points[0].yaw_deg), (0.0, 0.0, 0.0))
         finally:
             window.close()

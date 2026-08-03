@@ -1,6 +1,6 @@
 import math
 import pytest
-from map_planner.codegen_c import CodeGenerationError, format_c_float, generate_task_function, validate_plan_for_blocking_codegen
+from map_planner.codegen_c import CodeGenerationError, CodeGenerationMode, format_c_float, generate_task_function, validate_plan_for_blocking_codegen
 from map_planner.models import ContinuousPathSegment, Plan, RotateInPlace, Waypoint, PathPosePoint
 
 def test_mixed_steps_generate_in_declared_order():
@@ -14,6 +14,30 @@ def test_mixed_steps_generate_in_declared_order():
     assert "static const AdvanceMotion_PathPoint_t path_3[]" in code
     assert "AdvanceMotion_FollowPathBlocking(path_3, sizeof(path_3) / sizeof(path_3[0]))" in code
     assert code.count("AdvanceMotion_GotoPoseBlocking(") == 3
+
+
+def test_open_loop_codegen_ignores_motion_results_and_preserves_step_order():
+    plan = Plan(steps=[
+        Waypoint(10, 20, 30, dwell_s=0.5), RotateInPlace(90),
+        ContinuousPathSegment([PathPosePoint(10, 20, 90), PathPosePoint(100, 20, 90)]),
+    ])
+    code = generate_task_function(plan, "Task_OpenLoop", CodeGenerationMode.OPEN_LOOP)
+
+    assert code.index("/* 1. GOTO */") < code.index("/* 2. ROTATE */") < code.index("/* 3. FOLLOW PATH */")
+    assert code.count("(void)AdvanceMotion_GotoPoseBlocking(") == 2
+    assert "(void)AdvanceMotion_FollowPathBlocking(path_3, sizeof(path_3) / sizeof(path_3[0]));" in code
+    assert "HAL_Delay(500U);" in code
+    assert "AdvanceMotion_Cancel()" not in code
+    assert "ADVANCE_MOTION_STATE_ARRIVED" not in code
+    assert "    if (" not in code
+
+
+def test_default_codegen_mode_remains_feedback_control():
+    plan = Plan(steps=[Waypoint(10, 20, 30)])
+    code = generate_task_function(plan, "Task_Default")
+
+    assert "if (AdvanceMotion_GotoPoseBlocking(" in code
+    assert "AdvanceMotion_Cancel();" in code
 
 def test_segment_requires_previous_endpoint_as_entry_point():
     plan = Plan(steps=[Waypoint(10, 20), ContinuousPathSegment([PathPosePoint(11, 20), PathPosePoint(50, 20)])])

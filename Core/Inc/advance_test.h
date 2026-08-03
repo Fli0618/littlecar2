@@ -90,6 +90,12 @@ void Test_Motion_GotoPoseBlocking(void);
 void Test_Motion_GotoPoseYawAndCancel(void);
 
 /**
+ * @brief 现场观测 OPS/WIT 航向源切换后的位姿与遥测新鲜度标志。
+ * @note 不发送底盘运动命令；仅在运动控制处于非活动状态时调用。
+ */
+void AdvanceTest_VerifyYawSourceFreshness(void);
+
+/**
  * @brief 输出 WIT 陀螺仪与 OPS 定位传感器的当前原始数据。
  * @note 在主循环中周期调用，用于手动平移、旋转时的坐标轴和正负方向标定。
  */

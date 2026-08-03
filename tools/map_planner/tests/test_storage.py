@@ -24,3 +24,12 @@ def test_legacy_versions_are_rejected(version):
     value["map_version"] = version
     with pytest.raises(ValueError, match="map_version: 7"):
         Plan.from_dict(value)
+
+
+@pytest.mark.parametrize("legacy_key", ["nodes", "commands", "path_points"])
+def test_v7_plan_rejects_legacy_top_level_fields(legacy_key):
+    value = Plan().to_dict()
+    value[legacy_key] = []
+
+    with pytest.raises(ValueError, match="格式无效"):
+        Plan.from_dict(value)
