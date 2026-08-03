@@ -23,7 +23,7 @@ class GuiMotionGoalTests(unittest.TestCase):
             goal = MotionGoal(*(widget.value() for widget in window.goal), window.timeout.value())
             self.assertEqual((goal.x_mm, goal.y_mm, goal.yaw_deg), (0.0, 0.0, 0.0))
             self.assertEqual((goal.vmax_mm_s, goal.wmax_deg_s, goal.timeout_ms), (600.0, 120.0, 15000))
-            self.assertTrue(window.use_yaw.isChecked())
+            self.assertTrue(window.connection_motion.uses_yaw())
             self.assertFalse(window.large_yaw_align.isChecked())
             self.assertFalse(window.large_yaw_align.isEnabled())
             self.assertIsNone(validate_motion_goal(goal))

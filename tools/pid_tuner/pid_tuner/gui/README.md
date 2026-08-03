@@ -1,13 +1,13 @@
 # GUI 模块
 
-该目录实现 PySide6 与 pyqtgraph 调参界面。串口协议仅通过上层 `SerialClient` 访问，Qt 主线程以 40 ms 定时器批量刷新曲线。图表同时显示 OPS 世界坐标 X/Y、X/Y 位置误差、X/Y 命令与实测速度、WIT 相对航向、OPS 相对 Z 航向及对应航向误差；位置诊断区可切换为积分累计值。界面支持组合、位置、角度三类 GOTO，以及运行时 WIT/OPS 航向 PID 数据源切换和零点重置。
+该目录实现 PySide6 与 pyqtgraph 调参界面。串口协议仅通过上层 `SerialClient` 访问，Qt 主线程以 40 ms 定时器批量刷新曲线。图表同时显示 OPS 世界坐标 X/Y、X/Y 位置误差、X/Y 命令与实测速度、WIT 相对航向、OPS 相对 Z 航向及对应航向误差；误差图含零线、最新数值和航向源角色标记，位置诊断区可切换为积分累计值。界面支持位置+航向、仅位置、仅角度三类 GOTO，以及运行时 WIT/OPS/不使用航向三态选择和零点重置。WIT/OPS 通过 `SET_YAW_SOURCE` 切换板端数据源；不使用航向不改变传感器源，而是在后续 GOTO 中清除 `GOAL_USE_YAW` 标志。
 
 ## 公共控件
 
 `widgets.py` 提供不依赖串口实现的公共组件：
 
 - `PidControlPanel`：PID 参数编辑、读取、应用和恢复请求。
-- `ConnectionMotionPanel`：串口连接、航向源、零点重置与组合、位置、角度三类单点 GOTO 请求。
+- `ConnectionMotionPanel`：串口连接、三态航向控制模式、零点重置与位置+航向、仅位置、仅角度三类单点 GOTO 请求。
 
 两个组件只发出 Qt 信号；`MainWindow` 负责将信号连接至 `SessionController`，并协调方案存储、遥测缓冲和图表。因此其他工具可以复用控件，而无需复制 `SerialClient`、协议代码或遥测绘图组件。
 

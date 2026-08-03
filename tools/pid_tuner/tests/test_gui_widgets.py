@@ -5,7 +5,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from pid_tuner.gui.widgets import ConnectionMotionPanel, ConnectionPanel, PidControlPanel
+from pid_tuner.gui.widgets import (
+    HEADING_MODE_NONE,
+    HEADING_MODE_OPS,
+    ConnectionMotionPanel,
+    ConnectionPanel,
+    PidControlPanel,
+)
 from pid_tuner.models import PidConfig
 
 
@@ -43,6 +49,32 @@ class GuiWidgetTests(unittest.TestCase):
         self.assertFalse(goals[0].use_yaw)
         self.assertFalse(goals[1].use_position)
         self.assertTrue(goals[1].use_yaw)
+
+    def test_heading_mode_drives_combined_goal_and_yaw_controls(self) -> None:
+        panel = ConnectionMotionPanel()
+        modes: list[str] = []
+        goals = []
+        panel.yaw_source_requested.connect(modes.append)
+        panel.motion_requested.connect(goals.append)
+
+        panel.yaw_source.setCurrentIndex(panel.yaw_source.findData(HEADING_MODE_NONE))
+        panel.goto.click()
+
+        self.assertEqual(modes, [HEADING_MODE_NONE])
+        self.assertFalse(goals[-1].use_yaw)
+        self.assertTrue(goals[-1].use_position)
+        self.assertFalse(panel.goal[2].isEnabled())
+        self.assertFalse(panel.goal[4].isEnabled())
+        self.assertFalse(panel.goto_yaw.isEnabled())
+        self.assertIn("仅位置", panel.goto.text())
+
+        panel.yaw_source.setCurrentIndex(panel.yaw_source.findData(HEADING_MODE_OPS))
+        panel.goto.click()
+
+        self.assertEqual(modes[-1], HEADING_MODE_OPS)
+        self.assertTrue(goals[-1].use_yaw)
+        self.assertTrue(panel.goal[2].isEnabled())
+        self.assertTrue(panel.goto_yaw.isEnabled())
 
     def test_connection_panel_switches_between_connect_and_disconnect(self) -> None:
         panel = ConnectionPanel()
