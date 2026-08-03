@@ -10,9 +10,11 @@
 ## 工作台实机执行接入
 
 编辑器提供“实机运动”开关、单步执行、连贯执行和停止控件；控件只发射
-`hardware_enabled_changed(bool)`、`single_step_requested()`、`continuous_requested()`、
+`hardware_enabled_changed(bool)`、`single_step_requested(int)`、`continuous_requested(int)`、
 `execution_stop_requested()` 信号，串口和运动编排由外部工作台负责。关闭开关时三个
 执行按钮均禁用。
+
+实机执行区还会通过 `runtime_axis_flip_changed(bool, bool)` 报告仅用于显示的 X/Y 反转选择；编辑器本身不改变方案和下发坐标。自定义起点的位置选择阶段会显示带方向的车体轮廓，越界或碰撞时显示为红色。
 
 工作台可用 `set_execution_target()`、`set_execution_actual_pose()`、`set_execution_error()`、
 `set_execution_trace()` 或 `update_execution_telemetry()` 注入目标、实际车辆、误差和轨迹。

@@ -49,6 +49,7 @@ class MotionWorkbenchController(QObject):
         self._last_path: PathTelemetry | None = None
         self._plan: Plan | None = None
         self._plan_cursor = 0
+        self._selected_step_index = -1
         self._plan_pose = Pose()
         self._plan_state = PlanExecutionState.IDLE
         self._plan_continuous = False
@@ -83,8 +84,11 @@ class MotionWorkbenchController(QObject):
         """Select a workflow and reset its execution cursor to the world origin."""
         if self._plan_state == PlanExecutionState.RUNNING:
             raise RuntimeError("流程正在执行，不能替换方案")
+        selected = self._selected_step_index
         self._plan = plan
         self._plan_cursor = 0
+        self._selected_step_index = (selected if plan is not None and
+                                     0 <= selected < len(plan.steps) else -1)
         self._plan_pose = Pose()
         self._plan_state = PlanExecutionState.IDLE
         self._plan_continuous = False
@@ -99,16 +103,16 @@ class MotionWorkbenchController(QObject):
         if self._plan is None or self._plan_state == PlanExecutionState.RUNNING:
             return
         if 0 <= index < len(self._plan.steps):
-            self._plan_cursor = index
+            self._selected_step_index = index
             self.plan_execution_changed.emit(self._plan_snapshot())
 
-    def start_single(self) -> bool:
-        """Send only the step at the current cursor; success advances the cursor once."""
-        return self._start_plan(continuous=False)
+    def start_single(self, step_index: int) -> bool:
+        """Execute the explicitly selected step without changing the selection."""
+        return self._start_plan(continuous=False, start_index=step_index)
 
-    def start_continuous(self) -> bool:
-        """Execute all remaining workflow steps, waiting for terminal telemetry between them."""
-        return self._start_plan(continuous=True)
+    def start_continuous(self, step_index: int) -> bool:
+        """Execute from the explicitly selected step through the remaining workflow."""
+        return self._start_plan(continuous=True, start_index=step_index)
 
     def select_candidate(self, pose: TargetPose) -> None:
         self.candidate = pose
@@ -229,24 +233,41 @@ class MotionWorkbenchController(QObject):
         return math.hypot(pose.x_mm - last.x_mm, pose.y_mm - last.y_mm) >= 5.0 or \
             abs(((pose.yaw_deg - last.yaw_deg + 180.0) % 360.0) - 180.0) >= 2.0
 
-    def _start_plan(self, continuous: bool) -> bool:
+    def _start_plan(self, continuous: bool, start_index: int) -> bool:
         if self._plan is None:
             self.status_changed.emit("请先选择流程方案")
             return False
         if self._plan_state == PlanExecutionState.RUNNING:
             self.status_changed.emit("流程正在执行")
             return False
-        if self._plan_cursor >= len(self._plan.steps):
-            self._plan_state = PlanExecutionState.COMPLETED
-            self._plan_continuous = continuous
-            self._emit_plan_execution("流程已完成")
-            self.plan_finished.emit(self._plan_snapshot())
+        if not 0 <= start_index < len(self._plan.steps):
+            self.status_changed.emit("请选择有效的流程动作")
             return False
+        self._selected_step_index = start_index
+        self._plan_cursor = start_index
+        self._plan_pose = self._pose_before_step(start_index)
         self._plan_state = PlanExecutionState.RUNNING
         self._plan_continuous = continuous
         self._plan_reason = ""
         self._send_current_plan_step()
         return self._plan_state == PlanExecutionState.RUNNING
+
+    def _pose_before_step(self, index: int) -> Pose:
+        pose = Pose()
+        if self._plan is None:
+            return pose
+        for step in self._plan.steps[:index]:
+            if isinstance(step, Waypoint):
+                pose = Pose(step.x_mm, step.y_mm,
+                            step.yaw_deg if step.use_yaw else pose.yaw_deg)
+            elif isinstance(step, RotateInPlace):
+                pose = Pose(pose.x_mm, pose.y_mm, step.yaw_deg)
+            elif isinstance(step, ContinuousPathSegment) and step.points:
+                point = step.points[-1]
+                pose = Pose(point.x_mm, point.y_mm, point.yaw_deg)
+            elif isinstance(step, BezierPathSegment):
+                pose = Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg)
+        return pose
 
     def _send_current_plan_step(self) -> None:
         if self._plan is None:

@@ -12,6 +12,7 @@ from .models import PidConfig, Telemetry
 from .protocol import telemetry_csv_row
 
 DEFAULT_PROFILES_DIR = Path(__file__).resolve().parents[1] / "profiles"
+DEFAULT_LOGS_DIR = Path(__file__).resolve().parents[1] / "logs"
 _PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 

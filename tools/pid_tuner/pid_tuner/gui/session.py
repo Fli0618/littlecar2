@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable
+import time
+from typing import Callable, cast
 
 from PySide6.QtCore import QObject, Signal
 
-from ..models import MotionGoal, PidConfig, Telemetry
+from ..models import MotionGoal, PathControlConfig, PidConfig, Telemetry
 from ..serial_client import SerialClient
 from ..protocol import Frame
 
@@ -23,6 +24,8 @@ class SessionController(QObject):
     motion_changed = Signal(bool)
     path_telemetry = Signal(object)
     path_upload_changed = Signal(str)
+    path_config_read = Signal(int, object)
+    path_config_applied = Signal(int, object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -92,6 +95,27 @@ class SessionController(QObject):
 
     def restore_pid(self) -> None:
         self._submit(lambda client: client.restore_pid(), lambda value: self.status.emit(f"PID 已恢复默认，修订号 {value}"))
+
+    def read_path_config(self) -> None:
+        self._submit(lambda client: client.get_path_config(),
+                     lambda value: self.path_config_read.emit(value[0], value[1]))
+
+    def apply_path_config(self, config: PathControlConfig) -> None:
+        self._submit(lambda client: client.set_path_config(config),
+                     lambda value: self.path_config_applied.emit(value, config))
+
+    def restore_path_config(self) -> None:
+        def restore_and_read(client: SerialClient) -> tuple[int, tuple[int, PathControlConfig]]:
+            revision = client.restore_path_config()
+            time.sleep(0.05)
+            return revision, client.get_path_config()
+
+        def restored(value: object) -> None:
+            revision, active = cast(tuple[int, tuple[int, PathControlConfig]], value)
+            self.status.emit(f"路径参数已恢复默认，修订号 {revision}")
+            self.path_config_read.emit(active[0], active[1])
+
+        self._submit(restore_and_read, restored)
 
     def set_yaw_source(self, source: str) -> None:
         self._submit(lambda client: client.set_yaw_source(source), lambda _: self.yaw_source_changed.emit(source))

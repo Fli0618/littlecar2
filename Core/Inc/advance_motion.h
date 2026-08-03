@@ -140,6 +140,25 @@ extern "C"
     float kd_yaw; /*!< 航向角基于实测角速度的微分增益。 */
   } AdvanceMotion_PidConfig_t;
 
+  /** @brief 连续路径控制器与速度规划器的完整运行时参数组。 */
+  typedef struct
+  {
+    float kp_cross_track;
+    float kd_cross_track_velocity;
+    float kp_yaw;
+    float kd_yaw_rate;
+    float cruise_speed_mm_s;
+    float max_yaw_rate_deg_s;
+    float accel_mm_s2;
+    float decel_mm_s2;
+    float max_lateral_accel_mm_s2;
+    float lookahead_min_mm;
+    float lookahead_base_mm;
+    float lookahead_speed_gain_s;
+    float lookahead_curve_gain_mm;
+    float lookahead_max_mm;
+  } AdvanceMotion_PathControlConfig_t;
+
   typedef struct
   {
     float x_mm;
@@ -255,6 +274,14 @@ extern "C"
                                                           uint32_t *revision);
   /** @brief 提交固件默认 PID 配置，在下一次 20 ms 周期边界整体生效。 */
   AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultPid(uint32_t *revision);
+  /** @brief 获取当前生效的连续路径参数与版本号。 */
+  AdvanceMotion_Status_t AdvanceMotion_GetPathControlConfig(
+      AdvanceMotion_PathControlConfig_t *config, uint32_t *revision);
+  /** @brief 提交连续路径参数，在下一次 20 ms 控制周期边界整体生效。 */
+  AdvanceMotion_Status_t AdvanceMotion_RequestPathControlConfig(
+      const AdvanceMotion_PathControlConfig_t *config, uint32_t *revision);
+  /** @brief 恢复固件默认连续路径参数。 */
+  AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultPathControl(uint32_t *revision);
   /** @brief 设置组合 GOTO 的大航向误差先对准策略；仅空闲状态可修改。 */
   AdvanceMotion_Status_t AdvanceMotion_SetLargeYawAlignEnabled(uint8_t enabled);
   /** @brief 获取组合 GOTO 的大航向误差先对准策略当前状态。 */
