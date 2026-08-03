@@ -1279,11 +1279,26 @@ void AdvanceMotion_Update(void)
   position_control_enabled = ((position_required != 0U) &&
                               (g_motion_control.yaw_aligning == 0U)) ? 1U : 0U;
 
-  if (((g_path.active == 0U) || (path_final_stage != 0U)) &&
-      ((position_required == 0U) || (g_motion.position_error_mm <= ADVANCE_MOTION_POS_TOLERANCE_MM)) &&
-      ((yaw_required == 0U) || (AdvanceMotion_AbsFloat(g_motion.yaw_error_deg) <= ADVANCE_MOTION_YAW_TOLERANCE_DEG)))
+  /* 只有在没有处于减速判定，或完全到达，或真正超时等终端状态下，才建议完全清除 PID 和进展。
+   * 此处我们引入 Hysteresis (滞回/缓冲) 和 判定周期内微分保持(减速阻尼活性维持)。
+   * 如果进入了容差并且正在平滑刹车，我们保留阻尼，不直接清空 PID 历史。
+   */
+  float dynamic_pos_tolerance = ADVANCE_MOTION_POS_TOLERANCE_MM;
+  float dynamic_yaw_tolerance = ADVANCE_MOTION_YAW_TOLERANCE_DEG;
+
+  /* 如果此前已经在减速判定中(arrive_hold_start_tick > 0 且尚未生成末端 arrived)，
+   * 采用更宽的滞回边界(退出门限)，防止因为惯性微小抖出 10mm/1.5° 门限导致比例项 P 重踢(chattering)
+   */
+  if (g_motion_control.arrive_hold_start_tick != 0U)
   {
-    AdvanceMotion_ResetPidAndProgress();
+    dynamic_pos_tolerance = ADVANCE_MOTION_POS_TOLERANCE_MM + 6.0f;     /* 16.0mm 滞回退出边界 */
+    dynamic_yaw_tolerance = ADVANCE_MOTION_YAW_TOLERANCE_DEG + 0.8f;   /* 2.3° 滞回退出边界 */
+  }
+
+  if (((g_path.active == 0U) || (path_final_stage != 0U)) &&
+      ((position_required == 0U) || (g_motion.position_error_mm <= dynamic_pos_tolerance)) &&
+      ((yaw_required == 0U) || (AdvanceMotion_AbsFloat(g_motion.yaw_error_deg) <= dynamic_yaw_tolerance)))
+  {
     if (g_motion_control.arrival_stop_sent == 0U)
     {
       /* 保持判定期间已不再输出上一周期的非零速度。 */
@@ -1302,6 +1317,17 @@ void AdvanceMotion_Update(void)
     if ((now_tick - g_motion_control.arrive_hold_start_tick) >= ADVANCE_MOTION_ARRIVE_HOLD_MS)
     {
       AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_ARRIVED);
+    }
+    else
+    {
+      /* 🌟 核心优化点：在 150ms 减速滑行等待期间内，不暴力调用 ResetPidAndProgress!
+       * 此时电机被强制处于低速度，但我们保留 pid_history_valid 与 measured_velocity，
+       * 以免中途由于物理扰动跌出容差边界后瞬间产生无微分阻尼的大输出。
+       */
+      /* 暂时仅对位置积分项进行清零，微分和历史状态得以保留，以确保物理刹车的过冲阻尼性 */
+      g_motion_control.pid_integral_x_mm_s = 0.0f;
+      g_motion_control.pid_integral_y_mm_s = 0.0f;
+      g_motion_control.pid_integral_yaw_deg_s = 0.0f;
     }
     AdvanceMotion_UpdateDebugSnapshot(now_tick,
                                       0U);
