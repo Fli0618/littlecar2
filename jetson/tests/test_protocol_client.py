@@ -67,6 +67,39 @@ def test_only_color_and_circle_modes_require_fill_light():
     assert not main._requires_fill_light(CMD_STOP)
 
 
+def test_detection_log_is_emitted_only_when_result_changes(capsys):
+    state = main.make_service_state()
+    result = {
+        "detections": [
+            {"type": 2, "center": [10, 20], "confidence": 0.9012, "measured": True, "support_count": 3}
+        ]
+    }
+
+    main._log_detection_result(state, CMD_START_COLOR, result)
+    main._log_detection_result(state, CMD_START_COLOR, result)
+    changed = {"detections": [{**result["detections"][0], "center": [11, 20]}]}
+    main._log_detection_result(state, CMD_START_COLOR, changed)
+
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("vision_result")]
+    assert len(lines) == 2
+    assert '"center":[10,20]' in lines[0]
+    assert '"center":[11,20]' in lines[1]
+
+
+def test_qr_detection_log_contains_status_and_code(capsys):
+    state = main.make_service_state()
+    main._log_detection_result(
+        state,
+        CMD_START_QR,
+        {"raw_code": "156+123+516+231", "status": "FIRST_DETECTED", "code": "156+123+516+231"},
+    )
+
+    output = capsys.readouterr().out
+    assert "vision_result mode=二维码检测" in output
+    assert '"status":"FIRST_DETECTED"' in output
+    assert '"code":"156+123+516+231"' in output
+
+
 def test_visual_detection_waits_for_fill_light_settlement():
     assert not main._visual_detection_ready(CMD_START_COLOR, True, 10.3, 10.0)
     assert main._visual_detection_ready(CMD_START_COLOR, True, 10.3, 10.3)

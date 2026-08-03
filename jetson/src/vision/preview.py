@@ -80,6 +80,8 @@ def _draw_detections(frame: np.ndarray, result: dict[str, object], mode: int) ->
     detections = result.get("detections")
     if not isinstance(detections, list):
         return
+    label = "COLOR" if mode == CMD_START_COLOR else "CIRCLE"
+    _draw_text(frame, f"{label} targets: {len(detections)}", (12, 82), color)
     for item in detections:
         if not isinstance(item, dict):
             continue

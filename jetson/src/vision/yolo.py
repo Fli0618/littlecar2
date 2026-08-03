@@ -88,7 +88,7 @@ def _create_yolo_model(model_path: Path) -> Any:
     from ultralytics import YOLO
 
     try:
-        return YOLO(str(model_path))
+        return YOLO(str(model_path), task="detect")
     except Exception as exc:
         if model_path.suffix == ".engine":
             raise RuntimeError(
