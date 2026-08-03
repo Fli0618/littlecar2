@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 
@@ -48,16 +49,16 @@ from vision import (
 SERIAL_PORT = "/dev/ttyTHS1"
 SERIAL_BAUDRATE = 115200
 CAMERA_QR_DEVICE = "/dev/video0"
-CAMERA_VISION_DEVICE = "/dev/video1"
+CAMERA_VISION_DEVICE = "/dev/video2"
 MODEL_BACKEND = "engine"  # "pt" or "engine"
 DEFAULT_PERIOD_MS = 40
 MAX_TARGETS = 8
 MODEL_WARMUP_FRAME_SIZE = 640
 SERVICE_POLL_INTERVAL_MS = 1
 ELAPSED_UPDATE_INTERVAL_MS = 200
-PWM_PIN = 33
+PWM_PIN = 32
 PWM_FREQUENCY_HZ = 10000
-PWM_DUTY_CYCLE_PERCENT = 50.0
+PWM_DUTY_CYCLE_PERCENT = 100.0
 LIGHT_SETTLE_SECONDS = 0.3
 ENABLE_CAMERA_PREVIEW_UI = True
 CAMERA_PREVIEW_PERIOD_MS = 100
@@ -90,6 +91,7 @@ def make_service_state() -> dict[str, object]:
         "period_ms": DEFAULT_PERIOD_MS,
         "last_run": float("-inf"),
         "last_task_code": "",
+        "last_detection_log_signature": None,
         "rx": bytearray(),
     }
 
@@ -133,6 +135,57 @@ def _preview_mode_text(mode: int) -> str:
     }.get(mode, "手动相机预览")
 
 
+def _detection_log_payload(mode: int, result: dict[str, object]) -> dict[str, object]:
+    """提取稳定、紧凑的检测字段，避免日志被模型内部对象污染。"""
+    if mode == CMD_START_QR:
+        return {
+            "raw_code": result.get("raw_code"),
+            "status": result.get("status"),
+            "code": result.get("code"),
+        }
+    if mode in (CMD_START_COLOR, CMD_START_CIRCLE):
+        detections = result.get("detections", [])
+        normalized: list[dict[str, object]] = []
+        if isinstance(detections, list):
+            for item in detections:
+                if not isinstance(item, dict):
+                    continue
+                center = item.get("center")
+                normalized.append(
+                    {
+                        "type": item.get("type"),
+                        "center": list(center) if isinstance(center, (list, tuple)) else None,
+                        "confidence": round(float(item["confidence"]), 3)
+                        if isinstance(item.get("confidence"), (int, float))
+                        else None,
+                        "measured": bool(item.get("measured", False)),
+                        "support_count": int(item.get("support_count", 0)),
+                    }
+                )
+        normalized.sort(key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False))
+        return {"detections": normalized}
+    return {
+        "center": result.get("center"),
+        "status": result.get("status"),
+        "support_count": result.get("support_count", 0),
+        "measured_count": result.get("measured_count", 0),
+    }
+
+
+def _log_detection_result(state: dict[str, object], mode: int, result: dict[str, object]) -> None:
+    """仅在检测结果发生变化时向终端输出一行 JSON 日志。"""
+    payload = _detection_log_payload(mode, result)
+    signature = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    if signature == state.get("last_detection_log_signature"):
+        return
+    state["last_detection_log_signature"] = signature
+    print(
+        f"vision_result mode={_preview_mode_text(mode)} session={int(state['session'])} "
+        f"result={signature}",
+        flush=True,
+    )
+
+
 def warmup_vision_models() -> None:
     """启动时加载并预热颜色、数字圆环两个 YOLO 模型。"""
     frame = np.zeros((MODEL_WARMUP_FRAME_SIZE, MODEL_WARMUP_FRAME_SIZE, 3), dtype=np.uint8)
@@ -168,7 +221,13 @@ def handle_command(port: object, state: dict[str, object], command: int, session
         reset_advance_tracking()
         if command == CMD_START_QR:
             reset_qr_tracking()
-        state.update(mode=command, session=session, period_ms=period_ms, last_run=float("-inf"))
+        state.update(
+            mode=command,
+            session=session,
+            period_ms=period_ms,
+            last_run=float("-inf"),
+            last_detection_log_signature=None,
+        )
         _write_ack(port, session, command, ACK_OK)
     elif command == CMD_STOP:
         if payload:
@@ -176,7 +235,7 @@ def handle_command(port: object, state: dict[str, object], command: int, session
             return
         reset_advance_tracking()
         reset_qr_tracking()
-        state.update(mode=0, session=session, last_run=float("-inf"))
+        state.update(mode=0, session=session, last_run=float("-inf"), last_detection_log_signature=None)
         _write_ack(port, session, command, ACK_OK)
     else:
         _write_ack(port, session, command, ACK_BAD_CMD)
@@ -274,6 +333,7 @@ def run_detection(
     else:
         payload = _target_payload(result)
         port.write(pack_frame(response, session, payload))
+    _log_detection_result(state, mode, result)
     if preview_callback is not None:
         try:
             preview_callback(frame, mode, result)
@@ -354,7 +414,7 @@ def main() -> None:
         except Exception as error:
             print(
                 "fill light start failed; continuing visual detection without light. "
-                "Check Jetson-IO PWM configuration for Pin 33 and GPIO permissions: "
+                "Check Jetson-IO PWM configuration for Pin 32 and GPIO permissions: "
                 f"{error}",
                 flush=True,
             )
@@ -392,7 +452,7 @@ def main() -> None:
         fill_light_unavailable = True
         print(
             "fill light initialization failed; continuing visual detection without light. "
-            "Check Jetson-IO PWM configuration for Pin 33 and GPIO permissions: "
+            "Check Jetson-IO PWM configuration for Pin 32 and GPIO permissions: "
             f"{error}",
             flush=True,
         )
@@ -431,7 +491,7 @@ def main() -> None:
             else (VISION_AIM_OFFSET_X_PX, VISION_AIM_OFFSET_Y_PX)
         )
         try:
-            status_text = f"{selected_camera_id} 相机预览"
+            status_text = f"{selected_camera_id} 相机预览 | {_preview_mode_text(preview_mode)}"
             gui.set_camera_frame(
                 render_camera_preview(
                     preview_frame,
@@ -461,7 +521,7 @@ def main() -> None:
             ok, frame = cameras[selected_camera_id].read()
             if not ok:
                 return
-            status_text = f"{selected_camera_id} 相机预览"
+            status_text = f"{selected_camera_id} 相机预览 | {_preview_mode_text(0)}"
             gui.set_camera_frame(
                 render_camera_preview(
                     frame,
