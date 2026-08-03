@@ -84,7 +84,7 @@ class GuiTests(unittest.TestCase):
             window.close()
 
     def test_bezier_creation_stays_transient_until_confirmed(self):
-            window = self.window()
+        window = self.window()
         try:
             window.begin_bezier_add()
             window.on_map_release(1950, 150)
