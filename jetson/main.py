@@ -46,13 +46,21 @@ from vision import (
     render_camera_preview,
 )
 
+# Jetson 与 STM32 的固定串口链路；修改时需与下位机串口配置保持一致。
 SERIAL_PORT = "/dev/ttyTHS1"
 SERIAL_BAUDRATE = 115200
+# 两路相机的 V4L2 设备路径，二维码任务使用 QR，相机视觉任务使用 VISION。
 CAMERA_QR_DEVICE = "/dev/video0"
 CAMERA_VISION_DEVICE = "/dev/video2"
+# 原始相机帧尺寸契约；STM32 按 640x480 像素坐标解释检测结果，不能改为模型 imgsz。
+QR_FRAME_WIDTH = 640
+QR_FRAME_HEIGHT = 480
+VISION_FRAME_WIDTH = 640
+VISION_FRAME_HEIGHT = 480
 MODEL_BACKEND = "engine"  # "pt" or "engine"
 DEFAULT_PERIOD_MS = 40
 MAX_TARGETS = 8
+# 仅用于方形模型预热输入，不代表相机原始帧尺寸或 STM32 坐标系。
 MODEL_WARMUP_FRAME_SIZE = 640
 SERVICE_POLL_INTERVAL_MS = 1
 ELAPSED_UPDATE_INTERVAL_MS = 200
@@ -62,10 +70,11 @@ PWM_DUTY_CYCLE_PERCENT = 100.0
 LIGHT_SETTLE_SECONDS = 0.3
 ENABLE_CAMERA_PREVIEW_UI = True
 CAMERA_PREVIEW_PERIOD_MS = 100
-QR_AIM_OFFSET_X_PX = 0
-QR_AIM_OFFSET_Y_PX = 0
-VISION_AIM_OFFSET_X_PX = 0
-VISION_AIM_OFFSET_Y_PX = 0
+# 仅调整 GUI 准星显示位置；不会修改检测结果或 STM32 视觉伺服参考点。
+QR_PREVIEW_AIM_OFFSET_X_PX = 0
+QR_PREVIEW_AIM_OFFSET_Y_PX = 0
+VISION_PREVIEW_AIM_OFFSET_X_PX = 0
+VISION_PREVIEW_AIM_OFFSET_Y_PX = 0
 _FILL_LIGHT_MODES = frozenset((CMD_START_COLOR, CMD_START_CIRCLE))
 
 
@@ -124,6 +133,96 @@ def _should_update_idle_preview(
         and camera_page_visible
         and (now - last_preview_at) * 1000.0 >= CAMERA_PREVIEW_PERIOD_MS
     )
+
+
+def _frame_size(frame: object) -> tuple[int, int] | None:
+    """返回 OpenCV 图像的宽高；非图像对象留给既有轻量测试替身处理。"""
+    shape = getattr(frame, "shape", None)
+    if not isinstance(shape, tuple) or len(shape) < 2:
+        return None
+    return int(shape[1]), int(shape[0])
+
+
+def _camera_frame_size(camera_name: str) -> tuple[int, int]:
+    return (
+        (QR_FRAME_WIDTH, QR_FRAME_HEIGHT)
+        if camera_name == CAMERA_QR
+        else (VISION_FRAME_WIDTH, VISION_FRAME_HEIGHT)
+    )
+
+
+def _frame_matches_camera_contract(frame: object, camera_name: str) -> bool:
+    """仅允许按启动契约协商成功的原始相机帧进入检测与坐标发送。"""
+    actual_size = _frame_size(frame)
+    return actual_size is None or actual_size == _camera_frame_size(camera_name)
+
+
+def _release_camera(camera: object | None) -> None:
+    if camera is not None:
+        try:
+            camera.release()
+        except Exception:
+            pass
+
+
+def open_camera(device: str, width: int, height: int, camera_name: str) -> object:
+    """以 V4L2 固定打开相机，并在启动阶段验证驱动与实际帧尺寸。"""
+    camera = cv2.VideoCapture(device, cv2.CAP_V4L2)
+    reported_width = 0
+    reported_height = 0
+    frame_width = 0
+    frame_height = 0
+    try:
+        if not camera.isOpened():
+            raise RuntimeError(f"camera open failed name={camera_name} device={device}")
+        if not camera.set(cv2.CAP_PROP_FRAME_WIDTH, width) or not camera.set(cv2.CAP_PROP_FRAME_HEIGHT, height):
+            raise RuntimeError(f"camera size set failed name={camera_name} device={device} requested={width}x{height}")
+
+        reported_width = int(round(camera.get(cv2.CAP_PROP_FRAME_WIDTH)))
+        reported_height = int(round(camera.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        ok, frame = camera.read()
+        frame_size = _frame_size(frame) if ok else None
+        if frame_size is not None:
+            frame_width, frame_height = frame_size
+        if (
+            not ok
+            or frame_size is None
+            or (reported_width, reported_height) != (width, height)
+            or frame_size != (width, height)
+        ):
+            raise RuntimeError(
+                f"camera size mismatch name={camera_name} device={device} requested={width}x{height} "
+                f"reported={reported_width}x{reported_height} frame={frame_width}x{frame_height}"
+            )
+    except Exception:
+        _release_camera(camera)
+        raise
+
+    print(
+        f"camera_ready name={camera_name} device={device} requested={width}x{height} "
+        f"reported={reported_width}x{reported_height} frame={frame_width}x{frame_height}",
+        flush=True,
+    )
+    return camera
+
+
+def open_cameras() -> dict[str, object]:
+    """初始化两台相机；任意一步失败均释放已经打开的相机。"""
+    qr_camera: object | None = None
+    vision_camera: object | None = None
+    try:
+        qr_camera = open_camera(CAMERA_QR_DEVICE, QR_FRAME_WIDTH, QR_FRAME_HEIGHT, CAMERA_QR)
+        vision_camera = open_camera(
+            CAMERA_VISION_DEVICE,
+            VISION_FRAME_WIDTH,
+            VISION_FRAME_HEIGHT,
+            CAMERA_VISION,
+        )
+        return {CAMERA_QR: qr_camera, CAMERA_VISION: vision_camera}
+    except Exception:
+        _release_camera(vision_camera)
+        _release_camera(qr_camera)
+        raise
 
 
 def _preview_mode_text(mode: int) -> str:
@@ -294,12 +393,22 @@ def run_detection(
     if not mode or now - float(state["last_run"]) < int(state["period_ms"]) / 1000.0:
         return
     state["last_run"] = now
-    camera = cameras["qr" if mode == CMD_START_QR else "vision"]
+    camera_name = CAMERA_QR if mode == CMD_START_QR else CAMERA_VISION
+    camera = cameras[camera_name]
     try:
         ok, frame = camera.read()
     except Exception:
         return
     if not ok:
+        return
+    if not _frame_matches_camera_contract(frame, camera_name):
+        actual_size = _frame_size(frame)
+        expected_width, expected_height = _camera_frame_size(camera_name)
+        print(
+            f"camera_frame_size_invalid name={camera_name} expected={expected_width}x{expected_height} "
+            f"actual={actual_size}",
+            flush=True,
+        )
         return
 
     session = int(state["session"])
@@ -431,14 +540,11 @@ def main() -> None:
     warmup_vision_models()
     state = make_service_state()
     port = serial.Serial(SERIAL_PORT, SERIAL_BAUDRATE, timeout=0, write_timeout=0)
-    qr_camera = cv2.VideoCapture(CAMERA_QR_DEVICE, cv2.CAP_V4L2)
-    vision_camera = cv2.VideoCapture(CAMERA_VISION_DEVICE, cv2.CAP_V4L2)
-    if not qr_camera.isOpened() or not vision_camera.isOpened():
-        qr_camera.release()
-        vision_camera.release()
+    try:
+        cameras = open_cameras()
+    except Exception:
         port.close()
-        raise RuntimeError(f"cannot open cameras qr={CAMERA_QR_DEVICE}, vision={CAMERA_VISION_DEVICE}")
-    cameras = {"qr": qr_camera, "vision": vision_camera}
+        raise
 
     try:
         import Jetson.GPIO as jetson_gpio
@@ -480,15 +586,15 @@ def main() -> None:
         preview_frame = frame_bgr
         if selected_camera_id != active_camera_id:
             ok, selected_frame = cameras[selected_camera_id].read()
-            if not ok:
+            if not ok or not _frame_matches_camera_contract(selected_frame, selected_camera_id):
                 return
             preview_frame = selected_frame
             preview_mode = 0
             preview_result = {}
         aim_offset = (
-            (QR_AIM_OFFSET_X_PX, QR_AIM_OFFSET_Y_PX)
+            (QR_PREVIEW_AIM_OFFSET_X_PX, QR_PREVIEW_AIM_OFFSET_Y_PX)
             if selected_camera_id == CAMERA_QR
-            else (VISION_AIM_OFFSET_X_PX, VISION_AIM_OFFSET_Y_PX)
+            else (VISION_PREVIEW_AIM_OFFSET_X_PX, VISION_PREVIEW_AIM_OFFSET_Y_PX)
         )
         try:
             status_text = f"{selected_camera_id} 相机预览 | {_preview_mode_text(preview_mode)}"
@@ -519,7 +625,7 @@ def main() -> None:
         try:
             selected_camera_id = gui.get_selected_camera()
             ok, frame = cameras[selected_camera_id].read()
-            if not ok:
+            if not ok or not _frame_matches_camera_contract(frame, selected_camera_id):
                 return
             status_text = f"{selected_camera_id} 相机预览 | {_preview_mode_text(0)}"
             gui.set_camera_frame(
@@ -527,9 +633,9 @@ def main() -> None:
                     frame,
                     0,
                     aim_offset=(
-                        (QR_AIM_OFFSET_X_PX, QR_AIM_OFFSET_Y_PX)
+                        (QR_PREVIEW_AIM_OFFSET_X_PX, QR_PREVIEW_AIM_OFFSET_Y_PX)
                         if selected_camera_id == CAMERA_QR
-                        else (VISION_AIM_OFFSET_X_PX, VISION_AIM_OFFSET_Y_PX)
+                        else (VISION_PREVIEW_AIM_OFFSET_X_PX, VISION_PREVIEW_AIM_OFFSET_Y_PX)
                     ),
                     status_text=status_text,
                 ),
@@ -585,8 +691,8 @@ def main() -> None:
                 gpio.cleanup(PWM_PIN)
         reset_advance_tracking()
         reset_qr_tracking()
-        qr_camera.release()
-        vision_camera.release()
+        _release_camera(cameras.get(CAMERA_QR))
+        _release_camera(cameras.get(CAMERA_VISION))
         port.close()
 
 
