@@ -13,6 +13,8 @@ extern "C"
 #include "main.h"
 #include <math.h>
 
+#define ADVANCE_MOTION_PATH_MAX_POINTS ((uint16_t)256U) /*!< 路径协议允许的最大离散点数。 */
+
 /* 连续路径参数。以下保守初值均需要实机标定。 */
 #define ADVANCE_MOTION_PATH_MIN_SEGMENT_MM (1.0f) /*!< 最小有效线段长度，单位为 mm。 */
 #define ADVANCE_MOTION_PATH_SEARCH_SEGMENTS ((uint16_t)12U) /*!< 每周期前向搜索上限，单位为段。 */
