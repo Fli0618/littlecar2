@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import pyqtgraph as pg
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from .buffer import TelemetryBuffer
+
+
+HEADING_MODES = {"WIT", "OPS", "NONE"}
 
 
 class TelemetryPlots(QWidget):
@@ -25,6 +29,7 @@ class TelemetryPlots(QWidget):
         self.setMinimumSize(self._MINIMUM_WIDTH, self._MINIMUM_HEIGHT)
         self.window_s = 30.0
         self.follow_latest = True
+        self.heading_mode = "WIT"
         self.mode = QComboBox()
         self.mode.addItems(["误差", "积分累计"])
         self.follow = QPushButton("跟随最新")
@@ -72,11 +77,18 @@ class TelemetryPlots(QWidget):
             "actual_ops_yaw": self.ops_yaw.plot(pen=pg.mkPen("#82aaff", width=2), name="OPS Z yaw"),
         }
         self.diag = (
-            self.error_x.plot(pen=pg.mkPen("#ff6b6b", width=2), name="X"),
-            self.error_y.plot(pen=pg.mkPen("#ffd166", width=2), name="Y"),
-            self.error_wit_yaw.plot(pen=pg.mkPen("#a8dadc", width=2), name="WIT 航向"),
-            self.error_ops_yaw.plot(pen=pg.mkPen("#c792ea", width=2), name="OPS 航向"),
+            self.error_x.plot(pen=pg.mkPen("#ff6b6b", width=2), name="X 误差"),
+            self.error_y.plot(pen=pg.mkPen("#ffd166", width=2), name="Y 误差"),
+            self.error_wit_yaw.plot(pen=pg.mkPen("#a8dadc", width=2), name="WIT 航向误差"),
+            self.error_ops_yaw.plot(pen=pg.mkPen("#c792ea", width=2), name="OPS 航向误差"),
         )
+        self.zero_lines = tuple(
+            pg.InfiniteLine(pos=0.0, angle=0,
+                            pen=pg.mkPen("#8a8f98", width=1, style=Qt.PenStyle.DashLine))
+            for _ in self.diag
+        )
+        for plot, line in zip(self.diag_plots, self.zero_lines):
+            plot.addItem(line)
 
         layout = QVBoxLayout(self)
         layout.addLayout(controls)
@@ -90,6 +102,15 @@ class TelemetryPlots(QWidget):
     def set_window(self, seconds: float) -> None:
         self.window_s = seconds
         self.follow_latest = True
+
+    def set_heading_mode(self, mode: str) -> None:
+        """标记当前真正参与控制的航向源；NONE 时两路只用于观察。"""
+        normalized = mode.upper()
+        if normalized not in HEADING_MODES:
+            raise ValueError(f"unknown heading mode: {mode}")
+        self.heading_mode = normalized
+        if hasattr(self, "_buffer"):
+            self.refresh(self._buffer)
 
     def enable_follow(self) -> None:
         self.follow_latest = True
@@ -127,14 +148,31 @@ class TelemetryPlots(QWidget):
             data = [sample.integrals for sample in samples]
         for index, curve in enumerate(self.diag[:2]):
             curve.setData(times, [item[index] for item in data])
-        for plot, title in zip((self.error_x, self.error_y), self._DIAGNOSTIC_TITLES[self.mode.currentIndex()]):
-            plot.setTitle(title)
-        self.diag[2].setData(times, [self._wrap_angle(target - actual) for target, actual in zip(targets, wit_values)])
-        self.diag[3].setData(times, [self._wrap_angle(target - actual) for target, actual in zip(targets, ops_values)])
+        current_linear = data[-1]
+        for plot, title, value in zip(
+                (self.error_x, self.error_y),
+                self._DIAGNOSTIC_TITLES[self.mode.currentIndex()],
+                current_linear):
+            plot.setTitle(f"{title} | 当前 {value:+.2f}")
+        wit_errors = [self._wrap_angle(target - actual) for target, actual in zip(targets, wit_values)]
+        ops_errors = [self._wrap_angle(target - actual) for target, actual in zip(targets, ops_values)]
+        self.diag[2].setData(times, wit_errors)
+        self.diag[3].setData(times, ops_errors)
+        self.error_wit_yaw.setTitle(self._yaw_error_title("WIT", wit_errors[-1]))
+        self.error_ops_yaw.setTitle(self._yaw_error_title("OPS", ops_errors[-1]))
 
         if self.follow_latest:
             self.position_x.setXRange(max(0.0, times[-1] - self.window_s), max(self.window_s, times[-1]), padding=0)
         self._update_y_ranges(samples, data)
+
+    def _yaw_error_title(self, source: str, value: float) -> str:
+        if self.heading_mode == "NONE":
+            role = "仅观测，未参与控制"
+        elif self.heading_mode == source:
+            role = "当前控制源"
+        else:
+            role = "对照源"
+        return f"{source} 航向误差 (deg，{role}) | 当前 {value:+.2f}"
 
     @staticmethod
     def _wrap_angle(value: float) -> float:

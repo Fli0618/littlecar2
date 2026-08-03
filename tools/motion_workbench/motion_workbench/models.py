@@ -14,20 +14,57 @@ class TargetPose:
     yaw_deg: float
 
 
-def reflect_target_pose(pose: TargetPose, flip_x: bool, flip_y: bool) -> TargetPose:
-    """Reflect a runtime pose about the world origin, including its heading."""
-    if not flip_x and not flip_y:
+def transform_target_pose(
+    pose: TargetPose,
+    swap_xy: bool = False,
+    flip_x: bool = False,
+    flip_y: bool = False,
+) -> TargetPose:
+    """Transform a displayed runtime pose without changing source telemetry."""
+    if not swap_xy and not flip_x and not flip_y:
         return pose
     direction_x = math.sin(math.radians(pose.yaw_deg))
     direction_y = math.cos(math.radians(pose.yaw_deg))
+    x_mm, y_mm = pose.x_mm, pose.y_mm
+    if swap_xy:
+        x_mm, y_mm = y_mm, x_mm
+        direction_x, direction_y = direction_y, direction_x
     if flip_x:
+        x_mm = -x_mm
         direction_x = -direction_x
     if flip_y:
+        y_mm = -y_mm
         direction_y = -direction_y
     yaw_deg = (math.degrees(math.atan2(direction_x, direction_y)) + 180.0) % 360.0 - 180.0
-    return TargetPose(-pose.x_mm if flip_x else pose.x_mm,
-                      -pose.y_mm if flip_y else pose.y_mm,
-                      yaw_deg)
+    return TargetPose(x_mm, y_mm, yaw_deg)
+
+
+def reflect_target_pose(pose: TargetPose, flip_x: bool, flip_y: bool) -> TargetPose:
+    """Compatibility wrapper for the original reflection-only display API."""
+    return transform_target_pose(pose, False, flip_x, flip_y)
+
+
+def inverse_transform_target_pose(
+    pose: TargetPose,
+    swap_xy: bool = False,
+    flip_x: bool = False,
+    flip_y: bool = False,
+) -> TargetPose:
+    """Convert a displayed target back into the board coordinate frame."""
+    direction_x = math.sin(math.radians(pose.yaw_deg))
+    direction_y = math.cos(math.radians(pose.yaw_deg))
+    x_mm, y_mm = pose.x_mm, pose.y_mm
+    if flip_x:
+        x_mm = -x_mm
+        direction_x = -direction_x
+    if flip_y:
+        y_mm = -y_mm
+        direction_y = -direction_y
+    if swap_xy:
+        x_mm, y_mm = y_mm, x_mm
+        direction_x, direction_y = direction_y, direction_x
+    yaw_deg = (math.degrees(math.atan2(direction_x, direction_y)) + 180.0) % 360.0 - 180.0
+    return TargetPose(x_mm, y_mm, yaw_deg)
 
 
 class SinglePointState(str, Enum):

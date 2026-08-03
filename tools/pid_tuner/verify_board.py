@@ -34,9 +34,9 @@ from pid_tuner.protocol import (
 )
 
 HEARTBEAT_PERIOD_S = 0.5
-SAFE_VMAX_MM_S = 50.0
-SAFE_WMAX_DEG_S = 30.0
-SAFE_TIMEOUT_MS = 5000
+SAFE_VMAX_MM_S = 250.0
+SAFE_WMAX_DEG_S = 90.0
+SAFE_TIMEOUT_MS = 15000
 
 
 class BoardClient:
@@ -88,6 +88,8 @@ class BoardClient:
                     code = frame.payload[1] if len(frame.payload) >= 2 else None
                     raise ProtocolError(f"board rejected command 0x{command:02X}, error={code}")
                 if frame.command != expected_command:
+                    if frame.command == 0x85: # CMD_PATH_TELEMETRY can also be ignored or handled
+                        continue
                     raise ProtocolError(
                         f"unexpected response 0x{frame.command:02X} for command 0x{command:02X}"
                     )
@@ -145,6 +147,7 @@ def write_csv(path: Path, telemetry: list) -> None:
         "command_vx_mm_s", "command_vy_mm_s", "command_wz_deg_s",
         "measured_vx_mm_s", "measured_vy_mm_s", "measured_wz_deg_s",
         "integral_x_mm_s", "integral_y_mm_s", "integral_yaw_deg_s",
+        "wit_yaw_deg", "ops_yaw_deg",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -185,7 +188,7 @@ def main() -> int:
             if args.exercise_motion:
                 payload = struct.pack(
                     "<5fIB", args.x, args.y, args.yaw, SAFE_VMAX_MM_S, SAFE_WMAX_DEG_S,
-                    SAFE_TIMEOUT_MS, 0x01,
+                    SAFE_TIMEOUT_MS, 0x03, # ADVANCE_MOTION_GOAL_USE_POSITION (0x02) | ADVANCE_MOTION_GOAL_USE_YAW (0x01)
                 )
                 client.request(CMD_GOTO_POSE, payload)
                 print(f"GOTO_POSE accepted; collecting telemetry for up to {args.duration:g} seconds")

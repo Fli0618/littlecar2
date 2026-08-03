@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from motion_workbench.app import PathControlPanel
+from motion_workbench.control_panel import ProtectedDoubleSpinBox
 from pid_tuner.models import PathControlConfig
 
 
@@ -27,6 +28,10 @@ class PathControlPanelTests(unittest.TestCase):
         try:
             panel.set_config(12, config)
             self.assertIn("12", panel.config_status.text())
+            self.assertTrue(all(isinstance(box, ProtectedDoubleSpinBox)
+                                for box in panel.config_inputs.values()))
+            self.assertTrue(all(box.lineEdit().isReadOnly()
+                                for box in panel.config_inputs.values()))
             panel.apply_config.click()
             self.assertEqual(panel.current_config(), config)
             self.assertEqual(requested, [config])

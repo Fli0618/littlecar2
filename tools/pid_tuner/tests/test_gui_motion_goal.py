@@ -23,7 +23,7 @@ class GuiMotionGoalTests(unittest.TestCase):
             goal = MotionGoal(*(widget.value() for widget in window.goal), window.timeout.value())
             self.assertEqual((goal.x_mm, goal.y_mm, goal.yaw_deg), (0.0, 0.0, 0.0))
             self.assertEqual((goal.vmax_mm_s, goal.wmax_deg_s, goal.timeout_ms), (600.0, 120.0, 15000))
-            self.assertTrue(window.use_yaw.isChecked())
+            self.assertTrue(window.connection_motion.uses_yaw())
             self.assertFalse(window.large_yaw_align.isChecked())
             self.assertFalse(window.large_yaw_align.isEnabled())
             self.assertIsNone(validate_motion_goal(goal))
@@ -88,6 +88,25 @@ class GuiMotionGoalTests(unittest.TestCase):
                                   (0.0, 0.0, 0.0), remote_link_status=0x4000)
             window.on_telemetry(telemetry)
             self.assertIn("心跳超时停车", window.status.text())
+        finally:
+            window.close()
+
+    def test_none_heading_mode_survives_board_source_telemetry_and_ack(self) -> None:
+        window = MainWindow()
+        try:
+            none_index = window.yaw_source.findData("NONE")
+            window.yaw_source.setCurrentIndex(none_index)
+            telemetry = Telemetry(1, 2, 0, 1, 0x87, (0.0, 1000.0, 0.0),
+                                  (0.0, 10.0, 0.0), (0.0, 990.0, 0.0),
+                                  (0.0, 100.0, 0.0), (0.0, 95.0, 0.0),
+                                  (0.0, 0.0, 0.0))
+
+            window.on_telemetry(telemetry)
+            self.assertIn("航向控制=关闭", window.status.text())
+            window.on_yaw_source_changed("OPS")
+
+            self.assertEqual(window.connection_motion.heading_mode(), "NONE")
+            self.assertEqual(window.plots.heading_mode, "NONE")
         finally:
             window.close()
 
