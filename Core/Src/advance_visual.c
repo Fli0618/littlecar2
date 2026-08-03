@@ -15,6 +15,10 @@ static uint32_t g_started_tick;
 static uint32_t g_last_frame_tick;
 static uint32_t g_last_target_tick;
 
+#ifdef ADVANCE_VISUAL_TEST
+static volatile uint8_t g_visual_transform_test_passed;
+#endif
+
 static uint8_t AdvanceVisual_IsModeValid(AdvanceVisual_Mode_t mode)
 {
   return ((mode == ADVANCE_VISUAL_MODE_CIRCLE) ||
@@ -72,6 +76,71 @@ static float AdvanceVisual_LimitFloat(float value, float limit)
   return value;
 }
 
+/* 将相机像素误差旋转到车体坐标，随后应用车体轴方向标定。 */
+static void AdvanceVisual_TransformPixelError(AdvanceVisual_CameraRotation_t rotation,
+                                              int32_t pixel_error_x,
+                                              int32_t pixel_error_y,
+                                              int32_t *body_error_x,
+                                              int32_t *body_error_y)
+{
+  switch (rotation)
+  {
+    case ADVANCE_VISUAL_CAMERA_ROTATION_90_CW:
+      *body_error_x = pixel_error_y;
+      *body_error_y = -pixel_error_x;
+      break;
+
+    case ADVANCE_VISUAL_CAMERA_ROTATION_180:
+      *body_error_x = -pixel_error_x;
+      *body_error_y = -pixel_error_y;
+      break;
+
+    case ADVANCE_VISUAL_CAMERA_ROTATION_270_CW:
+      *body_error_x = -pixel_error_y;
+      *body_error_y = pixel_error_x;
+      break;
+
+    case ADVANCE_VISUAL_CAMERA_ROTATION_0:
+    default:
+      *body_error_x = pixel_error_x;
+      *body_error_y = pixel_error_y;
+      break;
+  }
+}
+
+#ifdef ADVANCE_VISUAL_TEST
+static uint8_t AdvanceVisual_RunTransformSelfTest(void)
+{
+  int32_t body_error_x;
+  int32_t body_error_y;
+
+  AdvanceVisual_TransformPixelError(ADVANCE_VISUAL_CAMERA_ROTATION_0,
+                                    10, 20, &body_error_x, &body_error_y);
+  if ((body_error_x != 10) || (body_error_y != 20))
+  {
+    return 0U;
+  }
+
+  AdvanceVisual_TransformPixelError(ADVANCE_VISUAL_CAMERA_ROTATION_90_CW,
+                                    10, 20, &body_error_x, &body_error_y);
+  if ((body_error_x != 20) || (body_error_y != -10))
+  {
+    return 0U;
+  }
+
+  AdvanceVisual_TransformPixelError(ADVANCE_VISUAL_CAMERA_ROTATION_180,
+                                    10, 20, &body_error_x, &body_error_y);
+  if ((body_error_x != -10) || (body_error_y != -20))
+  {
+    return 0U;
+  }
+
+  AdvanceVisual_TransformPixelError(ADVANCE_VISUAL_CAMERA_ROTATION_270_CW,
+                                    10, 20, &body_error_x, &body_error_y);
+  return ((body_error_x == -20) && (body_error_y == 10)) ? 1U : 0U;
+}
+#endif
+
 static AdvanceVisual_FrameState_t AdvanceVisual_GetFrame(int16_t *center_x, int16_t *center_y)
 {
   Detect_TargetList_t targets;
@@ -126,6 +195,10 @@ void AdvanceVisual_Init(void)
   g_started_tick = 0U;
   g_last_frame_tick = 0U;
   g_last_target_tick = 0U;
+
+#ifdef ADVANCE_VISUAL_TEST
+  g_visual_transform_test_passed = AdvanceVisual_RunTransformSelfTest();
+#endif
 }
 
 void AdvanceVisual_Update(void)
@@ -134,8 +207,10 @@ void AdvanceVisual_Update(void)
   uint32_t now_tick;
   int16_t center_x = 0;
   int16_t center_y = 0;
-  int32_t error_x;
-  int32_t error_y;
+  int32_t pixel_error_x;
+  int32_t pixel_error_y;
+  int32_t body_error_x;
+  int32_t body_error_y;
   float vx_right;
   float vy_forward;
 
@@ -183,10 +258,13 @@ void AdvanceVisual_Update(void)
   }
 
   g_last_target_tick = now_tick;
-  error_x = (int32_t)center_x - (int32_t)AdvanceVisual_GetReferenceX();
-  error_y = (int32_t)center_y - (int32_t)AdvanceVisual_GetReferenceY();
-  if ((AdvanceVisual_AbsI32(error_x) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_X) &&
-      (AdvanceVisual_AbsI32(error_y) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_Y))
+  pixel_error_x = (int32_t)center_x - (int32_t)AdvanceVisual_GetReferenceX();
+  pixel_error_y = (int32_t)center_y - (int32_t)AdvanceVisual_GetReferenceY();
+  AdvanceVisual_TransformPixelError(ADVANCE_VISUAL_CAMERA_ROTATION,
+                                    pixel_error_x, pixel_error_y,
+                                    &body_error_x, &body_error_y);
+  if ((AdvanceVisual_AbsI32(body_error_x) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_X) &&
+      (AdvanceVisual_AbsI32(body_error_y) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_Y))
   {
     Chassis_SetBodyVelocityEx(0.0f, 0.0f, 0.0f, ADVANCE_VISUAL_ACC);
     ++g_stable_count;
@@ -198,12 +276,12 @@ void AdvanceVisual_Update(void)
   }
 
   g_stable_count = 0U;
-  vx_right = (AdvanceVisual_AbsI32(error_x) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_X)
+  vx_right = (AdvanceVisual_AbsI32(body_error_x) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_X)
                  ? 0.0f
-                 : ADVANCE_VISUAL_X_SIGN * ADVANCE_VISUAL_KP_X * (float)error_x;
-  vy_forward = (AdvanceVisual_AbsI32(error_y) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_Y)
+                 : ADVANCE_VISUAL_BODY_X_SIGN * ADVANCE_VISUAL_KP_X * (float)body_error_x;
+  vy_forward = (AdvanceVisual_AbsI32(body_error_y) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_Y)
                    ? 0.0f
-                   : ADVANCE_VISUAL_Y_SIGN * ADVANCE_VISUAL_KP_Y * (float)error_y;
+                   : ADVANCE_VISUAL_BODY_Y_SIGN * ADVANCE_VISUAL_KP_Y * (float)body_error_y;
   vx_right = AdvanceVisual_LimitFloat(vx_right, ADVANCE_VISUAL_MAX_VX);
   vy_forward = AdvanceVisual_LimitFloat(vy_forward, ADVANCE_VISUAL_MAX_VY);
   Chassis_SetBodyVelocityEx(vx_right, vy_forward, 0.0f, ADVANCE_VISUAL_ACC);
