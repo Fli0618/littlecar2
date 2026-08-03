@@ -113,8 +113,8 @@ class MotionWorkbenchWindow(QMainWindow):
         self.resize(1500, 920)
         self.controller = MotionWorkbenchController()
         self._runtime_swap_xy = False
-        self._runtime_flip_x = True
-        self._runtime_flip_y = True
+        self._runtime_flip_x = False
+        self._runtime_flip_y = False
         self._origin_reset_pending = False
         self._build()
         self._wire()

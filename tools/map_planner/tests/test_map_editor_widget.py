@@ -82,15 +82,15 @@ class MapEditorWidgetTests(unittest.TestCase):
             transforms = []
             widget.runtime_axis_transform_changed.connect(
                 lambda swap, x, y: transforms.append((swap, x, y)))
-            self.assertTrue(widget.execution_flip_x.isChecked())
-            self.assertTrue(widget.execution_flip_y.isChecked())
+            self.assertFalse(widget.execution_flip_x.isChecked())
+            self.assertFalse(widget.execution_flip_y.isChecked())
             widget.execution_swap_xy.setChecked(True)
-            widget.execution_flip_x.setChecked(False)
-            widget.execution_flip_y.setChecked(False)
+            widget.execution_flip_x.setChecked(True)
+            widget.execution_flip_y.setChecked(True)
             self.assertEqual(transforms, [
-                (True, True, True),
-                (True, False, True),
                 (True, False, False),
+                (True, True, False),
+                (True, True, True),
             ])
 
             widget.set_execution_enabled(False)

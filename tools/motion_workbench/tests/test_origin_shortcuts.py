@@ -58,7 +58,7 @@ class OriginShortcutTests(unittest.TestCase):
 
             window.return_origin_button.click()
             goal = session.start_motion.call_args.args[0]
-            self.assertEqual((goal.x_mm, goal.y_mm, goal.yaw_deg), (-0.0, -0.0, -180.0))
+            self.assertEqual((goal.x_mm, goal.y_mm, goal.yaw_deg), (0.0, 0.0, 0.0))
             self.assertEqual((goal.vmax_mm_s, goal.wmax_deg_s, goal.timeout_ms),
                              (321.0, 45.0, 6789))
             self.assertTrue(goal.use_position)

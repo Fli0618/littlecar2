@@ -14,7 +14,7 @@
 `execution_stop_requested()` 信号，串口和运动编排由外部工作台负责。关闭开关时三个
 执行按钮均禁用。
 
-实机执行区通过 `runtime_axis_transform_changed(bool, bool, bool)` 报告 X/Y 交换、X 反转和 Y 反转选择。编辑器本身不改写方案；MotionWorkbench 同时将该选择用于实测显示和下发坐标转换。X/Y 反转默认开启，交换默认关闭。自定义起点的位置选择阶段会显示带方向的车体轮廓，越界或碰撞时显示为红色。
+实机执行区通过 `runtime_axis_transform_changed(bool, bool, bool)` 报告 X/Y 交换、X 反转和 Y 反转选择。编辑器本身不改写方案；MotionWorkbench 同时将该选择用于实测显示和下发坐标转换。三个坐标变换开关每次启动均默认关闭。自定义起点的位置选择阶段会显示带方向的车体轮廓，越界或碰撞时显示为红色。
 
 工作台可用 `set_execution_target()`、`set_execution_actual_pose()`、`set_execution_error()`、
 `set_execution_trace()` 或 `update_execution_telemetry()` 注入目标、实际车辆、误差和轨迹。

@@ -541,8 +541,6 @@ class MapEditorWidget(QWidget):
             self.execution_swap_xy = QCheckBox("显示交换 X/Y")
             self.execution_flip_x = QCheckBox("显示反转 X")
             self.execution_flip_y = QCheckBox("显示反转 Y")
-            self.execution_flip_x.setChecked(True)
-            self.execution_flip_y.setChecked(True)
             self.execution_step_button.clicked.connect(self._request_single_execution)
             self.execution_run_button.clicked.connect(self._request_continuous_execution)
             self.execution_stop_button.clicked.connect(self.execution_stop_requested.emit)
