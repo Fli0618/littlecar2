@@ -7,6 +7,17 @@
 
 独立的 PySide6 赛前规划与仿真工具，不连接串口，也不会向小车下发指令。
 
+## 工作台实机执行接入
+
+编辑器提供“实机运动”开关、单步执行、连贯执行和停止控件；控件只发射
+`hardware_enabled_changed(bool)`、`single_step_requested()`、`continuous_requested()`、
+`execution_stop_requested()` 信号，串口和运动编排由外部工作台负责。关闭开关时三个
+执行按钮均禁用。
+
+工作台可用 `set_execution_target()`、`set_execution_actual_pose()`、`set_execution_error()`、
+`set_execution_trace()` 或 `update_execution_telemetry()` 注入目标、实际车辆、误差和轨迹。
+遥测更新仅替换 `runtime_*` 图元，不会清空或重绘整个地图场景。
+
 地图按官方 `2400 mm × 2400 mm` 图纸绘制。四个黄色区的定位坐标由“场地中心对称、十字通道居中”关系推导为 `(550,550)`、`(1400,550)`、`(550,1400)`、`(1400,1400)`。新建方案必须先选择启停区或自定义起点，再右击蓝色起点箭头设置朝向并确认。
 
 - `选择`：框选，Ctrl 增减选择，`Ctrl+A` 全选节点，`Ctrl+Z` 撤销。

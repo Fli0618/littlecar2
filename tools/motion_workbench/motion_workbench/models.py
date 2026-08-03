@@ -24,6 +24,28 @@ class SinglePointState(str, Enum):
     NO_ORIGIN = "NO_ORIGIN"
 
 
+class PlanExecutionState(str, Enum):
+    """State exposed to the workflow controls while a map plan is executed."""
+
+    IDLE = "IDLE"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELED = "CANCELED"
+
+
+@dataclass(frozen=True)
+class PlanExecution:
+    """A small immutable workflow snapshot suitable for Qt views."""
+
+    state: PlanExecutionState
+    cursor: int
+    step_count: int
+    continuous: bool
+    active_step_name: str = ""
+    reason: str = ""
+
+
 @dataclass(frozen=True)
 class ExperimentResult:
     target: TargetPose
