@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "motion-workbench"
+version = "0.1.0"
+description = "LittleCar2 底盘运动调试工作台"
+requires-python = ">=3.9"
+dependencies = ["PySide6>=6.6", "pyqtgraph>=0.13", "pyserial>=3.5"]
+
+[project.scripts]
+motion-workbench = "motion_workbench.app:main"
+
+[tool.setuptools.packages.find]
+include = ["motion_workbench*"]

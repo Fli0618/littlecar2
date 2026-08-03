@@ -11,7 +11,8 @@ from typing import Protocol
 from .models import BoardError, MotionGoal, PidConfig, RequestTimeout, Telemetry
 from .protocol import (
     CMD_ACK, CMD_ERROR, CMD_GET_GOTO_STRATEGY, CMD_GET_PID, CMD_GOTO_POSE,
-    CMD_GOTO_STRATEGY, CMD_HEARTBEAT, CMD_PID, CMD_RESET_ORIGIN, CMD_RESTORE_PID,
+    CMD_GOTO_STRATEGY, CMD_HEARTBEAT, CMD_PATH_ABORT, CMD_PATH_BEGIN, CMD_PATH_CHUNK,
+    CMD_PATH_COMMIT, CMD_PATH_START, CMD_PATH_TELEMETRY, CMD_PID, CMD_RESET_ORIGIN, CMD_RESTORE_PID,
     CMD_SET_GOTO_STRATEGY, CMD_SET_PID, CMD_SET_YAW_SOURCE, CMD_STOP, CMD_TELEMETRY,
     Frame, ProtocolError, StreamDecoder, decode_goto_strategy, decode_pid,
     decode_telemetry, encode_frame, encode_goal, encode_goto_strategy, encode_pid,
@@ -41,6 +42,7 @@ class SerialClient:
         self._responses: Queue[Frame] = Queue()
         self._telemetry: Queue[Telemetry] = Queue()
         self._callbacks: list[Callable[[Telemetry], None]] = []
+        self._path_callbacks: list[Callable[[Frame], None]] = []
         self._stop_event = threading.Event()
         self._request_lock = threading.Lock()
         self._sequence_lock = threading.Lock()
@@ -87,6 +89,10 @@ class SerialClient:
     def add_telemetry_callback(self, callback: Callable[[Telemetry], None]) -> None:
         self._callbacks.append(callback)
 
+    def add_path_telemetry_callback(self, callback: Callable[[Frame], None]) -> None:
+        """Register a listener for the independent low-rate path diagnostics stream."""
+        self._path_callbacks.append(callback)
+
     def get_telemetry(self, timeout_s: float | None = None) -> Telemetry:
         return self._telemetry.get(timeout=timeout_s)
 
@@ -126,6 +132,21 @@ class SerialClient:
 
     def stop(self) -> None:
         self.request(CMD_STOP)
+
+    def path_begin(self, payload: bytes) -> None:
+        self.request(CMD_PATH_BEGIN, payload)
+
+    def path_chunk(self, payload: bytes) -> None:
+        self.request(CMD_PATH_CHUNK, payload)
+
+    def path_commit(self, payload: bytes) -> None:
+        self.request(CMD_PATH_COMMIT, payload)
+
+    def path_start(self, payload: bytes) -> None:
+        self.request(CMD_PATH_START, payload)
+
+    def path_abort(self) -> None:
+        self.request(CMD_PATH_ABORT)
 
     def request(self, command: int, payload: bytes = b"", expected_command: int = CMD_ACK) -> Frame:
         self.start()
@@ -180,6 +201,12 @@ class SerialClient:
                         for callback in tuple(self._callbacks):
                             try:
                                 callback(telemetry)
+                            except Exception:
+                                pass
+                    elif frame.command == CMD_PATH_TELEMETRY:
+                        for callback in tuple(self._path_callbacks):
+                            try:
+                                callback(frame)
                             except Exception:
                                 pass
                     else:
