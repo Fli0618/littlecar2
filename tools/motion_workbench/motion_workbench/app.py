@@ -6,16 +6,18 @@ import sys
 
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (QApplication, QComboBox, QFormLayout, QHBoxLayout, QLabel, QMainWindow, QPushButton,
-                               QScrollArea, QSplitter, QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
+                               QDoubleSpinBox, QGroupBox, QScrollArea, QSplitter,
+                               QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from map_planner.gui import MapEditorWidget
 from map_planner.models import ContinuousPathSegment, Pose
 from pid_tuner.gui.plots import TelemetryPlots
 from pid_tuner.gui.widgets import ConnectionPanel, PidControlPanel
+from pid_tuner.models import PathControlConfig
 
 from .control_panel import PointControlPanel
 from .controller import MotionWorkbenchController
-from .models import TargetPose
+from .models import TargetPose, reflect_target_pose
 
 
 class PathControlPanel(QWidget):
@@ -24,6 +26,9 @@ class PathControlPanel(QWidget):
     upload_requested = Signal()
     start_requested = Signal()
     abort_requested = Signal()
+    read_config_requested = Signal()
+    apply_config_requested = Signal(object)
+    restore_config_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -32,11 +37,73 @@ class PathControlPanel(QWidget):
         self.start = QPushButton("启动路径")
         self.abort = QPushButton("中止路径")
         self.status = QLabel("未上传")
-        form = QFormLayout(self)
-        form.addRow("路径来源", self.source); form.addRow(self.upload); form.addRow(self.start); form.addRow(self.abort); form.addRow("状态", self.status)
+        layout = QVBoxLayout(self)
+        command_form = QFormLayout()
+        command_form.addRow("路径来源", self.source); command_form.addRow(self.upload); command_form.addRow(self.start); command_form.addRow(self.abort); command_form.addRow("状态", self.status)
+        layout.addLayout(command_form)
+        self.config_inputs: dict[str, QDoubleSpinBox] = {}
+        groups = (
+            ("路径 PD", (
+                ("kp_cross_track", "横向 Kp", 0.98, 0.0, 20.0, 0.01),
+                ("kd_cross_track_velocity", "横向速度 Kd", 0.62, 0.0, 20.0, 0.01),
+                ("kp_yaw", "航向 Kp", 1.42, 0.0, 20.0, 0.01),
+                ("kd_yaw_rate", "航向角速度 Kd", 0.427, 0.0, 20.0, 0.01),
+            )),
+            ("速度规划", (
+                ("cruise_speed_mm_s", "巡航速度 mm/s", 820.0, 1.0, 1500.0, 10.0),
+                ("max_yaw_rate_deg_s", "最大角速度 deg/s", 100.0, 1.0, 180.0, 5.0),
+                ("accel_mm_s2", "加速度 mm/s²", 800.0, 1.0, 5000.0, 10.0),
+                ("decel_mm_s2", "减速度 mm/s²", 1000.0, 1.0, 5000.0, 10.0),
+                ("max_lateral_accel_mm_s2", "横向加速度 mm/s²", 600.0, 1.0, 5000.0, 10.0),
+            )),
+            ("前视规划", (
+                ("lookahead_min_mm", "最小前视 mm", 60.0, 1.0, 1000.0, 5.0),
+                ("lookahead_base_mm", "基础前视 mm", 60.0, 1.0, 1000.0, 5.0),
+                ("lookahead_speed_gain_s", "速度增益 s", 0.15, 0.0, 2.0, 0.01),
+                ("lookahead_curve_gain_mm", "曲率增益 mm", 120.0, 0.0, 1000.0, 5.0),
+                ("lookahead_max_mm", "最大前视 mm", 180.0, 1.0, 1000.0, 5.0),
+            )),
+        )
+        for title, fields in groups:
+            group = QGroupBox(title); form = QFormLayout(group)
+            for name, label, value, minimum, maximum, step in fields:
+                box = QDoubleSpinBox(); box.setRange(minimum, maximum)
+                box.setDecimals(3); box.setSingleStep(step); box.setValue(value)
+                self.config_inputs[name] = box; form.addRow(label, box)
+            layout.addWidget(group)
+        buttons = QHBoxLayout()
+        self.read_config = QPushButton("读取参数")
+        self.apply_config = QPushButton("应用参数")
+        self.restore_config = QPushButton("恢复默认")
+        for button in (self.read_config, self.apply_config, self.restore_config): buttons.addWidget(button)
+        layout.addLayout(buttons)
+        self.config_status = QLabel("路径参数：未读取"); self.config_status.setWordWrap(True)
+        layout.addWidget(self.config_status); layout.addStretch()
         self.upload.clicked.connect(self.upload_requested)
         self.start.clicked.connect(self.start_requested)
         self.abort.clicked.connect(self.abort_requested)
+        self.read_config.clicked.connect(self.read_config_requested)
+        self.apply_config.clicked.connect(self._emit_config)
+        self.restore_config.clicked.connect(self.restore_config_requested)
+
+    def current_config(self) -> PathControlConfig:
+        values = {name: box.value() for name, box in self.config_inputs.items()}
+        if not values["lookahead_min_mm"] <= values["lookahead_base_mm"] <= values["lookahead_max_mm"]:
+            raise ValueError("前视距离必须满足：最小 ≤ 基础 ≤ 最大")
+        return PathControlConfig(**values)
+
+    def set_config(self, revision: int, config: PathControlConfig) -> None:
+        for name, value in config.to_dict().items():
+            self.config_inputs[name].setValue(value)
+        self.config_status.setText(f"路径参数修订号：{revision}")
+
+    def _emit_config(self) -> None:
+        try:
+            config = self.current_config()
+        except ValueError as error:
+            self.config_status.setText(str(error)); return
+        self.apply_config_requested.emit(config)
+        self.config_status.setText("路径参数：等待下位机应用")
 
 
 class MotionWorkbenchWindow(QMainWindow):
@@ -45,6 +112,8 @@ class MotionWorkbenchWindow(QMainWindow):
         self.setWindowTitle("底盘运动调试工作台")
         self.resize(1500, 920)
         self.controller = MotionWorkbenchController()
+        self._runtime_flip_x = False
+        self._runtime_flip_y = False
         self._build()
         self._wire()
         self.refresh_timer = QTimer(self); self.refresh_timer.setInterval(40); self.refresh_timer.timeout.connect(self._refresh); self.refresh_timer.start()
@@ -110,12 +179,18 @@ class MotionWorkbenchWindow(QMainWindow):
         self.path_panel.upload_requested.connect(self._upload_selected_path)
         self.path_panel.start_requested.connect(lambda: self.controller.start_path(self._path_id))
         self.path_panel.abort_requested.connect(self.controller.abort_path)
+        self.path_panel.read_config_requested.connect(self.controller.session.read_path_config)
+        self.path_panel.apply_config_requested.connect(self.controller.session.apply_path_config)
+        self.path_panel.restore_config_requested.connect(self.controller.session.restore_path_config)
+        self.controller.session.path_config_read.connect(self.path_panel.set_config)
+        self.controller.session.path_config_applied.connect(self.path_panel.set_config)
         self.map_editor.plan_changed.connect(self.controller.set_plan)
         self.map_editor.candidate_selected.connect(self.controller.set_plan_cursor)
         self.map_editor.hardware_enabled_changed.connect(self._set_hardware_execution)
         self.map_editor.single_step_requested.connect(self.controller.start_single)
         self.map_editor.continuous_requested.connect(self.controller.start_continuous)
         self.map_editor.execution_stop_requested.connect(self.controller.stop)
+        self.map_editor.runtime_axis_flip_changed.connect(self._set_runtime_axis_flip)
         self.view_switch.clicked.connect(self._switch_workspace)
         self._path_id = 1
         self.controller.set_plan(self.map_editor.get_plan())
@@ -137,13 +212,16 @@ class MotionWorkbenchWindow(QMainWindow):
     def _on_session_status(self, status: str) -> None:
         self.connection.setText(status)
         self.connection_panel.set_connected(self.controller.session.connected, status)
+        if status == "已连接":
+            self.controller.session.read_path_config()
 
     def _on_connection_failure(self, message: str) -> None:
         self.connection_panel.set_connected(False, f"连接失败: {message}")
 
     def _set_actual_pose(self, target: TargetPose, valid: bool) -> None:
         self.pose_status.setText("位姿: 有效" if valid else "位姿: 无效")
-        actual = Pose(target.x_mm, target.y_mm, target.yaw_deg) if valid else None
+        displayed = reflect_target_pose(target, self._runtime_flip_x, self._runtime_flip_y)
+        actual = Pose(displayed.x_mm, displayed.y_mm, displayed.yaw_deg) if valid else None
         self.map_editor.set_runtime_pose(actual)
         self.map_editor.set_execution_actual_pose(actual)
         execution = self.controller.execution
@@ -156,7 +234,18 @@ class MotionWorkbenchWindow(QMainWindow):
         self.map_editor.set_execution_target(pose)
 
     def _set_execution_trace(self, trace: tuple[TargetPose, ...]) -> None:
-        self.map_editor.set_execution_trace([Pose(item.x_mm, item.y_mm, item.yaw_deg) for item in trace])
+        displayed = [reflect_target_pose(item, self._runtime_flip_x, self._runtime_flip_y) for item in trace]
+        self.map_editor.set_execution_trace([Pose(item.x_mm, item.y_mm, item.yaw_deg) for item in displayed])
+
+    def _set_runtime_axis_flip(self, flip_x: bool, flip_y: bool) -> None:
+        self._runtime_flip_x = flip_x
+        self._runtime_flip_y = flip_y
+        if self.controller.actual is not None:
+            self._set_actual_pose(self.controller.actual, True)
+        else:
+            self.map_editor.set_runtime_pose(None)
+            self.map_editor.set_execution_actual_pose(None)
+        self._set_execution_trace(self.controller.trace)
 
     def _set_hardware_execution(self, enabled: bool) -> None:
         if enabled and not self.controller.session.connected:

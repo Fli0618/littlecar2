@@ -2,3 +2,6 @@
 cycle_*_forward.csv
 cycle_*_back_to_zero.csv
 goto_forward.csv
+
+# PID 调参工具统一归档的本机遥测数据
+pid_tuner/logs/

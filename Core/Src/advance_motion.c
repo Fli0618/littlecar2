@@ -69,6 +69,12 @@ static volatile uint8_t g_pid_pending_valid;
 static volatile uint32_t g_pid_active_revision;
 static volatile uint32_t g_pid_pending_revision;
 static volatile uint32_t g_pid_next_revision;
+static AdvanceMotion_PathControlConfig_t g_path_config_active;
+static AdvanceMotion_PathControlConfig_t g_path_config_pending;
+static volatile uint8_t g_path_config_pending_valid;
+static volatile uint32_t g_path_config_active_revision;
+static volatile uint32_t g_path_config_pending_revision;
+static volatile uint32_t g_path_config_next_revision;
 static uint8_t g_large_yaw_align_enabled;
 
 static const AdvanceMotion_PidConfig_t g_pid_default = {
@@ -78,6 +84,22 @@ static const AdvanceMotion_PidConfig_t g_pid_default = {
     ADVANCE_MOTION_DEFAULT_KP_YAW,
     ADVANCE_MOTION_DEFAULT_KI_YAW,
     ADVANCE_MOTION_DEFAULT_KD_YAW};
+
+static const AdvanceMotion_PathControlConfig_t g_path_config_default = {
+    ADVANCE_MOTION_PATH_KP_POS,
+    ADVANCE_MOTION_PATH_KD_VEL,
+    ADVANCE_MOTION_PATH_KP_YAW,
+    ADVANCE_MOTION_PATH_KD_YAW,
+    ADVANCE_MOTION_PATH_CRUISE_SPEED_MM_S,
+    ADVANCE_MOTION_PATH_MAX_WZ_DEG_S,
+    ADVANCE_MOTION_PATH_ACCEL_MM_S2,
+    ADVANCE_MOTION_PATH_DECEL_MM_S2,
+    ADVANCE_MOTION_PATH_MAX_LATERAL_ACC_MM_S2,
+    ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM,
+    ADVANCE_MOTION_PATH_LOOKAHEAD_BASE_MM,
+    ADVANCE_MOTION_PATH_LOOKAHEAD_SPEED_GAIN_S,
+    ADVANCE_MOTION_PATH_LOOKAHEAD_CURVE_GAIN_MM,
+    ADVANCE_MOTION_PATH_LOOKAHEAD_MAX_MM};
 
 /* 返回浮点数的绝对值。 */
 static float AdvanceMotion_AbsFloat(float value)
@@ -290,6 +312,74 @@ static void AdvanceMotion_ApplyPendingPidConfig(void)
   if (applied != 0U)
   {
     AdvanceMotion_ResetPidAndProgress();
+  }
+}
+
+static uint8_t AdvanceMotion_IsPathControlConfigValid(
+    const AdvanceMotion_PathControlConfig_t *config)
+{
+  if ((config == NULL) ||
+      (isfinite(config->kp_cross_track) == 0) ||
+      (isfinite(config->kd_cross_track_velocity) == 0) ||
+      (isfinite(config->kp_yaw) == 0) ||
+      (isfinite(config->kd_yaw_rate) == 0) ||
+      (isfinite(config->cruise_speed_mm_s) == 0) ||
+      (isfinite(config->max_yaw_rate_deg_s) == 0) ||
+      (isfinite(config->accel_mm_s2) == 0) ||
+      (isfinite(config->decel_mm_s2) == 0) ||
+      (isfinite(config->max_lateral_accel_mm_s2) == 0) ||
+      (isfinite(config->lookahead_min_mm) == 0) ||
+      (isfinite(config->lookahead_base_mm) == 0) ||
+      (isfinite(config->lookahead_speed_gain_s) == 0) ||
+      (isfinite(config->lookahead_curve_gain_mm) == 0) ||
+      (isfinite(config->lookahead_max_mm) == 0))
+  {
+    return 0U;
+  }
+
+  return ((config->kp_cross_track >= 0.0f) && (config->kp_cross_track <= 20.0f) &&
+          (config->kd_cross_track_velocity >= 0.0f) && (config->kd_cross_track_velocity <= 20.0f) &&
+          (config->kp_yaw >= 0.0f) && (config->kp_yaw <= 20.0f) &&
+          (config->kd_yaw_rate >= 0.0f) && (config->kd_yaw_rate <= 20.0f) &&
+          (config->cruise_speed_mm_s > 0.0f) && (config->cruise_speed_mm_s <= ADVANCE_MOTION_MAX_VMAX_MM_S) &&
+          (config->max_yaw_rate_deg_s > 0.0f) && (config->max_yaw_rate_deg_s <= ADVANCE_MOTION_MAX_WMAX_DEG_S) &&
+          (config->accel_mm_s2 > 0.0f) && (config->accel_mm_s2 <= 5000.0f) &&
+          (config->decel_mm_s2 > 0.0f) && (config->decel_mm_s2 <= 5000.0f) &&
+          (config->max_lateral_accel_mm_s2 > 0.0f) && (config->max_lateral_accel_mm_s2 <= 5000.0f) &&
+          (config->lookahead_min_mm > 0.0f) &&
+          (config->lookahead_min_mm <= config->lookahead_base_mm) &&
+          (config->lookahead_base_mm <= config->lookahead_max_mm) &&
+          (config->lookahead_max_mm <= 1000.0f) &&
+          (config->lookahead_speed_gain_s >= 0.0f) && (config->lookahead_speed_gain_s <= 2.0f) &&
+          (config->lookahead_curve_gain_mm >= 0.0f) && (config->lookahead_curve_gain_mm <= 1000.0f))
+             ? 1U
+             : 0U;
+}
+
+/* 路径运行中只切换参数并约束当前前视量，不清空路径进度。 */
+static void AdvanceMotion_ApplyPendingPathControlConfig(void)
+{
+  uint32_t primask = __get_PRIMASK();
+
+  __disable_irq();
+  if (g_path_config_pending_valid != 0U)
+  {
+    g_path_config_active = g_path_config_pending;
+    g_path_config_active_revision = g_path_config_pending_revision;
+    g_path_config_pending_valid = 0U;
+    if (g_path.active != 0U)
+    {
+      g_path.lookahead_mm = AdvanceWorld_LimitFloat(
+          g_path.lookahead_mm,
+          g_path_config_active.lookahead_min_mm,
+          g_path_config_active.lookahead_max_mm);
+      g_motion.goal.vmax_mm_s = g_path_config_active.cruise_speed_mm_s;
+      g_motion.goal.wmax_deg_s = g_path_config_active.max_yaw_rate_deg_s;
+    }
+  }
+  if (primask == 0U)
+  {
+    __enable_irq();
   }
 }
 
@@ -574,10 +664,10 @@ static void AdvanceMotion_UpdatePathPreview(void)
 static float AdvanceMotion_GetPathSpeedLimit(void)
 {
   float curvature_speed = sqrtf(
-      ADVANCE_MOTION_PATH_MAX_LATERAL_ACC_MM_S2 /
+      g_path_config_active.max_lateral_accel_mm_s2 /
       fmaxf(g_path.curvature_preview_1_mm,
             ADVANCE_MOTION_PATH_CURVATURE_EPSILON_1_MM));
-  float yaw_speed = ADVANCE_MOTION_PATH_MAX_WZ_DEG_S /
+  float yaw_speed = g_path_config_active.max_yaw_rate_deg_s /
                     fmaxf(g_path.yaw_gradient_preview_deg_per_mm,
                           ADVANCE_MOTION_PATH_YAW_GRADIENT_EPSILON_DEG_PER_MM);
   float braking_distance = fmaxf(
@@ -585,9 +675,9 @@ static float AdvanceMotion_GetPathSpeedLimit(void)
   float final_speed = sqrtf(
       (ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S *
        ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S) +
-      (2.0f * ADVANCE_MOTION_PATH_DECEL_MM_S2 * braking_distance));
+      (2.0f * g_path_config_active.decel_mm_s2 * braking_distance));
 
-  return fminf(ADVANCE_MOTION_PATH_CRUISE_SPEED_MM_S,
+  return fminf(g_path_config_active.cruise_speed_mm_s,
                fminf(curvature_speed, fminf(yaw_speed, final_speed)));
 }
 
@@ -596,15 +686,15 @@ static void AdvanceMotion_UpdatePathLookahead(float dt_s)
   float curvature_ratio = AdvanceWorld_LimitFloat(
       g_path.curvature_preview_1_mm * ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM,
       0.0f, 1.0f);
-  float target = ADVANCE_MOTION_PATH_LOOKAHEAD_BASE_MM +
-                 (ADVANCE_MOTION_PATH_LOOKAHEAD_SPEED_GAIN_S *
+  float target = g_path_config_active.lookahead_base_mm +
+                 (g_path_config_active.lookahead_speed_gain_s *
                   g_path.reference_speed_mm_s) -
-                 (ADVANCE_MOTION_PATH_LOOKAHEAD_CURVE_GAIN_MM * curvature_ratio);
+                 (g_path_config_active.lookahead_curve_gain_mm * curvature_ratio);
   float max_delta = ADVANCE_MOTION_PATH_LOOKAHEAD_RATE_MM_S * dt_s;
 
   target = AdvanceWorld_LimitFloat(target,
-                                   ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM,
-                                   ADVANCE_MOTION_PATH_LOOKAHEAD_MAX_MM);
+                                   g_path_config_active.lookahead_min_mm,
+                                   g_path_config_active.lookahead_max_mm);
   g_path.lookahead_mm = AdvanceWorld_LimitFloat(
       target, g_path.lookahead_mm - max_delta, g_path.lookahead_mm + max_delta);
 }
@@ -738,8 +828,8 @@ static void AdvanceMotion_UpdatePathReference(uint32_t now_tick)
   AdvanceMotion_UpdatePathPreview();
   target_speed = AdvanceMotion_GetPathSpeedLimit();
   speed_delta = ((target_speed >= g_path.reference_speed_mm_s)
-                     ? ADVANCE_MOTION_PATH_ACCEL_MM_S2
-                     : ADVANCE_MOTION_PATH_DECEL_MM_S2) *
+                     ? g_path_config_active.accel_mm_s2
+                     : g_path_config_active.decel_mm_s2) *
                 reference_dt_s;
   g_path.reference_speed_mm_s = AdvanceWorld_LimitFloat(
       target_speed,
@@ -781,8 +871,8 @@ static void AdvanceMotion_UpdatePathReference(uint32_t now_tick)
     g_path.feedforward_vy_mm_s = 0.0f;
     g_path.feedforward_wz_deg_s = 0.0f;
   }
-  g_motion.goal.vmax_mm_s = ADVANCE_MOTION_PATH_CRUISE_SPEED_MM_S;
-  g_motion.goal.wmax_deg_s = ADVANCE_MOTION_PATH_MAX_WZ_DEG_S;
+  g_motion.goal.vmax_mm_s = g_path_config_active.cruise_speed_mm_s;
+  g_motion.goal.wmax_deg_s = g_path_config_active.max_yaw_rate_deg_s;
   g_motion.goal.timeout_ms = g_path.timeout_ms;
   g_motion.goal.goal_flags = ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW;
 }
@@ -948,6 +1038,12 @@ void AdvanceMotion_Init(void)
   g_pid_active_revision = 0U;
   g_pid_pending_revision = 0U;
   g_pid_next_revision = 0U;
+  g_path_config_active = g_path_config_default;
+  g_path_config_pending = g_path_config_default;
+  g_path_config_pending_valid = 0U;
+  g_path_config_active_revision = 0U;
+  g_path_config_pending_revision = 0U;
+  g_path_config_next_revision = 0U;
   g_large_yaw_align_enabled = ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE;
   AdvanceMotion_UpdateDebugSnapshot(HAL_GetTick(), 0U);
 }
@@ -1079,7 +1175,10 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_
   g_path.total_length_mm = total_length_mm;
   g_path.remaining_mm = total_length_mm;
   g_path.progress_reference_mm = 0.0f;
-  g_path.lookahead_mm = ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM;
+  g_path.lookahead_mm = AdvanceWorld_LimitFloat(
+      ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM,
+      g_path_config_active.lookahead_min_mm,
+      g_path_config_active.lookahead_max_mm);
   {
     float timeout_ms = (float)ADVANCE_MOTION_PATH_TIMEOUT_BASE_MS +
                        ((total_length_mm /
@@ -1182,6 +1281,7 @@ void AdvanceMotion_Update(void)
   uint8_t yaw_saturated = 0U;
 
   AdvanceMotion_ApplyPendingPidConfig();
+  AdvanceMotion_ApplyPendingPathControlConfig();
 
   if (g_motion_state != ADVANCE_MOTION_STATE_RUNNING)
   {
@@ -1356,8 +1456,8 @@ void AdvanceMotion_Update(void)
       ty /= length;
       normal_velocity = (-ty * g_motion_control.measured_vx_world_mm_s) +
                         (tx * g_motion_control.measured_vy_world_mm_s);
-      correction = (ADVANCE_MOTION_PATH_KP_POS * g_path.cross_track_mm) +
-                   (ADVANCE_MOTION_PATH_KD_VEL * normal_velocity);
+      correction = (g_path_config_active.kp_cross_track * g_path.cross_track_mm) +
+                   (g_path_config_active.kd_cross_track_velocity * normal_velocity);
       vx_world_mm_s = g_path.feedforward_vx_mm_s + (ty * correction);
       vy_world_mm_s = g_path.feedforward_vy_mm_s - (tx * correction);
       vmax_mm_s = g_path.reference_speed_mm_s;
@@ -1400,8 +1500,8 @@ void AdvanceMotion_Update(void)
     if ((g_path.active != 0U) && (path_final_stage == 0U))
     {
       raw_wz_ccw_deg_s = g_path.feedforward_wz_deg_s +
-                         (ADVANCE_MOTION_PATH_KP_YAW * g_motion.yaw_error_deg) -
-                         (ADVANCE_MOTION_PATH_KD_YAW * g_motion_control.measured_wz_deg_s);
+                         (g_path_config_active.kp_yaw * g_motion.yaw_error_deg) -
+                         (g_path_config_active.kd_yaw_rate * g_motion_control.measured_wz_deg_s);
     }
     else
     {
@@ -1567,6 +1667,58 @@ AdvanceMotion_Status_t AdvanceMotion_RequestPidConfig(const AdvanceMotion_PidCon
 AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultPid(uint32_t *revision)
 {
   return AdvanceMotion_RequestPidConfig(&g_pid_default, revision);
+}
+
+AdvanceMotion_Status_t AdvanceMotion_GetPathControlConfig(
+    AdvanceMotion_PathControlConfig_t *config, uint32_t *revision)
+{
+  uint32_t primask;
+
+  if ((config == NULL) || (revision == NULL))
+  {
+    return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+  }
+  primask = __get_PRIMASK();
+  __disable_irq();
+  *config = g_path_config_active;
+  *revision = g_path_config_active_revision;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+  return ADVANCE_MOTION_STATUS_OK;
+}
+
+AdvanceMotion_Status_t AdvanceMotion_RequestPathControlConfig(
+    const AdvanceMotion_PathControlConfig_t *config, uint32_t *revision)
+{
+  uint32_t primask;
+
+  if ((revision == NULL) || (AdvanceMotion_IsPathControlConfigValid(config) == 0U))
+  {
+    return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+  }
+  primask = __get_PRIMASK();
+  __disable_irq();
+  ++g_path_config_next_revision;
+  if (g_path_config_next_revision == 0U)
+  {
+    ++g_path_config_next_revision;
+  }
+  g_path_config_pending = *config;
+  g_path_config_pending_revision = g_path_config_next_revision;
+  g_path_config_pending_valid = 1U;
+  *revision = g_path_config_pending_revision;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+  return ADVANCE_MOTION_STATUS_OK;
+}
+
+AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultPathControl(uint32_t *revision)
+{
+  return AdvanceMotion_RequestPathControlConfig(&g_path_config_default, revision);
 }
 
 AdvanceMotion_Status_t AdvanceMotion_SetLargeYawAlignEnabled(uint8_t enabled)

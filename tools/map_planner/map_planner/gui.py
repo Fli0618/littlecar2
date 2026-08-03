@@ -232,8 +232,9 @@ class MapEditorWidget(QWidget):
     candidate_selected = Signal(int)
     runtime_overlay_changed = Signal(object)
     hardware_enabled_changed = Signal(bool)
-    single_step_requested = Signal()
-    continuous_requested = Signal()
+    single_step_requested = Signal(int)
+    continuous_requested = Signal(int)
+    runtime_axis_flip_changed = Signal(bool, bool)
     execution_stop_requested = Signal()
     execution_state_changed = Signal(object)
 
@@ -254,6 +255,7 @@ class MapEditorWidget(QWidget):
             self._execution_error: tuple[float, float, float] | None = None
             self._execution_trace: list[Pose] = []
             self._execution_enabled = False
+            self._start_preview_paper: QPointF | None = None
             self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
             self.view.clicked.connect(self.on_map_click); self.view.hovered.connect(self.update_preview); self.view.released.connect(self.on_map_release); self.view.preview_rotated.connect(self.rotate_preview_clockwise); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
             self._build(); self._build_layout_sliders(); self.view.view_changed.connect(self.position_layout_sliders); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_selected_step); QShortcut(QKeySequence(Qt.Key.Key_Return), self, activated=self.confirm_bezier_draft); QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.cancel_bezier_draft)
@@ -388,6 +390,26 @@ class MapEditorWidget(QWidget):
                 button.setEnabled(self._execution_enabled)
             self._refresh_execution_status()
 
+    def _request_single_execution(self) -> None:
+            if not self._execution_enabled:
+                return
+            if not 0 <= self.active_index < len(self.plan.steps):
+                self.set_execution_status("请先选择一个有效动作")
+                return
+            self.single_step_requested.emit(self.active_index)
+
+    def _request_continuous_execution(self) -> None:
+            if not self._execution_enabled:
+                return
+            if not 0 <= self.active_index < len(self.plan.steps):
+                self.set_execution_status("请先选择连续执行的起始动作")
+                return
+            self.continuous_requested.emit(self.active_index)
+
+    def _emit_runtime_axis_flip(self) -> None:
+            self.runtime_axis_flip_changed.emit(self.execution_flip_x.isChecked(),
+                                                self.execution_flip_y.isChecked())
+
     def _refresh_execution_status(self) -> None:
             if not hasattr(self, "execution_status_label"):
                 return
@@ -507,14 +529,20 @@ class MapEditorWidget(QWidget):
             self.execution_step_button = QPushButton("单步执行")
             self.execution_run_button = QPushButton("连贯执行")
             self.execution_stop_button = QPushButton("停止")
-            self.execution_step_button.clicked.connect(self.single_step_requested.emit)
-            self.execution_run_button.clicked.connect(self.continuous_requested.emit)
+            self.execution_flip_x = QCheckBox("显示反转 X")
+            self.execution_flip_y = QCheckBox("显示反转 Y")
+            self.execution_step_button.clicked.connect(self._request_single_execution)
+            self.execution_run_button.clicked.connect(self._request_continuous_execution)
             self.execution_stop_button.clicked.connect(self.execution_stop_requested.emit)
             execution_row.addWidget(self.execution_enabled_switch)
             execution_row.addWidget(self.execution_step_button)
             execution_row.addWidget(self.execution_run_button)
             execution_row.addWidget(self.execution_stop_button)
+            execution_row.addWidget(self.execution_flip_x)
+            execution_row.addWidget(self.execution_flip_y)
             box.addLayout(execution_row)
+            self.execution_flip_x.toggled.connect(self._emit_runtime_axis_flip)
+            self.execution_flip_y.toggled.connect(self._emit_runtime_axis_flip)
             self.execution_status_label = QLabel("实机执行未启用")
             self.execution_status_label.setWordWrap(True)
             box.addWidget(self.execution_status_label)
@@ -562,7 +590,7 @@ class MapEditorWidget(QWidget):
     def begin_start(self, kind):
             self.push_undo(); self.calibration_pending=True
             if kind == "自定义":
-                self.plan.start_kind="custom"; self.calibration_stage="position"; self.mode="calibrate"; self.view.mode="calibrate"; self.calibration_label.setText("在地图上点击自定义起点位置"); self.update_calibration_ui(); self.redraw(); return
+                self.plan.start_kind="custom"; self.calibration_stage="position"; self.mode="calibrate"; self.view.mode="calibrate"; self._start_preview_paper=None; self.calibration_label.setText("在地图上点击自定义起点位置"); self.update_calibration_ui(); self.redraw(); return
             self.plan.start_kind="zone_1" if kind.endswith("1") else "zone_2"
             self.plan.start_paper_x_mm, self.plan.start_paper_y_mm = START_PRESETS[kind]; self.calibration_stage="heading"; self.mode="calibrate"; self.view.mode="calibrate"; self.update_calibration_ui(); self.redraw()
 
@@ -576,7 +604,7 @@ class MapEditorWidget(QWidget):
                 self.add_obstacle(QPointF(x, y)); return
             if self.mode == "calibrate":
                 if self.calibration_stage != "position": return
-                self.plan.start_paper_x_mm, self.plan.start_paper_y_mm = x, y; self.calibration_stage="heading"; self.update_calibration_ui(); self.redraw(); return
+                self.plan.start_paper_x_mm, self.plan.start_paper_y_mm = x, y; self._start_preview_paper=None; self.calibration_stage="heading"; self.update_calibration_ui(); self.redraw(); return
             # 添加动作统一在鼠标释放时提交，避免一次点击同时触发 clicked/released 两次。
             if self.mode != "add" or self.calibration_pending: return
 
@@ -634,6 +662,12 @@ class MapEditorWidget(QWidget):
     def is_valid_start_pose(self):
             start=QPointF(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm)
             return self.is_valid_route_segment(start,start)
+
+    def _is_valid_start_candidate(self, x: float, y: float) -> bool:
+            pose = Pose(x, y, self.plan.start_heading_deg)
+            out_of_bounds, hit_platform = self.sweep_violations(
+                SweepGeometry([pose], [car_polygon(pose)]))
+            return not out_of_bounds and hit_platform.isEmpty()
 
     def sweep_path(self, sweep):
             path=QPainterPath()
@@ -727,8 +761,24 @@ class MapEditorWidget(QWidget):
             h(0,2400,2400,2530,"2400","dim_2400w"); v(0,2400,2400,2500,"2400","dim_2400h"); h(550,1000,1000,1060,"450","dim_platform_450"); v(550,1000,550,490,"450","dim_platform_450"); h(1000,1400,550,470,"400","dim_channel_400"); v(1000,1400,1400,1480,"400","dim_channel_400"); h(2100,2400,0,-100,"300","dim_start_300"); v(0,300,2400,2470,"300","dim_start_300"); h(0,150,0,-180,"150","dim_storage_150"); v(910,1490,0,-90,"580","dim_storage_580"); h(910,1490,2400,2620,"580","dim_rough_580"); v(2250,2400,1490,1570,"150","dim_rough_150"); h(1050,1350,-70,-270,"Ø300","dim_raw_diameter"); h(1100,1300,-70,-150,"Ø200","dim_raw_pitch"); v(1100,1300,2400,2570,"1100～1300","dim_qr_range")
 
     def draw_start(self):
-            if self.calibration_pending and self.calibration_stage in ("choose","position"): return
-            item=StartItem(self.plan.start_heading_deg,self.rotate_start_clockwise); item.setPos(self.plan.start_paper_x_mm,self.plan.start_paper_y_mm); self.scene.addItem(item)
+            if self.calibration_pending and self.calibration_stage == "choose": return
+            if self.calibration_pending and self.calibration_stage == "position":
+                if self._start_preview_paper is None: return
+                x, y = self._start_preview_paper.x(), self._start_preview_paper.y()
+                interactive = False
+            else:
+                x, y = self.plan.start_paper_x_mm, self.plan.start_paper_y_mm
+                interactive = self.calibration_pending and self.calibration_stage == "heading"
+            valid = (self._is_valid_start_candidate(x, y)
+                     if self.calibration_pending else True)
+            color = QColor("#1565c0") if valid else QColor("#c62828")
+            car = CarOutlineItem(self.rotate_start_clockwise if interactive else (lambda: None))
+            car.setPos(x, y); car.setRotation(-self.plan.start_heading_deg)
+            car.setPen(QPen(color, 5)); car.setBrush(QColor(color.red(), color.green(), color.blue(), 55))
+            car.setAcceptedMouseButtons(Qt.MouseButton.NoButton); car.setData(0, "start_pose_preview"); car.setZValue(16); self.scene.addItem(car)
+            item=StartItem(self.plan.start_heading_deg,self.rotate_start_clockwise); item.setPos(x, y)
+            if not interactive: item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            item.setData(0, "start_direction_preview"); self.scene.addItem(item)
 
     def add_measurement_point(self, point, shift=False):
             if len(self.measurement_points) >= 2: self.measurement_points=[]
@@ -1479,6 +1529,12 @@ class MapEditorWidget(QWidget):
             return anchor, yaw, (len(self.plan.steps), anchor.x(), anchor.y(), yaw)
 
     def update_preview(self, x, y, shift=False):
+            if self.mode == "calibrate" and self.calibration_pending and self.calibration_stage == "position":
+                self._start_preview_paper = (None if math.isnan(x) or not
+                                             (0 <= x <= FIELD_SIZE_MM and 0 <= y <= FIELD_SIZE_MM)
+                                             else QPointF(x, y))
+                self.redraw()
+                return
             if math.isnan(x) or self.mode != "add" or self.calibration_pending or not (0 <= x <= FIELD_SIZE_MM and 0 <= y <= FIELD_SIZE_MM):
                 self.clear_preview(); return
             anchor, anchor_yaw, signature = self._current_preview_anchor()

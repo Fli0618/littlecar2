@@ -24,11 +24,12 @@ from PySide6.QtWidgets import (
 )
 
 from ..models import MotionGoal, PidConfig, Telemetry
-from ..storage import (export_c_defaults, list_profiles, load_profile, save_profile,
-                       write_telemetry_csv)
+from ..storage import (DEFAULT_LOGS_DIR, export_c_defaults, list_profiles,
+                       load_profile, save_profile, write_telemetry_csv)
 from .buffer import TelemetryBuffer
 from .plots import TelemetryPlots
 from .session import SessionController
+from .smooth_scroll import SmoothScrollArea
 from .widgets import (GOTO_TIMEOUT_MS, GOTO_VMAX_MM_S, GOTO_WMAX_DEG_S,
                       GOTO_YAW_LABEL, ConnectionMotionPanel, PidControlPanel)
 
@@ -71,8 +72,9 @@ def format_telemetry_status(item: Telemetry) -> str:
     motion_state = MOTION_STATE_TEXT.get(item.state, f"未知状态 {item.state}")
     target = ", ".join(f"{value:.1f}" for value in item.target)
     actual = ", ".join(f"{value:.1f}" for value in item.actual)
+    err_val = ", ".join(f"{value:.1f}" for value in item.error)
     phase = " 航向对准中" if item.yaw_aligning else ""
-    return (f"{motion_state} {pose_state}{phase} 目标=({target}) 实际=({actual}) "
+    return (f"{motion_state} {pose_state}{phase} 目标=({target}) 实际=({actual}) 误差=({err_val}) "
             f"PID r{item.pid_revision} 标志=0x{item.flags:02X} 覆盖={item.overwritten_count}")
 
 
@@ -151,7 +153,7 @@ class MainWindow(QMainWindow):
         left.addWidget(self.window)
         left.addStretch()
 
-        self.controls_scroll = QScrollArea()
+        self.controls_scroll = SmoothScrollArea()
         self.controls_scroll.setWidgetResizable(True)
         self.controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.controls_scroll.setWidget(controls)
@@ -306,7 +308,7 @@ class MainWindow(QMainWindow):
             self.recorded = []
             self.buffer.add_event("开始记录")
         else:
-            path = Path("logs") / "gui_telemetry.csv"
+            path = DEFAULT_LOGS_DIR / "gui_telemetry.csv"
             write_telemetry_csv(path, self.recorded)
             self.status.setText(f"已保存 {path}")
 

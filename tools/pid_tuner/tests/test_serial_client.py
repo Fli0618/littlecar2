@@ -2,10 +2,12 @@ import struct
 import time
 import unittest
 
-from pid_tuner.models import BoardError, MotionGoal, PidConfig
-from pid_tuner.protocol import (CMD_ACK, CMD_ERROR, CMD_GET_GOTO_STRATEGY, CMD_GET_PID,
-                                CMD_GOTO_STRATEGY, CMD_PID, CMD_RESET_ORIGIN,
-                                CMD_SET_GOTO_STRATEGY, CMD_SET_YAW_SOURCE, CMD_TELEMETRY,
+from pid_tuner.models import BoardError, MotionGoal, PathControlConfig, PidConfig
+from pid_tuner.protocol import (CMD_ACK, CMD_ERROR, CMD_GET_GOTO_STRATEGY,
+                                CMD_GET_PATH_CONFIG, CMD_GET_PID, CMD_GOTO_STRATEGY,
+                                CMD_PATH_CONFIG, CMD_PID, CMD_RESET_ORIGIN,
+                                CMD_RESTORE_PATH_CONFIG, CMD_SET_GOTO_STRATEGY,
+                                CMD_SET_PATH_CONFIG, CMD_SET_YAW_SOURCE, CMD_TELEMETRY,
                                 StreamDecoder, encode_frame)
 from pid_tuner.serial_client import SerialClient
 
@@ -13,6 +15,10 @@ from fake_transport import FakeTransport
 
 
 class SerialClientTests(unittest.TestCase):
+    PATH_CONFIG = PathControlConfig(
+        0.98, 0.62, 1.42, 0.427, 820.0, 100.0, 800.0, 1000.0,
+        600.0, 60.0, 60.0, 0.15, 120.0, 180.0,
+    )
     def test_get_pid_and_close(self) -> None:
         def on_write(raw, _attempt):
             request = StreamDecoder().feed(raw)[0]
@@ -114,6 +120,30 @@ class SerialClientTests(unittest.TestCase):
             with self.assertRaises(BoardError) as raised:
                 client.heartbeat()
         self.assertEqual(raised.exception.code, 5)
+
+    def test_path_config_get_set_and_restore(self) -> None:
+        captured = []
+
+        def on_write(raw, _attempt):
+            request = StreamDecoder().feed(raw)[0]
+            captured.append(request)
+            if request.command == CMD_GET_PATH_CONFIG:
+                payload = struct.pack("<I14f", 4, *self.PATH_CONFIG.to_dict().values())
+                return [encode_frame(CMD_PATH_CONFIG, request.sequence, payload)]
+            revision = 5 if request.command == CMD_SET_PATH_CONFIG else 6
+            return [encode_frame(CMD_ACK, request.sequence,
+                                 bytes([request.command]) + revision.to_bytes(4, "little"))]
+
+        with SerialClient(FakeTransport(on_write)) as client:
+            revision, config = client.get_path_config()
+            self.assertEqual(revision, 4)
+            for actual, expected in zip(config.to_dict().values(), self.PATH_CONFIG.to_dict().values()):
+                self.assertAlmostEqual(actual, expected, places=5)
+            self.assertEqual(client.set_path_config(self.PATH_CONFIG), 5)
+            self.assertEqual(client.restore_path_config(), 6)
+        self.assertEqual([item.command for item in captured], [
+            CMD_GET_PATH_CONFIG, CMD_SET_PATH_CONFIG, CMD_RESTORE_PATH_CONFIG,
+        ])
 
 
 if __name__ == "__main__":

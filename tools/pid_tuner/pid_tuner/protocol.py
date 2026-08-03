@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import struct
+import math
 from typing import Iterable
 
-from .models import PidConfig, Telemetry
+from .models import PathControlConfig, PidConfig, Telemetry
 
 SYNC = b"\xA5\x5A"
 VERSION = 2
@@ -28,12 +29,16 @@ CMD_PATH_COMMIT = 0x22
 CMD_PATH_START = 0x23
 CMD_PATH_ABORT = 0x24
 CMD_PATH_STATUS = 0x25
+CMD_GET_PATH_CONFIG = 0x26
+CMD_SET_PATH_CONFIG = 0x27
+CMD_RESTORE_PATH_CONFIG = 0x28
 CMD_ACK = 0x80
 CMD_PID = 0x81
 CMD_TELEMETRY = 0x82
 CMD_GOTO_STRATEGY = 0x83
 CMD_PATH_STATUS_RESPONSE = 0x84
 CMD_PATH_TELEMETRY = 0x85
+CMD_PATH_CONFIG = 0x86
 CMD_ERROR = 0xE0
 
 TELEMETRY_PAYLOAD_SIZE = 96
@@ -78,6 +83,31 @@ def encode_pid(config: PidConfig) -> bytes:
                        config.kp_yaw, config.ki_yaw, config.kd_yaw)
 
 
+def encode_path_config(config: PathControlConfig) -> bytes:
+    """Encode all path-control values as one atomic little-endian group."""
+    values = config.to_dict()
+    if not all(math.isfinite(value) for value in values.values()):
+        raise ProtocolError("path config values must be finite")
+    nonnegative = (
+        ("kp_cross_track", 20.0), ("kd_cross_track_velocity", 20.0),
+        ("kp_yaw", 20.0), ("kd_yaw_rate", 20.0),
+        ("lookahead_speed_gain_s", 2.0), ("lookahead_curve_gain_mm", 1000.0),
+    )
+    positive = (
+        ("cruise_speed_mm_s", 1500.0), ("max_yaw_rate_deg_s", 180.0),
+        ("accel_mm_s2", 5000.0), ("decel_mm_s2", 5000.0),
+        ("max_lateral_accel_mm_s2", 5000.0), ("lookahead_min_mm", 1000.0),
+        ("lookahead_base_mm", 1000.0), ("lookahead_max_mm", 1000.0),
+    )
+    if (any(not 0.0 <= values[name] <= high for name, high in nonnegative) or
+            any(not 0.0 < values[name] <= high for name, high in positive)):
+        raise ProtocolError("path config value is outside its supported range")
+    if not (values["lookahead_min_mm"] <= values["lookahead_base_mm"] <=
+            values["lookahead_max_mm"]):
+        raise ProtocolError("path lookahead must satisfy min <= base <= max")
+    return struct.pack("<14f", *values.values())
+
+
 def encode_goal(goal: "MotionGoal") -> bytes:
     from .models import MotionGoal
 
@@ -111,6 +141,14 @@ def decode_pid(payload: bytes) -> tuple[int, PidConfig]:
         raise ProtocolError("PID payload must be 28 bytes")
     revision, *values = struct.unpack("<I6f", payload)
     return revision, PidConfig(*values)
+
+
+def decode_path_config(payload: bytes) -> tuple[int, PathControlConfig]:
+    """Decode a revision followed by the complete path-control group."""
+    if len(payload) != 60:
+        raise ProtocolError("path config payload must be 60 bytes")
+    revision, *values = struct.unpack("<I14f", payload)
+    return revision, PathControlConfig(*values)
 
 
 def decode_telemetry(frame: Frame) -> Telemetry:

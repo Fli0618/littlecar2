@@ -11,7 +11,7 @@ from queue import Empty
 
 from pid_tuner.models import MotionGoal, PidConfig
 from pid_tuner.serial_client import SerialClient
-from pid_tuner.storage import write_telemetry_csv
+from pid_tuner.storage import DEFAULT_LOGS_DIR, write_telemetry_csv
 
 # 安全运动边界
 SAFE_VMAX = 450.0  # mm/s
@@ -120,7 +120,7 @@ def main() -> int:
             print(f"\n⚡ ===== 【第 {iteration} 轮测试开始】 =====")
 
             # --- A. 出发前往目标点 2000mm ---
-            csv_forward = Path(f"cycle_{iteration}_forward.csv")
+            csv_forward = DEFAULT_LOGS_DIR / f"cycle_{iteration}_forward.csv"
             fwd_tel = run_cycle(client, args.port, MOTION_Y_MM, csv_forward)
 
             if fwd_tel:
@@ -132,7 +132,7 @@ def main() -> int:
             time.sleep(1.0)
 
             # --- B. 强制返回 0 点 确保完全回归初始点 0  ---
-            csv_return = Path(f"cycle_{iteration}_back_to_zero.csv")
+            csv_return = DEFAULT_LOGS_DIR / f"cycle_{iteration}_back_to_zero.csv"
             back_tel = run_cycle(client, args.port, 0.0, csv_return)
 
             if back_tel:
