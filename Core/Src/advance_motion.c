@@ -136,11 +136,35 @@ static float AdvanceMotion_GetLargeYawAlignLinearScale(float yaw_error_deg)
   return 1.0f - ((1.0f - ADVANCE_MOTION_LARGE_YAW_ALIGN_LINEAR_MIN_SCALE) * ratio);
 }
 
+/* 读取当前航向源对应的有效标志与更新时间戳，避免跨源配对。 */
+static uint8_t AdvanceMotion_GetSelectedYawState(const WorldPose2D_t *pose,
+                                                 uint8_t *valid,
+                                                 uint32_t *updated_tick)
+{
+  if ((pose == NULL) || (valid == NULL) || (updated_tick == NULL))
+  {
+    return 0U;
+  }
+
+  if (AdvanceWorld_GetYawSource() == ADVANCE_WORLD_YAW_SOURCE_OPS)
+  {
+    *valid = pose->ops_yaw_valid;
+    *updated_tick = pose->ops_yaw_updated_tick;
+  }
+  else
+  {
+    *valid = pose->wit_yaw_valid;
+    *updated_tick = pose->wit_yaw_updated_tick;
+  }
+
+  return 1U;
+}
+
 static uint8_t AdvanceMotion_GetFreshnessFlags(const WorldPose2D_t *pose, uint32_t now_tick)
 {
-  AdvanceWorld_YawSource_t yaw_source;
   uint8_t flags = 0U;
   uint8_t yaw_valid;
+  uint32_t yaw_updated_tick;
 
   if (pose == NULL)
   {
@@ -153,12 +177,9 @@ static uint8_t AdvanceMotion_GetFreshnessFlags(const WorldPose2D_t *pose, uint32
     flags |= ADVANCE_MOTION_DEBUG_FLAG_POSE_FRESH;
   }
 
-  yaw_source = AdvanceWorld_GetYawSource();
-  yaw_valid = (yaw_source == ADVANCE_WORLD_YAW_SOURCE_OPS)
-                  ? pose->ops_yaw_valid
-                  : pose->wit_yaw_valid;
-  if ((yaw_valid != 0U) &&
-      ((now_tick - pose->yaw_updated_tick) <= ADVANCE_MOTION_YAW_TIMEOUT_MS))
+  if ((AdvanceMotion_GetSelectedYawState(pose, &yaw_valid, &yaw_updated_tick) != 0U) &&
+      (yaw_valid != 0U) &&
+      ((now_tick - yaw_updated_tick) <= ADVANCE_MOTION_YAW_TIMEOUT_MS))
   {
     flags |= ADVANCE_MOTION_DEBUG_FLAG_YAW_FRESH;
   }
@@ -793,8 +814,8 @@ static AdvanceMotion_Status_t AdvanceMotion_GetFreshYaw(WorldPose2D_t *pose)
 static AdvanceMotion_Status_t AdvanceMotion_GetFreshPose(WorldPose2D_t *pose, uint32_t now_tick)
 {
   AdvanceWorld_Status_t world_status;
-  AdvanceWorld_YawSource_t yaw_source;
   uint8_t yaw_valid;
+  uint32_t yaw_updated_tick;
 
   if (pose == 0)
   {
@@ -818,16 +839,13 @@ static AdvanceMotion_Status_t AdvanceMotion_GetFreshPose(WorldPose2D_t *pose, ui
     return ADVANCE_MOTION_STATUS_POSE_TIMEOUT;
   }
 
-  yaw_source = AdvanceWorld_GetYawSource();
-  yaw_valid = (yaw_source == ADVANCE_WORLD_YAW_SOURCE_OPS)
-                  ? pose->ops_yaw_valid
-                  : pose->wit_yaw_valid;
-  if (yaw_valid == 0U)
+  if ((AdvanceMotion_GetSelectedYawState(pose, &yaw_valid, &yaw_updated_tick) == 0U) ||
+      (yaw_valid == 0U))
   {
     /* 当前航向源无有效样本，即使 OPS 位置仍新鲜也不能继续世界坐标控制。 */
     return ADVANCE_MOTION_STATUS_NO_POSE;
   }
-  if ((now_tick - pose->yaw_updated_tick) > ADVANCE_MOTION_YAW_TIMEOUT_MS)
+  if ((now_tick - yaw_updated_tick) > ADVANCE_MOTION_YAW_TIMEOUT_MS)
   {
     /* 当前航向时间戳超时，禁止继续世界速度到车体速度的转换。 */
     return ADVANCE_MOTION_STATUS_POSE_TIMEOUT;
