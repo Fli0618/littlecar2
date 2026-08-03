@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFormLayout, QHBoxLayout
                                QScrollArea, QSplitter, QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from map_planner.gui import MapEditorWidget
-from map_planner.models import Pose
+from map_planner.models import ContinuousPathSegment, Pose
 from pid_tuner.gui.plots import TelemetryPlots
 from pid_tuner.gui.widgets import PidControlPanel
 
@@ -93,7 +93,12 @@ class MotionWorkbenchWindow(QMainWindow):
         self.pid_panel.restore_requested.connect(self.controller.session.restore_pid)
         self.controller.session.pid_read.connect(lambda _revision, pid: self.pid_panel.set_pid(pid))
         self.controller.session.pid_applied.connect(lambda _revision, pid: self.pid_panel.set_pid(pid))
+        self.controller.session.path_upload_changed.connect(self.path_panel.status.setText)
+        self.path_panel.upload_requested.connect(self._upload_selected_path)
+        self.path_panel.start_requested.connect(lambda: self.controller.start_path(self._path_id))
+        self.path_panel.abort_requested.connect(self.controller.abort_path)
         self.view_switch.clicked.connect(self._switch_workspace)
+        self._path_id = 1
 
     def _set_actual_pose(self, target: TargetPose, valid: bool) -> None:
         self.pose_status.setText("位姿: 有效" if valid else "位姿: 无效")
@@ -106,6 +111,15 @@ class MotionWorkbenchWindow(QMainWindow):
     def _refresh(self) -> None:
         if self.workspace.currentIndex() == 0:
             self.plots.refresh(self.controller.buffer)
+
+    def _upload_selected_path(self) -> None:
+        plan = self.map_editor.get_plan()
+        for step in plan.steps:
+            if isinstance(step, ContinuousPathSegment):
+                self.controller.upload_path(self._path_id, step.points)
+                self.path_panel.status.setText(f"上传路径 {self._path_id}")
+                return
+        self.path_panel.status.setText("当前方案没有连续路径")
 
     def closeEvent(self, event: object) -> None:
         self.controller.session.shutdown()

@@ -11,8 +11,10 @@ from PySide6.QtCore import QObject, Signal
 from pid_tuner.gui.buffer import TelemetryBuffer
 from pid_tuner.gui.session import SessionController
 from pid_tuner.models import MotionGoal, Telemetry
+from map_planner.models import PathPosePoint
 
 from .models import ExperimentResult, PathTelemetry, SinglePointState, TargetPose
+from .path_transfer import build_path_begin, build_path_chunks, build_path_commit, build_path_start
 
 
 class MotionWorkbenchController(QObject):
@@ -113,6 +115,16 @@ class MotionWorkbenchController(QObject):
     def on_path_telemetry(self, item: PathTelemetry) -> None:
         self._last_path = item
         self.path_telemetry_changed.emit(item)
+
+    def upload_path(self, path_id: int, points: list[PathPosePoint]) -> None:
+        self.session.upload_path(build_path_begin(path_id, points), build_path_chunks(path_id, points),
+                                 build_path_commit(path_id))
+
+    def start_path(self, path_id: int) -> None:
+        self.session.start_path(build_path_start(path_id))
+
+    def abort_path(self) -> None:
+        self.session.abort_path()
 
     def _on_motion_changed(self, active: bool) -> None:
         if not active and self._last_state == SinglePointState.RUNNING and self.execution is not None:
