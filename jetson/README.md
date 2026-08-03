@@ -6,7 +6,7 @@
 
 ## 配置与运行
 
-在 `main.py` 顶部配置 `SERIAL_PORT`、`SERIAL_BAUDRATE`、`CAMERA_QR_DEVICE`、`CAMERA_VISION_DEVICE` 和 `DEFAULT_PERIOD_MS`。摄像头使用设备路径配置，例如：
+在 `main.py` 顶部配置 `SERIAL_PORT`、`SERIAL_BAUDRATE`、`CAMERA_QR_DEVICE`、`CAMERA_VISION_DEVICE` 和 `DEFAULT_PERIOD_MS`。二维码与视觉相机分别由 `QR_FRAME_WIDTH/HEIGHT`、`VISION_FRAME_WIDTH/HEIGHT` 固定为 `640x480`；启动时服务会通过 V4L2 设置、读取驱动报告尺寸并校验首帧尺寸，任一项不符合即释放已打开资源并停止启动。摄像头使用设备路径配置，例如：
 
 ```python
 CAMERA_QR_DEVICE = "/dev/video0"
@@ -72,7 +72,9 @@ PYTHONNOUSERSITE=1 /home/jetson/miniconda3/envs/yolo_env/bin/python scripts/gui_
 
 相机页的“返回任务码”按钮只切换 GUI 页面，不停止检测或串口通信。页面隐藏后，服务继续使用原有相机帧完成检测与结果发送，但不进行 Pillow 图像转换或 GUI 刷新。空闲状态下通过“查看相机”进入预览页时，服务每 `CAMERA_PREVIEW_PERIOD_MS` 读取一次当前选择的相机，仅显示准星和相机预览状态；不会加载模型、执行推理、发送结果或启用补光灯。
 
-二维码和视觉相机的预览准星偏移分别由 `QR_AIM_OFFSET_X_PX`、`QR_AIM_OFFSET_Y_PX` 与 `VISION_AIM_OFFSET_X_PX`、`VISION_AIM_OFFSET_Y_PX` 配置。这些偏移只影响显示，不会修改发送给 STM32 的坐标。
+二维码和视觉相机的预览准星偏移分别由 `QR_PREVIEW_AIM_OFFSET_X_PX`、`QR_PREVIEW_AIM_OFFSET_Y_PX` 与 `VISION_PREVIEW_AIM_OFFSET_X_PX`、`VISION_PREVIEW_AIM_OFFSET_Y_PX` 配置。这些偏移只影响显示，不会修改发送给 STM32 的坐标。
+
+STM32 接收的视觉坐标始终是原始相机帧中的像素坐标，当前协议要求视觉相机稳定输出 `640x480`。YOLO 的 `imgsz=640` 仅表示推理输入尺寸，不代表输出坐标处于 `640x640` 坐标系；运行时若相机重新协商为其他尺寸，服务会丢弃该帧，不执行检测或发送坐标结果。
 
 `scripts/gui_preview.py` 使用合成动态画面，因此在 PC 上运行时不需要真实相机、串口、模型或 Jetson GPIO。终端快捷键如下：
 

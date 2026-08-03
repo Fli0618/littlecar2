@@ -24,7 +24,7 @@
 - `sensor_limit`：PC0~PC3 四路光电限位读取模块；只提供原始电平读取和有效状态判断，不负责 GPIO 初始化、中断或电机控制。
 - `advance_chassis`：基于 `drive_emm` 的麦克纳姆底盘高级运动接口。
 - `advance_control`：维护 `NONE/WORLD/VISUAL` 单一底盘控制权，并向高级控制器返回申请结果。
-- `advance_visual`：基于 Jetson 新实测目标的二维车体速度 P 控制；提供阻塞式对齐接口，由 `main.c` 每 20 ms 在 `VISUAL` 控制权下推进。
+- `advance_visual`：基于 Jetson 新实测目标的二维车体速度 P 控制；像素误差先按 `ADVANCE_VISUAL_CAMERA_ROTATION` 旋转到车体坐标，再应用 `ADVANCE_VISUAL_BODY_X_SIGN/Y_SIGN`、死区、P 增益和限幅；提供阻塞式对齐接口，由 `main.c` 每 20 ms 在 `VISUAL` 控制权下推进。默认相机旋转角为 0 度，定义 `ADVANCE_VISUAL_TEST` 可在初始化时执行四种正交映射自检。
 - `advance_world`：维护 world 坐标系、全局位姿和 world/base 速度变换。
 - `advance_motion`：世界速度、`GotoPose` 与连续路径异步状态机；`FollowPathEx()` 直接引用调用方长期持有的离散路径数组，中段以动态前视切向前馈和投影 PD 连续通过软途经点，满足末端距离及参考/实测速度条件后切换到 Goto PID 精确停车；由 `main.c` 每 20 ms 调度。组合 GOTO 的大航向误差先对准策略由 `advance_motion.h` 的默认宏决定，并可在空闲状态由调参工具临时切换。
 - `drive_emm` 的 DMA 队列和反馈监督由 `main.c` 每 10 ms 调度，周期定义为 `DRIVE_EMM_UPDATE_PERIOD_MS`；该周期独立于 20 ms 底盘闭环周期。
