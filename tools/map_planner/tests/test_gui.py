@@ -84,10 +84,10 @@ class GuiTests(unittest.TestCase):
             window.close()
 
     def test_bezier_creation_stays_transient_until_confirmed(self):
-        window = self.window()
+            window = self.window()
         try:
             window.begin_bezier_add()
-            window.confirm_preview(1950, 150)
+            window.on_map_release(1950, 150)
             self.assertEqual(len(window.plan.steps), 0)
             self.assertIsInstance(window.bezier_draft, BezierPathSegment)
             self.assertIn("bezier_sample", [item.data(0) for item in window.scene.items()])
@@ -107,6 +107,24 @@ class GuiTests(unittest.TestCase):
             window.cancel_bezier_draft()
             self.assertIsNone(window.bezier_draft)
             self.assertEqual(len(window.plan.steps), 1)
+        finally:
+            window.close()
+
+    def test_bezier_preview_and_confirmation_skip_region_validation(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add()
+            window.confirm_preview(1950, 150)
+            self.assertIsNotNone(window.bezier_draft)
+            original_sweep_violations = window.sweep_violations
+            window.sweep_violations = lambda sweep: self.fail("Bezier preview must not run region validation")
+            window.redraw()
+            self.assertIn("bezier_preview_coverage", [item.data(0) for item in window.scene.items()])
+            window.sweep_violations = original_sweep_violations
+            window.confirm_bezier_draft()
+            self.assertIsInstance(window.plan.steps[-1], BezierPathSegment)
+            self.assertEqual(window.invalid_waypoints(), [])
+            self.assertIn("FOLLOW BEZIER PATH", generate_task_function(window.plan, "Task_Bezier"))
         finally:
             window.close()
 
