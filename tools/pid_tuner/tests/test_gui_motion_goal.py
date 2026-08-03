@@ -91,6 +91,25 @@ class GuiMotionGoalTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_none_heading_mode_survives_board_source_telemetry_and_ack(self) -> None:
+        window = MainWindow()
+        try:
+            none_index = window.yaw_source.findData("NONE")
+            window.yaw_source.setCurrentIndex(none_index)
+            telemetry = Telemetry(1, 2, 0, 1, 0x87, (0.0, 1000.0, 0.0),
+                                  (0.0, 10.0, 0.0), (0.0, 990.0, 0.0),
+                                  (0.0, 100.0, 0.0), (0.0, 95.0, 0.0),
+                                  (0.0, 0.0, 0.0))
+
+            window.on_telemetry(telemetry)
+            self.assertIn("航向控制=关闭", window.status.text())
+            window.on_yaw_source_changed("OPS")
+
+            self.assertEqual(window.connection_motion.heading_mode(), "NONE")
+            self.assertEqual(window.plots.heading_mode, "NONE")
+        finally:
+            window.close()
+
     def test_goto_strategy_control_is_disabled_while_motion_is_active(self) -> None:
         window = MainWindow()
         try:

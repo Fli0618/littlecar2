@@ -12,10 +12,15 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFormLayout, QHBoxLayout
 from map_planner.gui import MapEditorWidget
 from map_planner.models import ContinuousPathSegment, Pose
 from pid_tuner.gui.plots import TelemetryPlots
-from pid_tuner.gui.widgets import ConnectionPanel, PidControlPanel
-from pid_tuner.models import MotionGoal, PathControlConfig
+from pid_tuner.gui.widgets import ConnectionPanel
+from pid_tuner.models import MotionGoal, PathControlConfig, Telemetry
 
-from .control_panel import PointControlPanel
+from .control_panel import (
+    HEADING_MODE_NONE,
+    PointControlPanel,
+    WorkbenchPidControlPanel,
+    protected_number,
+)
 from .controller import MotionWorkbenchController
 from .models import TargetPose, transform_target_pose
 
@@ -67,8 +72,7 @@ class PathControlPanel(QWidget):
         for title, fields in groups:
             group = QGroupBox(title); form = QFormLayout(group)
             for name, label, value, minimum, maximum, step in fields:
-                box = QDoubleSpinBox(); box.setRange(minimum, maximum)
-                box.setDecimals(3); box.setSingleStep(step); box.setValue(value)
+                box = protected_number(value, minimum, maximum, step, decimals=3)
                 self.config_inputs[name] = box; form.addRow(label, box)
             layout.addWidget(group)
         buttons = QHBoxLayout()
@@ -115,6 +119,7 @@ class MotionWorkbenchWindow(QMainWindow):
         self._runtime_swap_xy = False
         self._runtime_flip_x = False
         self._runtime_flip_y = False
+        self._active_heading_mode = "WIT"
         self._origin_reset_pending = False
         self._build()
         self._wire()
@@ -128,19 +133,22 @@ class MotionWorkbenchWindow(QMainWindow):
         self.pose_status = QLabel("位姿: 等待遥测")
         self.motion_status = QLabel("运动: NO_TARGET")
         self.upload_status = QLabel("路径: 未上传")
+        self.heading_status = QLabel("航向控制: WIT")
         self.reset_origin_button = QPushButton("重置零点")
         self.return_origin_button = QPushButton("返回零点")
         self.reset_origin_button.setEnabled(False)
         self.return_origin_button.setEnabled(False)
         self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton")
-        for widget in (self.connection, self.pose_status, self.motion_status, self.upload_status): status_row.addWidget(widget)
+        for widget in (self.connection, self.pose_status, self.motion_status,
+                       self.upload_status, self.heading_status):
+            status_row.addWidget(widget)
         status_row.addStretch()
         status_row.addWidget(self.reset_origin_button)
         status_row.addWidget(self.return_origin_button)
         status_row.addWidget(self.stop)
         root.addLayout(status_row)
 
-        self.pid_panel = PidControlPanel()
+        self.pid_panel = WorkbenchPidControlPanel()
         self.connection_panel = ConnectionPanel()
         self.point_panel = PointControlPanel()
         self.path_panel = PathControlPanel()
@@ -169,7 +177,8 @@ class MotionWorkbenchWindow(QMainWindow):
         self.connection_panel.connect_requested.connect(self._connect_port)
         self.connection_panel.disconnect_requested.connect(self._disconnect_port)
         self.point_panel.candidate_edited.connect(self.controller.select_candidate)
-        self.point_panel.send_requested.connect(self.controller.start_goal)
+        self.point_panel.send_requested.connect(self._start_point_goal)
+        self.point_panel.heading_mode_requested.connect(self._request_heading_mode)
         self.point_panel.stop_requested.connect(self.controller.stop)
         self.point_panel.clear_requested.connect(self.controller.clear_candidate)
         self.controller.candidate_changed.connect(self.point_panel.set_candidate)
@@ -186,9 +195,12 @@ class MotionWorkbenchWindow(QMainWindow):
         self.pid_panel.restore_requested.connect(self.controller.session.restore_pid)
         self.controller.session.pid_read.connect(lambda _revision, pid: self.pid_panel.set_pid(pid))
         self.controller.session.pid_applied.connect(lambda _revision, pid: self.pid_panel.set_pid(pid))
+        self.controller.session.yaw_source_changed.connect(self._on_yaw_source_changed)
+        self.controller.session.motion_changed.connect(self.point_panel.set_motion_active)
         self.controller.session.motion_changed.connect(
             lambda _active: self._refresh_origin_controls())
         self.controller.session.origin_reset.connect(self._on_origin_reset)
+        self.controller.session.telemetry.connect(self._sync_heading_source)
         self.controller.session.path_upload_changed.connect(self.path_panel.status.setText)
         self.path_panel.upload_requested.connect(self._upload_selected_path)
         self.path_panel.start_requested.connect(lambda: self.controller.start_path(self._path_id))
@@ -232,6 +244,9 @@ class MotionWorkbenchWindow(QMainWindow):
         self.connection_panel.set_connected(self.controller.session.connected, status)
         self._refresh_origin_controls()
         if status == "已连接":
+            mode = self.point_panel.current_heading_mode()
+            if mode != HEADING_MODE_NONE:
+                self.controller.session.set_yaw_source(mode)
             self.controller.session.read_path_config()
 
     def _on_connection_failure(self, message: str) -> None:
@@ -275,6 +290,46 @@ class MotionWorkbenchWindow(QMainWindow):
             self.point_panel.timeout.value(), use_yaw, True)
         self.controller.select_candidate(target)
         self.controller.start_goal(goal)
+
+    def _request_heading_mode(self, mode: str) -> None:
+        """联动单点 GOTO、板端航向源和图表角色标记。"""
+        self._active_heading_mode = mode
+        self.plots.set_heading_mode(mode)
+        if mode == HEADING_MODE_NONE:
+            self.heading_status.setText("航向控制: 关闭（WIT/OPS 仅观测）")
+            return
+        self.heading_status.setText(f"航向控制: {mode}")
+        if self.controller.session.connected:
+            self.controller.session.set_yaw_source(mode)
+
+    def _on_yaw_source_changed(self, source: str) -> None:
+        if self.point_panel.current_heading_mode() == HEADING_MODE_NONE:
+            return
+        self.point_panel.set_heading_mode(source)
+        self._active_heading_mode = source
+        self.plots.set_heading_mode(source)
+        self.heading_status.setText(f"航向控制: {source}")
+
+    def _sync_heading_source(self, telemetry: Telemetry) -> None:
+        if self.point_panel.current_heading_mode() == HEADING_MODE_NONE:
+            return
+        if telemetry.yaw_source != self.point_panel.current_heading_mode():
+            self.point_panel.set_heading_mode(telemetry.yaw_source)
+            self._active_heading_mode = telemetry.yaw_source
+            self.plots.set_heading_mode(telemetry.yaw_source)
+            self.heading_status.setText(f"航向控制: {telemetry.yaw_source}")
+
+    def _start_point_goal(self, goal: MotionGoal) -> None:
+        if not self.controller.start_goal(goal):
+            return
+        self._active_heading_mode = (
+            self.point_panel.current_heading_mode() if goal.use_yaw else HEADING_MODE_NONE
+        )
+        self.plots.set_heading_mode(self._active_heading_mode)
+        if self._active_heading_mode == HEADING_MODE_NONE:
+            self.heading_status.setText("航向控制: 关闭（WIT/OPS 仅观测）")
+        else:
+            self.heading_status.setText(f"航向控制: {self._active_heading_mode}")
 
     def _set_actual_pose(self, target: TargetPose, valid: bool) -> None:
         self.pose_status.setText("位姿: 有效" if valid else "位姿: 无效")
@@ -344,6 +399,8 @@ class MotionWorkbenchWindow(QMainWindow):
         self.path_panel.status.setText("当前方案没有连续路径")
 
     def closeEvent(self, event: object) -> None:
+        self.refresh_timer.stop()
+        self.heartbeat_timer.stop()
         self.controller.session.shutdown()
         event.accept()  # type: ignore[attr-defined]
 

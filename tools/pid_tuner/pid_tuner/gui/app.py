@@ -88,6 +88,7 @@ class MainWindow(QMainWindow):
         self.session = SessionController()
         self.recording = False
         self.recorded: list[Telemetry] = []
+        self._active_heading_mode = "WIT"
         self._build()
         self._wire()
         self.timer = QTimer(self)
@@ -248,12 +249,17 @@ class MainWindow(QMainWindow):
             self.status.setText(f"错误: {error}")
             return
         self.session.start_motion(goal)
+        self._active_heading_mode = (
+            self.connection_motion.heading_mode() if goal.use_yaw else HEADING_MODE_NONE
+        )
+        self.plots.set_heading_mode(self._active_heading_mode)
         kind = "组合" if goal.use_position and goal.use_yaw else ("位置" if goal.use_position else "角度")
         self.status.setText(f"已请求 {kind} GOTO")
         self.buffer.add_event(f"{kind} GOTO")
 
     def request_heading_mode(self, mode: str) -> None:
         """将三态 UI 映射为板端航向源和 GOTO 航向约束。"""
+        self._active_heading_mode = mode
         self.plots.set_heading_mode(mode)
         if mode == HEADING_MODE_NONE:
             self.status.setText("已关闭航向控制；后续组合 GOTO 仅控制 X/Y")
@@ -266,6 +272,8 @@ class MainWindow(QMainWindow):
         if self.recording:
             self.recorded.append(item)
         status = format_telemetry_status(item)
+        status += (" 航向控制=关闭" if self._active_heading_mode == HEADING_MODE_NONE
+                   else f" 航向控制={self._active_heading_mode}")
         if item.heartbeat_timed_out:
             status += " 心跳超时停车"
         elif item.remote_goal_active:
@@ -274,7 +282,9 @@ class MainWindow(QMainWindow):
         if (self.connection_motion.heading_mode() != HEADING_MODE_NONE and
                 item.yaw_source != self.connection_motion.heading_mode()):
             self.connection_motion.set_heading_mode(item.yaw_source)
-            self.plots.set_heading_mode(item.yaw_source)
+            if self._active_heading_mode != HEADING_MODE_NONE:
+                self._active_heading_mode = item.yaw_source
+                self.plots.set_heading_mode(item.yaw_source)
 
     def refresh(self) -> None:
         self.plots.refresh(self.buffer)
@@ -285,8 +295,11 @@ class MainWindow(QMainWindow):
         self.status.setText(f"PID 已应用，修订号 {revision}")
 
     def on_yaw_source_changed(self, source: str) -> None:
-        self.connection_motion.set_heading_mode(source)
-        self.plots.set_heading_mode(source)
+        if self.connection_motion.heading_mode() != HEADING_MODE_NONE:
+            self.connection_motion.set_heading_mode(source)
+        if self._active_heading_mode != HEADING_MODE_NONE:
+            self._active_heading_mode = source
+            self.plots.set_heading_mode(source)
         self.status.setText(f"航向 PID 数据源已切换为 {source}")
         self.buffer.add_event(f"航向源 {source}")
 
@@ -356,6 +369,8 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "通信错误", message)
 
     def closeEvent(self, event: object) -> None:
+        self.timer.stop()
+        self.heartbeat_timer.stop()
         self.session.shutdown()
         event.accept()  # type: ignore[attr-defined]
 
