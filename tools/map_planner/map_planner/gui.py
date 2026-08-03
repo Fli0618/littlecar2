@@ -543,6 +543,7 @@ class PlannerWindow(QMainWindow):
             self.push_layout_undo(); self.plan.layout.obstacles.append(Obstacle(*self.clamp_obstacle(point)))
             self.redraw()
 
+    @staticmethod
     def clamp_obstacle(point):
             return (max(OBSTACLE_RADIUS_MM,min(FIELD_SIZE_MM-OBSTACLE_RADIUS_MM,point.x())),max(OBSTACLE_RADIUS_MM,min(FIELD_SIZE_MM-OBSTACLE_RADIUS_MM,point.y())))
 
