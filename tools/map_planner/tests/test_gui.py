@@ -7,8 +7,9 @@ from PySide6.QtWidgets import QApplication
 
 from map_planner.codegen_c import CodeGenerationMode, generate_task_function
 from map_planner.codegen_dialog import CodeGenerationDialog
+import map_planner.gui as gui_module
 from map_planner.gui import PlannerWindow
-from map_planner.models import ContinuousPathSegment, Plan, RotateInPlace, Waypoint
+from map_planner.models import ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace, Waypoint
 
 
 class GuiTests(unittest.TestCase):
@@ -22,6 +23,9 @@ class GuiTests(unittest.TestCase):
         result.calibration_stage = "complete"
         result.update_calibration_ui()
         return result
+
+    def test_gui_module_exposes_launch_entrypoint(self):
+        self.assertTrue(callable(gui_module.main))
 
     def test_flow_list_and_locked_continuous_entry(self):
         window = self.window()
@@ -126,3 +130,22 @@ class GuiTests(unittest.TestCase):
             self.assertIn("AdvanceMotion_Cancel();", dialog.generated_code)
         finally:
             dialog.close()
+
+    def test_batch_delete_uses_step_indices_and_resynchronizes_continuous_entry(self):
+        window = self.window()
+        try:
+            window.plan.steps = [
+                Waypoint(100, 200, 0),
+                ContinuousPathSegment([PathPosePoint(100, 200, 0), PathPosePoint(300, 200, 0)]),
+                Waypoint(400, 200, 0),
+            ]
+            window.selected_indices = {0, 2}
+            window.active_index = 2
+            window.remove_selected_step()
+
+            self.assertEqual(len(window.plan.steps), 1)
+            segment = window.plan.steps[0]
+            self.assertIsInstance(segment, ContinuousPathSegment)
+            self.assertEqual((segment.points[0].x_mm, segment.points[0].y_mm, segment.points[0].yaw_deg), (0.0, 0.0, 0.0))
+        finally:
+            window.close()
