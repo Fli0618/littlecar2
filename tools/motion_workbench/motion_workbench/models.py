@@ -1,0 +1,57 @@
+"""Workbench-only immutable runtime state models."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+
+
+@dataclass(frozen=True)
+class TargetPose:
+    x_mm: float
+    y_mm: float
+    yaw_deg: float
+
+
+class SinglePointState(str, Enum):
+    NO_TARGET = "NO_TARGET"
+    TARGET_SELECTED = "TARGET_SELECTED"
+    RUNNING = "RUNNING"
+    ARRIVED = "ARRIVED"
+    TIMEOUT = "TIMEOUT"
+    CANCELED = "CANCELED"
+    NO_POSE = "NO_POSE"
+    NO_ORIGIN = "NO_ORIGIN"
+
+
+@dataclass(frozen=True)
+class ExperimentResult:
+    target: TargetPose
+    final_pose: TargetPose | None
+    error_x_mm: float | None
+    error_y_mm: float | None
+    position_error_mm: float | None
+    yaw_error_deg: float | None
+    duration_s: float
+    reason: str
+    pid_revision: int
+    yaw_source: str
+
+
+@dataclass(frozen=True)
+class PathTelemetry:
+    path_id: int
+    state: int
+    nearest_segment_index: int
+    target_segment_index: int
+    progress_mm: float
+    remaining_mm: float
+    projection_x_mm: float
+    projection_y_mm: float
+    lookahead_x_mm: float
+    lookahead_y_mm: float
+    lookahead_mm: float
+    reference_speed_mm_s: float
+    curvature_1_mm: float
+    yaw_gradient_deg_per_mm: float
+    final_stage: bool
