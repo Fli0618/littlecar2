@@ -128,6 +128,27 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_bezier_interpolated_heading_inserts_start_rotation(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add()
+            window.on_map_release(1950, 150)
+            window.bezier_start_yaw.setValue(90)
+            window.bezier_end_yaw.setValue(-90)
+            window.bezier_yaw_mode.setCurrentIndex(0)
+            window.apply_bezier_heading()
+            window.confirm_bezier_draft()
+            self.assertIsInstance(window.plan.steps[0], RotateInPlace)
+            self.assertEqual(window.plan.steps[0].yaw_deg, 90)
+            curve = window.plan.steps[1]
+            self.assertIsInstance(curve, BezierPathSegment)
+            self.assertEqual(curve.end_yaw_deg, -90)
+            code = generate_task_function(window.plan, "Task_BezierHeading")
+            self.assertIn("90.0f", code)
+            self.assertIn("-90.0f", code)
+        finally:
+            window.close()
+
     def test_preview_draws_direction_and_reports_blocked_simulation(self):
         window = self.window()
         try:
