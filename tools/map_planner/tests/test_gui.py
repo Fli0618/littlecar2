@@ -5,9 +5,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from map_planner.codegen_c import generate_task_function
+from map_planner.codegen_c import CodeGenerationMode, generate_task_function
+from map_planner.codegen_dialog import CodeGenerationDialog
 from map_planner.gui import PlannerWindow
-from map_planner.models import ContinuousPathSegment, RotateInPlace, Waypoint
+from map_planner.models import ContinuousPathSegment, Plan, RotateInPlace, Waypoint
 
 
 class GuiTests(unittest.TestCase):
@@ -106,3 +107,22 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(window.plan.steps[-1].yaw_deg, -90)
         finally:
             window.close()
+
+    def test_codegen_dialog_switches_between_feedback_and_open_loop_modes(self):
+        dialog = CodeGenerationDialog(Plan(steps=[Waypoint(10, 20, 30)]))
+        try:
+            self.assertEqual(dialog.mode, CodeGenerationMode.FEEDBACK)
+            self.assertIn("AdvanceMotion_Cancel();", dialog.generated_code)
+            self.assertIn("严谨反馈", dialog.mode_button.text())
+
+            dialog.mode_button.click()
+            self.assertEqual(dialog.mode, CodeGenerationMode.OPEN_LOOP)
+            self.assertNotIn("AdvanceMotion_Cancel();", dialog.generated_code)
+            self.assertIn("(void)AdvanceMotion_GotoPoseBlocking(", dialog.generated_code)
+            self.assertIn("开环忽略结果", dialog.mode_button.text())
+
+            dialog.mode_button.click()
+            self.assertEqual(dialog.mode, CodeGenerationMode.FEEDBACK)
+            self.assertIn("AdvanceMotion_Cancel();", dialog.generated_code)
+        finally:
+            dialog.close()
