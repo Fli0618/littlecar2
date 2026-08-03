@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFormLayout, QHBoxLayout
 from map_planner.gui import MapEditorWidget
 from map_planner.models import ContinuousPathSegment, Pose
 from pid_tuner.gui.plots import TelemetryPlots
-from pid_tuner.gui.widgets import PidControlPanel
+from pid_tuner.gui.widgets import ConnectionPanel, PidControlPanel
 
 from .control_panel import PointControlPanel
 from .controller import MotionWorkbenchController
@@ -63,10 +63,15 @@ class MotionWorkbenchWindow(QMainWindow):
         root.addLayout(status_row)
 
         self.pid_panel = PidControlPanel()
+        self.connection_panel = ConnectionPanel()
         self.point_panel = PointControlPanel()
         self.path_panel = PathControlPanel()
-        tabs = QTabWidget(); tabs.addTab(self.pid_panel, "PID"); tabs.addTab(self.point_panel, "单点"); tabs.addTab(self.path_panel, "路径")
-        left_scroll = QScrollArea(); left_scroll.setWidgetResizable(True); left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); left_scroll.setWidget(tabs); left_scroll.setMinimumWidth(320)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.connection_panel, "连接")
+        self.tabs.addTab(self.pid_panel, "PID")
+        self.tabs.addTab(self.point_panel, "单点")
+        self.tabs.addTab(self.path_panel, "路径")
+        left_scroll = QScrollArea(); left_scroll.setWidgetResizable(True); left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); left_scroll.setWidget(self.tabs); left_scroll.setMinimumWidth(320)
 
         self.plots = TelemetryPlots()
         plots_scroll = QScrollArea(); plots_scroll.setWidget(self.plots); plots_scroll.setWidgetResizable(False); plots_scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
@@ -80,6 +85,9 @@ class MotionWorkbenchWindow(QMainWindow):
 
     def _wire(self) -> None:
         self.stop.clicked.connect(self.controller.stop)
+        self.connection_panel.refresh_ports_requested.connect(self._refresh_ports)
+        self.connection_panel.connect_requested.connect(self._connect_port)
+        self.connection_panel.disconnect_requested.connect(self._disconnect_port)
         self.point_panel.candidate_edited.connect(self.controller.select_candidate)
         self.point_panel.send_requested.connect(self.controller.start_goal)
         self.point_panel.stop_requested.connect(self.controller.stop)
@@ -87,7 +95,8 @@ class MotionWorkbenchWindow(QMainWindow):
         self.controller.candidate_changed.connect(self.point_panel.set_candidate)
         self.controller.actual_pose_changed.connect(self._set_actual_pose)
         self.controller.motion_state_changed.connect(lambda value: self.motion_status.setText(f"运动: {value}"))
-        self.controller.status_changed.connect(self.connection.setText)
+        self.controller.status_changed.connect(self._on_session_status)
+        self.controller.session.failure.connect(self._on_connection_failure)
         self.pid_panel.read_requested.connect(self.controller.session.read_pid)
         self.pid_panel.apply_requested.connect(self.controller.session.apply_pid)
         self.pid_panel.restore_requested.connect(self.controller.session.restore_pid)
@@ -99,6 +108,27 @@ class MotionWorkbenchWindow(QMainWindow):
         self.path_panel.abort_requested.connect(self.controller.abort_path)
         self.view_switch.clicked.connect(self._switch_workspace)
         self._path_id = 1
+
+    def _refresh_ports(self) -> None:
+        from serial.tools import list_ports
+        self.connection_panel.set_available_ports([item.device for item in list_ports.comports()])
+        if not self.connection_panel.port.currentText():
+            self.connection_panel.set_connected(False, "未发现可用 COM 口")
+
+    def _connect_port(self, port: str, baud: int) -> None:
+        self.connection_panel.set_connecting(True)
+        self.controller.session.connect_port(port, baud)
+
+    def _disconnect_port(self) -> None:
+        self.controller.session.disconnect()
+        self.connection_panel.set_connected(False, "已断开")
+
+    def _on_session_status(self, status: str) -> None:
+        self.connection.setText(status)
+        self.connection_panel.set_connected(self.controller.session.connected, status)
+
+    def _on_connection_failure(self, message: str) -> None:
+        self.connection_panel.set_connected(False, f"连接失败: {message}")
 
     def _set_actual_pose(self, target: TargetPose, valid: bool) -> None:
         self.pose_status.setText("位姿: 有效" if valid else "位姿: 无效")

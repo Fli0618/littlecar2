@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from pid_tuner.gui.widgets import ConnectionMotionPanel, PidControlPanel
+from pid_tuner.gui.widgets import ConnectionMotionPanel, ConnectionPanel, PidControlPanel
 from pid_tuner.models import PidConfig
 
 
@@ -45,7 +45,7 @@ class GuiWidgetTests(unittest.TestCase):
         self.assertTrue(goals[1].use_yaw)
 
     def test_connection_panel_switches_between_connect_and_disconnect(self) -> None:
-        panel = ConnectionMotionPanel()
+        panel = ConnectionPanel()
         disconnected: list[bool] = []
         panel.disconnect_requested.connect(lambda: disconnected.append(True))
 
@@ -54,6 +54,16 @@ class GuiWidgetTests(unittest.TestCase):
 
         self.assertEqual(panel.connect_button.text(), "断开")
         self.assertEqual(disconnected, [True])
+
+    def test_connection_panel_requires_a_selected_port(self) -> None:
+        panel = ConnectionPanel()
+        requested: list[tuple[str, int]] = []
+        panel.connect_requested.connect(lambda port, baud: requested.append((port, baud)))
+        self.assertFalse(panel.connect_button.isEnabled())
+        panel.set_available_ports(["COM7"])
+        self.assertTrue(panel.connect_button.isEnabled())
+        panel.connect_button.click()
+        self.assertEqual(requested, [("COM7", 115200)])
 
 
 if __name__ == "__main__":

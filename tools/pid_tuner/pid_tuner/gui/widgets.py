@@ -37,6 +37,68 @@ def number(value: float = 0.0, minimum: float = -100000.0,
     return box
 
 
+class ConnectionPanel(QWidget):
+    """Reusable serial-port selector; it never opens a port itself."""
+
+    refresh_ports_requested = Signal()
+    connect_requested = Signal(str, int)
+    disconnect_requested = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.port = QComboBox()
+        self.port.setObjectName("comPortCombo")
+        self.baud = QComboBox()
+        self.baud.setObjectName("baudRateCombo")
+        self.baud.addItems(["115200", "230400"])
+        self.refresh_ports_button = QPushButton("刷新 COM")
+        self.connect_button = QPushButton("连接")
+        self.status = QLabel("未连接")
+        self._connected = False
+
+        form = QFormLayout(self)
+        form.addRow("串口", self.port)
+        form.addRow("波特率", self.baud)
+        form.addRow(self.refresh_ports_button)
+        form.addRow(self.connect_button)
+        form.addRow("状态", self.status)
+        self.refresh_ports_button.clicked.connect(self.refresh_ports_requested)
+        self.connect_button.clicked.connect(self._toggle_connection)
+        self._update_enabled()
+
+    def set_available_ports(self, ports: list[str]) -> None:
+        previous = self.port.currentText()
+        self.port.clear()
+        self.port.addItems(ports)
+        if previous in ports:
+            self.port.setCurrentText(previous)
+        self._update_enabled()
+
+    def set_connecting(self, connecting: bool) -> None:
+        self.port.setEnabled(not connecting and not self._connected)
+        self.baud.setEnabled(not connecting and not self._connected)
+        self.refresh_ports_button.setEnabled(not connecting and not self._connected)
+        self.connect_button.setEnabled(not connecting and (self._connected or bool(self.port.currentText())))
+        self.connect_button.setText("连接中" if connecting else ("断开" if self._connected else "连接"))
+        if connecting:
+            self.status.setText("正在连接")
+
+    def set_connected(self, connected: bool, status: str = "") -> None:
+        self._connected = connected
+        self.set_connecting(False)
+        self.status.setText(status or ("已连接" if connected else "未连接"))
+
+    def _update_enabled(self) -> None:
+        if not self._connected:
+            self.connect_button.setEnabled(bool(self.port.currentText()))
+
+    def _toggle_connection(self) -> None:
+        if self._connected:
+            self.disconnect_requested.emit()
+        elif self.port.currentText():
+            self.connect_requested.emit(self.port.currentText(), int(self.baud.currentText()))
+
+
 class PidControlPanel(QWidget):
     """PID 参数编辑与读写操作组件，不直接依赖串口或会话对象。"""
 
