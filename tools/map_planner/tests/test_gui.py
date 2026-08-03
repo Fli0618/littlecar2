@@ -149,6 +149,36 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_undo_and_tool_switch_clear_bezier_draft_preview(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add(); window.on_map_release(1950, 150); window.confirm_bezier_draft()
+            window.undo()
+            self.assertIsNone(window.bezier_draft)
+            self.assertIsNone(window.pending_action)
+            window.update_preview(1900, 200)
+            self.assertNotIn("bezier_sample", [item.data(0) for item in window.scene.items()])
+            window.begin_bezier_add(); window.on_map_release(1950, 150)
+            window.begin_goto_add(); window.update_preview(1900, 200)
+            markers = [item.data(0) for item in window.scene.items()]
+            self.assertIsNone(window.bezier_draft)
+            self.assertIn("preview_sweep", markers)
+            self.assertNotIn("bezier_sample", markers)
+        finally:
+            window.close()
+
+    def test_curve_start_rotation_is_simulated_and_seekable(self):
+        window = self.window()
+        try:
+            window.begin_bezier_add(); window.on_map_release(1950, 150)
+            window.bezier_start_yaw.setValue(90); window.apply_bezier_heading(); window.confirm_bezier_draft()
+            self.assertTrue(window.progress.isEnabled())
+            self.assertGreater(len(window.timeline), 1)
+            window.seek_timeline(len(window.timeline) // 2)
+            self.assertIsNotNone(window.current_frame)
+        finally:
+            window.close()
+
     def test_preview_draws_direction_and_reports_blocked_simulation(self):
         window = self.window()
         try:
