@@ -10,6 +10,6 @@ pip install -e tools/map_planner
 pip install -e tools/motion_workbench
 ```
 
-启动命令：`motion-workbench`。
+启动命令：`motion-workbench`；也可在本目录执行 `python launch_gui.py`。
 
 连续路径使用协议 V2 的扩展命令，要求 STM32 已刷入对应固件。单条路径最多 256 个 `x/y/yaw` 点；工作台在上传前拒绝超限路径。
