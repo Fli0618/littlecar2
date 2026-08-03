@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import math
 
 from .geometry import world_to_paper, wrap_deg
-from .models import CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, MotionCommand, PathPosePoint, Plan, Pose, RotateInPlace, Waypoint
+from .models import CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, MotionStep, Plan, Pose, RotateInPlace, Waypoint
 
 
 POSITION_TOLERANCE_MM = 25.0
@@ -33,7 +33,7 @@ class SimulationFrame:
 
 @dataclass
 class Simulation:
-    commands: list[MotionCommand]
+    commands: list[MotionStep]
     start_paper_x_mm: float = FIELD_SIZE_MM / 2.0
     start_paper_y_mm: float = FIELD_SIZE_MM / 2.0
     start_heading_deg: float = 0.0
@@ -137,14 +137,14 @@ class Simulation:
     def _approach(current: float, target: float, amount: float) -> float:
         return min(current + amount, target) if current < target else max(current - amount, target)
 
-    def _complete_command(self, command: MotionCommand) -> None:
+    def _complete_command(self, command: MotionStep) -> None:
         self.vx = self.vy = self.wz = 0.0
         if isinstance(command, Waypoint) and command.stop and command.dwell_s > 0.0:
             self.dwell_remaining_s = command.dwell_s
         else:
             self._advance_command()
 
-    def _has_timed_out(self, command: MotionCommand) -> bool:
+    def _has_timed_out(self, command: MotionStep) -> bool:
         return self.command_elapsed_s >= max(0.0, command.timeout_s)
 
     def _fail_timeout(self) -> None:
@@ -181,53 +181,6 @@ class Simulation:
             out,
             timed_out,
         )
-
-
-def build_timeline(
-    commands: list[MotionCommand], start_paper_x_mm: float, start_paper_y_mm: float, start_heading_deg: float
-) -> list[SimulationFrame]:
-    """返回直到完成或超时的确定性仿真帧。"""
-    simulation = Simulation(commands, start_paper_x_mm, start_paper_y_mm, start_heading_deg)
-    frames: list[SimulationFrame] = []
-    while not simulation.finished and not simulation.failed:
-        frames.append(simulation.step())
-    return frames
-
-
-def build_continuous_timeline(
-    points: list[PathPosePoint], start_paper_x_mm: float, start_paper_y_mm: float, start_heading_deg: float
-) -> list[SimulationFrame]:
-    """按几何折线播放连续路径，不将其解释为实车动力学仿真。"""
-
-    if not points:
-        return []
-    frames: list[SimulationFrame] = []
-    previous = Pose()
-    elapsed_s = 0.0
-    preview_speed_mm_s = 820.0
-    for index, point in enumerate(points):
-        target = Pose(point.x_mm, point.y_mm, point.yaw_deg)
-        distance = math.hypot(target.x_mm - previous.x_mm, target.y_mm - previous.y_mm)
-        yaw_delta = wrap_deg(target.yaw_deg - previous.yaw_deg)
-        count = max(1, math.ceil(distance / (preview_speed_mm_s * DT_S)), math.ceil(abs(yaw_delta) / (90.0 * DT_S)))
-        for step in range(1, count + 1):
-            ratio = step / count
-            actual = Pose(
-                previous.x_mm + (target.x_mm - previous.x_mm) * ratio,
-                previous.y_mm + (target.y_mm - previous.y_mm) * ratio,
-                wrap_deg(previous.yaw_deg + yaw_delta * ratio),
-            )
-            elapsed_s += DT_S
-            paper_x, paper_y = world_to_paper(actual, start_paper_x_mm, start_paper_y_mm, start_heading_deg)
-            margin = CAR_SIZE_MM / 2.0
-            frames.append(SimulationFrame(
-                elapsed_s, target, actual, distance / (count * DT_S),
-                math.hypot(target.x_mm - actual.x_mm, target.y_mm - actual.y_mm), index,
-                index == len(points) - 1 and step == count,
-                not (margin <= paper_x <= FIELD_SIZE_MM - margin and margin <= paper_y <= FIELD_SIZE_MM - margin), False,
-            ))
-        previous = target
-    return frames
 
 
 def build_plan_timeline(plan: Plan) -> list[SimulationFrame]:
@@ -275,7 +228,7 @@ def build_plan_timeline(plan: Plan) -> list[SimulationFrame]:
 
 
 def build_timeline_from_pose(
-    command: MotionCommand, initial: Pose, start_paper_x_mm: float, start_paper_y_mm: float, start_heading_deg: float
+    command: MotionStep, initial: Pose, start_paper_x_mm: float, start_paper_y_mm: float, start_heading_deg: float
 ) -> list[SimulationFrame]:
     """Execute one discrete step from the preceding flow pose, not world origin."""
     simulation = Simulation([command], start_paper_x_mm, start_paper_y_mm, start_heading_deg, Pose(initial.x_mm, initial.y_mm, initial.yaw_deg))
@@ -283,10 +236,3 @@ def build_timeline_from_pose(
     while not simulation.finished and not simulation.failed:
         frames.append(simulation.step())
     return frames
-
-
-def copy_command(step: MotionCommand, current: Pose) -> MotionCommand:
-    if isinstance(step, RotateInPlace):
-        return step
-    return Waypoint(step.x_mm, step.y_mm, step.yaw_deg, step.stop, step.dwell_s, step.name,
-                    step.use_yaw, step.vmax_mm_s, step.wmax_deg_s, step.timeout_s)

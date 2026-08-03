@@ -60,8 +60,6 @@ class ContinuousPathSegment:
 
 
 MotionStep = Union[Waypoint, RotateInPlace, ContinuousPathSegment]
-# 保留旧名称，供外部类型标注逐步迁移。
-MotionCommand = MotionStep
 
 
 @dataclass
@@ -88,11 +86,6 @@ class Plan:
     start_heading_deg: float = 180.0
     steps: list[MotionStep] = field(default_factory=list)
     layout: MapLayout = field(default_factory=MapLayout)
-    # 临时兼容旧 GUI：v7 的持久化和代码生成只使用 steps。
-    @property
-    def _legacy_normalize_property(self) -> None:
-        self.updated_at = datetime.now(timezone.utc).isoformat()
-
     def normalize(self) -> None:
         self.updated_at = datetime.now(timezone.utc).isoformat()
 
@@ -124,6 +117,9 @@ class Plan:
             raise ValueError("方案 JSON 格式无效")
         if value.get("map_version") != MAP_VERSION:
             raise ValueError("仅支持 map_version: 7 的流程方案")
+        allowed_keys = {"map_version", "name", "created_at", "updated_at", "start", "steps", "layout"}
+        if set(value) != allowed_keys:
+            raise ValueError("方案 JSON 格式无效")
         try:
             start, steps_value, layout = value["start"], value.get("steps", []), value["layout"]
             if not isinstance(start, dict) or not isinstance(steps_value, list) or not isinstance(layout, dict):
