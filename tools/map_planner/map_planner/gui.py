@@ -1054,3 +1054,13 @@ class PlannerWindow(QMainWindow):
                 self.active_index, self.active_point_index = len(self.plan.steps) - 1, -1
             self.pending_action = None
             self.clear_preview(False); self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+
+def main() -> int:
+    """Launch the standalone map planner window."""
+
+    app = QApplication(sys.argv)
+    app.setStyleSheet("QWidget{font-family:'Microsoft YaHei';font-size:13px;} QPushButton{min-height:28px;} QScrollArea{border:0;}")
+    window = PlannerWindow()
+    window.show()
+    return app.exec()
