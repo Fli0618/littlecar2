@@ -101,6 +101,8 @@ void AdvanceTest_VerifyYawSourceFreshness(void);
  */
 void AdvanceTest_PrintImuOpsData(void);
 
+void Test_jetson(Competition_StartArea_t start_area);
+
 #ifdef __cplusplus
 }
 #endif

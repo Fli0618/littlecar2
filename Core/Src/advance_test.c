@@ -796,37 +796,21 @@ void AdvanceTest_VerifyYawSourceFreshness(void)
 
 // ----------------------------------------------------------------------------------
 
-void Test_jetson(void)
+void Test_jetson(Competition_StartArea_t start_area)
 {
-  Competition_StartArea_t start_area;
+  printf("[TEST][JETSON] start\r\n");
   Detect_TargetList_t target_list = {0};
   Detect_Status_t status;
   uint8_t received;
   uint32_t elapsed;
   char code[DETECT_QR_CODE_LENGTH + 1U] = {0};
 
-  /* Competition start frames are asynchronous, so allow time for either area
-   * selection to arrive before moving on to the detector tests. */
-  received = 0U;
-  for (elapsed = 0U; elapsed < 3000U; elapsed += 20U)
-  {
-    if (CommJetson_TakeCompetitionStart(&start_area) != 0U)
-    {
-      received = 1U;
-      break;
-    }
-    HAL_Delay(20U);
-  }
-  if (received != 0U)
-  {
-    printf("[TEST][JETSON] competition start area=%u (%s)\r\n",
-           (unsigned int)start_area,
-           (start_area == COMPETITION_START_AREA_1) ? "AREA_1" : "AREA_2");
-  }
-  else
-  {
-    printf("[TEST][JETSON] competition start area: timeout\r\n");
-  }
+
+  printf("[TEST][JETSON] competition start area=%u (%s)\r\n",
+          (unsigned int)start_area,
+          (start_area == COMPETITION_START_AREA_1) ? "AREA_1" : "AREA_2");
+
+
   HAL_Delay(500U);
   status = detect_color_start();
   printf("[TEST][JETSON] color detection start status=%u\r\n", (unsigned int)status);
