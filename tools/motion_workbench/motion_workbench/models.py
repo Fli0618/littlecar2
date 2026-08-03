@@ -44,6 +44,29 @@ def reflect_target_pose(pose: TargetPose, flip_x: bool, flip_y: bool) -> TargetP
     return transform_target_pose(pose, False, flip_x, flip_y)
 
 
+def inverse_transform_target_pose(
+    pose: TargetPose,
+    swap_xy: bool = False,
+    flip_x: bool = False,
+    flip_y: bool = False,
+) -> TargetPose:
+    """Convert a displayed target back into the board coordinate frame."""
+    direction_x = math.sin(math.radians(pose.yaw_deg))
+    direction_y = math.cos(math.radians(pose.yaw_deg))
+    x_mm, y_mm = pose.x_mm, pose.y_mm
+    if flip_x:
+        x_mm = -x_mm
+        direction_x = -direction_x
+    if flip_y:
+        y_mm = -y_mm
+        direction_y = -direction_y
+    if swap_xy:
+        x_mm, y_mm = y_mm, x_mm
+        direction_x, direction_y = direction_y, direction_x
+    yaw_deg = (math.degrees(math.atan2(direction_x, direction_y)) + 180.0) % 360.0 - 180.0
+    return TargetPose(x_mm, y_mm, yaw_deg)
+
+
 class SinglePointState(str, Enum):
     NO_TARGET = "NO_TARGET"
     TARGET_SELECTED = "TARGET_SELECTED"

@@ -9,6 +9,7 @@ from map_planner.models import BezierPathSegment, ContinuousPathSegment, PathPos
 
 from motion_workbench.controller import MotionWorkbenchController
 from motion_workbench.models import (PlanExecutionState, TargetPose,
+                                     inverse_transform_target_pose,
                                      reflect_target_pose, transform_target_pose)
 
 
@@ -138,6 +139,33 @@ class ControllerTests(unittest.TestCase):
                 self.assertAlmostEqual(transformed.yaw_deg, result[2])
 
         self.assertEqual(pose, TargetPose(10.0, 20.0, 30.0))
+
+    def test_display_and_command_axis_transforms_are_inverse(self) -> None:
+        pose = TargetPose(10.0, 20.0, 30.0)
+        for swap_xy in (False, True):
+            for flip_x in (False, True):
+                for flip_y in (False, True):
+                    with self.subTest(swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y):
+                        displayed = transform_target_pose(pose, swap_xy, flip_x, flip_y)
+                        restored = inverse_transform_target_pose(
+                            displayed, swap_xy, flip_x, flip_y)
+                        self.assertAlmostEqual(restored.x_mm, pose.x_mm)
+                        self.assertAlmostEqual(restored.y_mm, pose.y_mm)
+                        self.assertAlmostEqual(restored.yaw_deg, pose.yaw_deg)
+
+    def test_command_transform_applies_to_goal_and_path_without_changing_plan(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        controller.set_command_axis_transform(False, True, True)
+        controller.select_candidate(TargetPose(10, 20, 30))
+        controller.start_goal(MotionGoal(10, 20, 30, 100, 50, 1000))
+
+        self.assertEqual(controller.execution, TargetPose(10, 20, 30))
+        self.assertEqual(session.started[-1], MotionGoal(-10, -20, -150, 100, 50, 1000))
+
+        source = [PathPosePoint(10, 20, 30)]
+        transformed = controller._transform_path_for_command(source)
+        self.assertEqual(source, [PathPosePoint(10, 20, 30)])
+        self.assertEqual(transformed, [PathPosePoint(-10, -20, -150)])
 
     @staticmethod
     def _telemetry(state: int) -> Telemetry:

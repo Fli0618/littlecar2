@@ -13,7 +13,7 @@ from map_planner.gui import MapEditorWidget
 from map_planner.models import ContinuousPathSegment, Pose
 from pid_tuner.gui.plots import TelemetryPlots
 from pid_tuner.gui.widgets import ConnectionPanel, PidControlPanel
-from pid_tuner.models import PathControlConfig
+from pid_tuner.models import MotionGoal, PathControlConfig
 
 from .control_panel import PointControlPanel
 from .controller import MotionWorkbenchController
@@ -113,8 +113,9 @@ class MotionWorkbenchWindow(QMainWindow):
         self.resize(1500, 920)
         self.controller = MotionWorkbenchController()
         self._runtime_swap_xy = False
-        self._runtime_flip_x = False
-        self._runtime_flip_y = False
+        self._runtime_flip_x = True
+        self._runtime_flip_y = True
+        self._origin_reset_pending = False
         self._build()
         self._wire()
         self.refresh_timer = QTimer(self); self.refresh_timer.setInterval(40); self.refresh_timer.timeout.connect(self._refresh); self.refresh_timer.start()
@@ -127,9 +128,16 @@ class MotionWorkbenchWindow(QMainWindow):
         self.pose_status = QLabel("位姿: 等待遥测")
         self.motion_status = QLabel("运动: NO_TARGET")
         self.upload_status = QLabel("路径: 未上传")
+        self.reset_origin_button = QPushButton("重置零点")
+        self.return_origin_button = QPushButton("返回零点")
+        self.reset_origin_button.setEnabled(False)
+        self.return_origin_button.setEnabled(False)
         self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton")
         for widget in (self.connection, self.pose_status, self.motion_status, self.upload_status): status_row.addWidget(widget)
-        status_row.addStretch(); status_row.addWidget(self.stop)
+        status_row.addStretch()
+        status_row.addWidget(self.reset_origin_button)
+        status_row.addWidget(self.return_origin_button)
+        status_row.addWidget(self.stop)
         root.addLayout(status_row)
 
         self.pid_panel = PidControlPanel()
@@ -155,6 +163,8 @@ class MotionWorkbenchWindow(QMainWindow):
 
     def _wire(self) -> None:
         self.stop.clicked.connect(self.controller.stop)
+        self.reset_origin_button.clicked.connect(self._request_origin_reset)
+        self.return_origin_button.clicked.connect(self._return_to_origin)
         self.connection_panel.refresh_ports_requested.connect(self._refresh_ports)
         self.connection_panel.connect_requested.connect(self._connect_port)
         self.connection_panel.disconnect_requested.connect(self._disconnect_port)
@@ -176,6 +186,9 @@ class MotionWorkbenchWindow(QMainWindow):
         self.pid_panel.restore_requested.connect(self.controller.session.restore_pid)
         self.controller.session.pid_read.connect(lambda _revision, pid: self.pid_panel.set_pid(pid))
         self.controller.session.pid_applied.connect(lambda _revision, pid: self.pid_panel.set_pid(pid))
+        self.controller.session.motion_changed.connect(
+            lambda _active: self._refresh_origin_controls())
+        self.controller.session.origin_reset.connect(self._on_origin_reset)
         self.controller.session.path_upload_changed.connect(self.path_panel.status.setText)
         self.path_panel.upload_requested.connect(self._upload_selected_path)
         self.path_panel.start_requested.connect(lambda: self.controller.start_path(self._path_id))
@@ -192,6 +205,10 @@ class MotionWorkbenchWindow(QMainWindow):
         self.map_editor.continuous_requested.connect(self.controller.start_continuous)
         self.map_editor.execution_stop_requested.connect(self.controller.stop)
         self.map_editor.runtime_axis_transform_changed.connect(self._set_runtime_axis_transform)
+        self._set_runtime_axis_transform(
+            self.map_editor.execution_swap_xy.isChecked(),
+            self.map_editor.execution_flip_x.isChecked(),
+            self.map_editor.execution_flip_y.isChecked())
         self.view_switch.clicked.connect(self._switch_workspace)
         self._path_id = 1
         self.controller.set_plan(self.map_editor.get_plan())
@@ -213,11 +230,51 @@ class MotionWorkbenchWindow(QMainWindow):
     def _on_session_status(self, status: str) -> None:
         self.connection.setText(status)
         self.connection_panel.set_connected(self.controller.session.connected, status)
+        self._refresh_origin_controls()
         if status == "已连接":
             self.controller.session.read_path_config()
 
     def _on_connection_failure(self, message: str) -> None:
+        self._origin_reset_pending = False
+        self._refresh_origin_controls()
         self.connection_panel.set_connected(False, f"连接失败: {message}")
+
+    def _refresh_origin_controls(self) -> None:
+        available = (self.controller.session.connected
+                     and not self.controller.session.motion_active
+                     and not self._origin_reset_pending)
+        self.reset_origin_button.setEnabled(available)
+        self.return_origin_button.setEnabled(available)
+
+    def _request_origin_reset(self) -> None:
+        if (not self.controller.session.connected
+                or self.controller.session.motion_active
+                or self._origin_reset_pending):
+            return
+        self._origin_reset_pending = True
+        self._refresh_origin_controls()
+        self.controller.session.reset_origin()
+
+    def _on_origin_reset(self) -> None:
+        self._origin_reset_pending = False
+        self.controller.new_experiment()
+        self.controller.select_candidate(TargetPose(0.0, 0.0, 0.0))
+        self.pose_status.setText("位姿: 零点已重置，等待遥测")
+        self._refresh_origin_controls()
+
+    def _return_to_origin(self) -> None:
+        if not self.controller.session.connected or self.controller.session.motion_active:
+            return
+        uses_yaw = getattr(self.point_panel, "uses_yaw", None)
+        use_yaw = (uses_yaw() if callable(uses_yaw)
+                   else self.point_panel.use_yaw.isChecked())
+        target = TargetPose(0.0, 0.0, 0.0)
+        goal = MotionGoal(
+            target.x_mm, target.y_mm, target.yaw_deg,
+            self.point_panel.vmax.value(), self.point_panel.wmax.value(),
+            self.point_panel.timeout.value(), use_yaw, True)
+        self.controller.select_candidate(target)
+        self.controller.start_goal(goal)
 
     def _set_actual_pose(self, target: TargetPose, valid: bool) -> None:
         self.pose_status.setText("位姿: 有效" if valid else "位姿: 无效")
@@ -249,6 +306,7 @@ class MotionWorkbenchWindow(QMainWindow):
         self._runtime_swap_xy = swap_xy
         self._runtime_flip_x = flip_x
         self._runtime_flip_y = flip_y
+        self.controller.set_command_axis_transform(swap_xy, flip_x, flip_y)
         if self.controller.actual is not None:
             self._set_actual_pose(self.controller.actual, True)
         else:
