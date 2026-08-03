@@ -108,11 +108,24 @@ static void AdvanceVisual_TransformPixelError(AdvanceVisual_CameraRotation_t rot
   }
 }
 
+static void AdvanceVisual_ApplyBodyAxisSign(int32_t body_error_x,
+                                            int32_t body_error_y,
+                                            float body_x_sign,
+                                            float body_y_sign,
+                                            float *signed_error_x,
+                                            float *signed_error_y)
+{
+  *signed_error_x = body_x_sign * (float)body_error_x;
+  *signed_error_y = body_y_sign * (float)body_error_y;
+}
+
 #ifdef ADVANCE_VISUAL_TEST
 static uint8_t AdvanceVisual_RunTransformSelfTest(void)
 {
   int32_t body_error_x;
   int32_t body_error_y;
+  float signed_error_x;
+  float signed_error_y;
 
   AdvanceVisual_TransformPixelError(ADVANCE_VISUAL_CAMERA_ROTATION_0,
                                     10, 20, &body_error_x, &body_error_y);
@@ -137,7 +150,17 @@ static uint8_t AdvanceVisual_RunTransformSelfTest(void)
 
   AdvanceVisual_TransformPixelError(ADVANCE_VISUAL_CAMERA_ROTATION_270_CW,
                                     10, 20, &body_error_x, &body_error_y);
-  return ((body_error_x == -20) && (body_error_y == 10)) ? 1U : 0U;
+  if ((body_error_x != -20) || (body_error_y != 10))
+  {
+    return 0U;
+  }
+
+  AdvanceVisual_TransformPixelError(ADVANCE_VISUAL_CAMERA_ROTATION_90_CW,
+                                    10, 20, &body_error_x, &body_error_y);
+  AdvanceVisual_ApplyBodyAxisSign(body_error_x, body_error_y,
+                                  -1.0f, 1.0f,
+                                  &signed_error_x, &signed_error_y);
+  return ((signed_error_x == -20.0f) && (signed_error_y == -10.0f)) ? 1U : 0U;
 }
 #endif
 
@@ -211,6 +234,8 @@ void AdvanceVisual_Update(void)
   int32_t pixel_error_y;
   int32_t body_error_x;
   int32_t body_error_y;
+  float signed_error_x;
+  float signed_error_y;
   float vx_right;
   float vy_forward;
 
@@ -276,12 +301,16 @@ void AdvanceVisual_Update(void)
   }
 
   g_stable_count = 0U;
+  AdvanceVisual_ApplyBodyAxisSign(body_error_x, body_error_y,
+                                  ADVANCE_VISUAL_BODY_X_SIGN,
+                                  ADVANCE_VISUAL_BODY_Y_SIGN,
+                                  &signed_error_x, &signed_error_y);
   vx_right = (AdvanceVisual_AbsI32(body_error_x) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_X)
                  ? 0.0f
-                 : ADVANCE_VISUAL_BODY_X_SIGN * ADVANCE_VISUAL_KP_X * (float)body_error_x;
+                 : ADVANCE_VISUAL_KP_X * signed_error_x;
   vy_forward = (AdvanceVisual_AbsI32(body_error_y) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_Y)
                    ? 0.0f
-                   : ADVANCE_VISUAL_BODY_Y_SIGN * ADVANCE_VISUAL_KP_Y * (float)body_error_y;
+                   : ADVANCE_VISUAL_KP_Y * signed_error_y;
   vx_right = AdvanceVisual_LimitFloat(vx_right, ADVANCE_VISUAL_MAX_VX);
   vy_forward = AdvanceVisual_LimitFloat(vy_forward, ADVANCE_VISUAL_MAX_VY);
   Chassis_SetBodyVelocityEx(vx_right, vy_forward, 0.0f, ADVANCE_VISUAL_ACC);
