@@ -94,6 +94,10 @@ class MotionWorkbenchWindow(QMainWindow):
         self.point_panel.clear_requested.connect(self.controller.clear_candidate)
         self.controller.candidate_changed.connect(self.point_panel.set_candidate)
         self.controller.actual_pose_changed.connect(self._set_actual_pose)
+        self.controller.execution_changed.connect(self._set_execution_target)
+        self.controller.trace_changed.connect(self._set_execution_trace)
+        self.controller.plan_execution_changed.connect(self._set_plan_execution_status)
+        self.controller.plan_finished.connect(self._set_plan_execution_status)
         self.controller.motion_state_changed.connect(lambda value: self.motion_status.setText(f"运动: {value}"))
         self.controller.status_changed.connect(self._on_session_status)
         self.controller.session.failure.connect(self._on_connection_failure)
@@ -106,8 +110,15 @@ class MotionWorkbenchWindow(QMainWindow):
         self.path_panel.upload_requested.connect(self._upload_selected_path)
         self.path_panel.start_requested.connect(lambda: self.controller.start_path(self._path_id))
         self.path_panel.abort_requested.connect(self.controller.abort_path)
+        self.map_editor.plan_changed.connect(self.controller.set_plan)
+        self.map_editor.candidate_selected.connect(self.controller.set_plan_cursor)
+        self.map_editor.hardware_enabled_changed.connect(self._set_hardware_execution)
+        self.map_editor.single_step_requested.connect(self.controller.start_single)
+        self.map_editor.continuous_requested.connect(self.controller.start_continuous)
+        self.map_editor.execution_stop_requested.connect(self.controller.stop)
         self.view_switch.clicked.connect(self._switch_workspace)
         self._path_id = 1
+        self.controller.set_plan(self.map_editor.get_plan())
 
     def _refresh_ports(self) -> None:
         from serial.tools import list_ports
@@ -132,7 +143,32 @@ class MotionWorkbenchWindow(QMainWindow):
 
     def _set_actual_pose(self, target: TargetPose, valid: bool) -> None:
         self.pose_status.setText("位姿: 有效" if valid else "位姿: 无效")
-        self.map_editor.set_runtime_pose(Pose(target.x_mm, target.y_mm, target.yaw_deg) if valid else None)
+        actual = Pose(target.x_mm, target.y_mm, target.yaw_deg) if valid else None
+        self.map_editor.set_runtime_pose(actual)
+        self.map_editor.set_execution_actual_pose(actual)
+        execution = self.controller.execution
+        if actual is not None and execution is not None:
+            self.map_editor.set_execution_error(execution.x_mm - actual.x_mm, execution.y_mm - actual.y_mm,
+                                                ((execution.yaw_deg - actual.yaw_deg + 180.0) % 360.0) - 180.0)
+
+    def _set_execution_target(self, target: TargetPose | None) -> None:
+        pose = None if target is None else Pose(target.x_mm, target.y_mm, target.yaw_deg)
+        self.map_editor.set_execution_target(pose)
+
+    def _set_execution_trace(self, trace: tuple[TargetPose, ...]) -> None:
+        self.map_editor.set_execution_trace([Pose(item.x_mm, item.y_mm, item.yaw_deg) for item in trace])
+
+    def _set_hardware_execution(self, enabled: bool) -> None:
+        if enabled and not self.controller.session.connected:
+            self.map_editor.set_execution_enabled(False)
+            self.map_editor.set_execution_status("请先连接串口后再启用实机运动")
+
+    def _set_plan_execution_status(self, execution: object) -> None:
+        state = getattr(execution, "state", "")
+        cursor = getattr(execution, "cursor", 0)
+        count = getattr(execution, "step_count", 0)
+        reason = getattr(execution, "reason", "")
+        self.map_editor.set_execution_status(f"{state} {cursor}/{count} {reason}".strip())
 
     def _switch_workspace(self) -> None:
         next_index = 1 - self.workspace.currentIndex(); self.workspace.setCurrentIndex(next_index)
