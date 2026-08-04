@@ -9,7 +9,7 @@ from typing import Literal, Union
 
 FIELD_SIZE_MM = 2400.0
 CAR_SIZE_MM = 300.0
-MAP_VERSION = 9
+MAP_VERSION = 10
 StartKind = Literal["zone_1", "zone_2", "custom"]
 # 仅用于旧调用方的类型兼容；v7 的持久化语义由 steps 决定。
 
@@ -76,7 +76,25 @@ class BezierPathSegment:
     name: str = ""
 
 
-MotionStep = Union[Waypoint, RotateInPlace, ContinuousPathSegment, BezierPathSegment]
+@dataclass
+class StepTurnNode:
+    """垫步路径的用户控制点；编译产生的辅助点不写入方案。"""
+
+    x_mm: float
+    y_mm: float
+    name: str = ""
+
+
+@dataclass
+class StepTurnPathSegment:
+    """由垫步编译器展开为连续路径的折线路径。"""
+
+    route_points: list[StepTurnNode] = field(default_factory=list)
+    step_distance_mm: float = 60.0
+    name: str = ""
+
+
+MotionStep = Union[Waypoint, RotateInPlace, ContinuousPathSegment, BezierPathSegment, StepTurnPathSegment]
 
 
 @dataclass
@@ -118,6 +136,13 @@ class Plan:
                 serialized_steps.append({"type": "continuous_path", "name": step.name, "points": [asdict(point) for point in step.points]})
             elif isinstance(step, BezierPathSegment):
                 serialized_steps.append({"type": "bezier_path", **asdict(step)})
+            elif isinstance(step, StepTurnPathSegment):
+                serialized_steps.append({
+                    "type": "step_turn_path",
+                    "name": step.name,
+                    "step_distance_mm": step.step_distance_mm,
+                    "route_points": [asdict(point) for point in step.route_points],
+                })
             else:
                 raise ValueError("方案包含不支持的步骤类型")
         return {
@@ -135,8 +160,8 @@ class Plan:
         if not isinstance(value, dict):
             raise ValueError("方案 JSON 格式无效")
         version = value.get("map_version")
-        if version not in (7, 8, MAP_VERSION):
-            raise ValueError("仅支持 map_version 7、8 或 9 的流程方案")
+        if version not in (7, 8, 9, MAP_VERSION):
+            raise ValueError("仅支持 map_version 7、8 或 9（以及当前版本 10）的流程方案")
         allowed_keys = {"map_version", "name", "created_at", "updated_at", "start", "steps", "layout"}
         if set(value) != allowed_keys:
             raise ValueError("方案 JSON 格式无效")
@@ -164,13 +189,19 @@ class Plan:
                     if version in (7, 8):
                         for point in path_points: point.x_mm, point.y_mm = point.y_mm, point.x_mm
                     steps.append(ContinuousPathSegment(points=path_points, **fields))
-                elif step_type == "bezier_path" and version in (8, MAP_VERSION):
+                elif step_type == "bezier_path" and version in (8, 9, MAP_VERSION):
                     step = BezierPathSegment(**fields)
                     if version == 8:
                         step.control_1_x_mm, step.control_1_y_mm = step.control_1_y_mm, step.control_1_x_mm
                         step.control_2_x_mm, step.control_2_y_mm = step.control_2_y_mm, step.control_2_x_mm
                         step.end_x_mm, step.end_y_mm = step.end_y_mm, step.end_x_mm
                     steps.append(step)
+                elif step_type == "step_turn_path" and version == MAP_VERSION:
+                    route_points = fields.pop("route_points", [])
+                    if not isinstance(route_points, list) or not all(isinstance(point, dict) for point in route_points):
+                        raise ValueError
+                    steps.append(StepTurnPathSegment(
+                        route_points=[StepTurnNode(**point) for point in route_points], **fields))
                 else: raise ValueError
             obstacles = layout.get("obstacles", [])
             if not isinstance(obstacles, list) or not all(isinstance(item, dict) for item in obstacles): raise ValueError

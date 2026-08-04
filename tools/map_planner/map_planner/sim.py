@@ -8,6 +8,7 @@ import math
 from .geometry import world_to_paper, wrap_deg
 from .bezier import generate_bezier_path_points
 from .models import BezierPathSegment, CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, MotionStep, Plan, Pose, RotateInPlace, Waypoint
+from .path_materializer import materialize_plan
 
 
 POSITION_TOLERANCE_MM = 25.0
@@ -186,6 +187,7 @@ class Simulation:
 
 def build_plan_timeline(plan: Plan) -> list[SimulationFrame]:
     """按流程顺序拼接停点、转向和连续路径的离线播放帧。"""
+    plan = materialize_plan(plan)
     frames: list[SimulationFrame] = []
     current = Pose()
     elapsed_s = 0.0

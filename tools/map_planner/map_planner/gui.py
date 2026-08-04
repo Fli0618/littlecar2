@@ -20,7 +20,8 @@ from .geometry import (StartFrame, paper_heading_to_world_yaw, paper_to_world, p
 from .codegen_c import CodeGenerationError, validate_plan_for_blocking_codegen
 from .codegen_dialog import CodeGenerationDialog
 from .bezier import bezier_tangent_yaw, generate_bezier_path_points
-from .models import BezierPathSegment, CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, Obstacle, PathPosePoint, Plan, Pose, RotateInPlace, Waypoint
+from .models import BezierPathSegment, CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, Obstacle, PathPosePoint, Plan, Pose, RotateInPlace, StepTurnNode, StepTurnPathSegment, Waypoint
+from .step_turn import StepTurnCompiler
 from .sim import SimulationFrame, build_plan_timeline
 from .sweep import SweepGeometry, build_continuous_segment_sweep, build_goto_sweep, build_rotation_sweep, car_polygon
 from .storage import list_plans, load_plan, rename_plan, save_plan
@@ -252,6 +253,8 @@ class MapEditorWidget(QWidget):
             self.bezier_draft: BezierPathSegment | None = None
             self.bezier_draft_start_yaw = 0.0
             self._bezier_preview_cache_key = None; self._bezier_preview_points = None
+            self.step_turn_draft: StepTurnPathSegment | None = None
+            self.step_turn_edit_index: int | None = None
             self.timeline: list[SimulationFrame] = []; self.timeline_position = 0; self.current_frame = None; self.actual_trace = []
             self._layout_slider_before: Plan | None = None; self._layout_slider_changed = False
             self._last_plan_signature = None
@@ -272,7 +275,7 @@ class MapEditorWidget(QWidget):
             self._runtime_trace_item = None
             self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
             self.view.clicked.connect(self.on_map_click); self.view.hovered.connect(self.update_preview); self.view.released.connect(self.on_map_release); self.view.preview_rotated.connect(self.rotate_preview_clockwise); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
-            self._build(); self._build_layout_sliders(); self.view.view_changed.connect(self.position_layout_sliders); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_selected_step); QShortcut(QKeySequence(Qt.Key.Key_Return), self, activated=self.confirm_bezier_draft); QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.cancel_bezier_draft)
+            self._build(); self._build_layout_sliders(); self.view.view_changed.connect(self.position_layout_sliders); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_selected_step); QShortcut(QKeySequence(Qt.Key.Key_Return), self, activated=self.confirm_draft); QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.cancel_draft); QShortcut(QKeySequence(Qt.Key.Key_Backspace), self, activated=self.remove_last_step_turn_node)
             self.refresh_mode_ui(); self.redraw(); self.refresh_plans(); QTimer.singleShot(0,self.fit_map); QShortcut(QKeySequence(Qt.Key.Key_Home),self,activated=self.fit_map)
 
     @property
@@ -308,6 +311,8 @@ class MapEditorWidget(QWidget):
                     step.yaw_mode,
                     step.sample_spacing_mm,
                 )
+            if isinstance(step, StepTurnPathSegment):
+                return list(StepTurnCompiler.generate(self._step_end_pose(self.active_index), step))
             raise ValueError("当前步骤不是可上传的路径")
 
     def set_plan(self, plan: Plan, *, calibrated: bool = True) -> None:
@@ -474,6 +479,9 @@ class MapEditorWidget(QWidget):
             action_row=QHBoxLayout(); self.add_goto_button=QPushButton("新增点到点"); self.append_rotation_button=QPushButton("新增原地转向"); self.add_continuous_button=QPushButton("新增连续段"); self.add_bezier_button=QPushButton("新增曲线路径")
             self.add_goto_button.clicked.connect(self.begin_goto_add); self.append_rotation_button.clicked.connect(self.append_rotation); self.add_continuous_button.clicked.connect(self.add_continuous_segment); self.add_bezier_button.clicked.connect(self.begin_bezier_add)
             action_row.addWidget(self.add_goto_button); action_row.addWidget(self.append_rotation_button); action_row.addWidget(self.add_continuous_button); action_row.addWidget(self.add_bezier_button); box.addLayout(action_row)
+            step_turn_row=QHBoxLayout(); self.add_step_turn_button=QPushButton("新增垫步路径"); self.continue_step_turn_button=QPushButton("继续编辑垫步")
+            self.add_step_turn_button.clicked.connect(self.begin_step_turn_add); self.continue_step_turn_button.clicked.connect(self.continue_step_turn_edit)
+            step_turn_row.addWidget(self.add_step_turn_button); step_turn_row.addWidget(self.continue_step_turn_button); box.addLayout(step_turn_row)
             bezier_row=QHBoxLayout(); self.confirm_bezier_button=QPushButton("确认曲线"); self.cancel_bezier_button=QPushButton("取消曲线")
             self.confirm_bezier_button.clicked.connect(self.confirm_bezier_draft); self.cancel_bezier_button.clicked.connect(self.cancel_bezier_draft)
             bezier_row.addWidget(self.confirm_bezier_button); bezier_row.addWidget(self.cancel_bezier_button); box.addLayout(bezier_row)
@@ -505,6 +513,21 @@ class MapEditorWidget(QWidget):
             bezier_form.addRow("航向模式", self.bezier_yaw_mode); bezier_form.addRow(self.bezier_start_yaw_label, self.bezier_start_yaw); bezier_form.addRow(self.bezier_end_yaw_label, self.bezier_end_yaw)
             self.update_bezier_button = QPushButton("应用曲线航向"); self.update_bezier_button.clicked.connect(self.apply_bezier_heading); bezier_form.addRow(self.update_bezier_button)
             bezier_box.addLayout(bezier_form); box.addWidget(self.bezier_panel); self.bezier_panel.setVisible(False)
+            self.step_turn_panel = QWidget(); step_turn_box = QVBoxLayout(self.step_turn_panel); step_turn_box.setContentsMargins(0, 0, 0, 0)
+            step_turn_box.addWidget(QLabel("垫步路径属性")); step_turn_form = QFormLayout()
+            self.step_turn_distance = spin(60, 1, 1000, 5)
+            self.update_step_turn_button = QPushButton("应用垫步属性"); self.update_step_turn_button.clicked.connect(self.apply_step_turn_properties)
+            step_turn_form.addRow("垫步距离 (mm)", self.step_turn_distance); step_turn_form.addRow(self.update_step_turn_button)
+            step_turn_box.addLayout(step_turn_form); self.step_turn_hint = QLabel(); self.step_turn_hint.setWordWrap(True); step_turn_box.addWidget(self.step_turn_hint)
+            step_turn_actions = QHBoxLayout()
+            self.confirm_step_turn_button = QPushButton("确认垫步路径")
+            self.cancel_step_turn_button = QPushButton("取消垫步编辑")
+            self.confirm_step_turn_button.clicked.connect(self.confirm_step_turn_draft)
+            self.cancel_step_turn_button.clicked.connect(self.cancel_step_turn_draft)
+            step_turn_actions.addWidget(self.confirm_step_turn_button)
+            step_turn_actions.addWidget(self.cancel_step_turn_button)
+            step_turn_box.addLayout(step_turn_actions)
+            box.addWidget(self.step_turn_panel); self.step_turn_panel.setVisible(False)
             box.addWidget(QLabel("仿真")); simrow=QHBoxLayout()
             for label, fn in (("播放",self.play),("暂停",self.pause),("重置",self.reset_simulation)):
                 button=QPushButton(label); button.clicked.connect(fn); simrow.addWidget(button)
@@ -985,6 +1008,11 @@ class MapEditorWidget(QWidget):
                         Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg), 1.0)
                         if step.yaw_mode == "tangent" else step.end_yaw_deg)
                     pose = Pose(step.end_x_mm, step.end_y_mm, end_yaw)
+                elif isinstance(step, StepTurnPathSegment):
+                    points = StepTurnCompiler.generate(pose, step)
+                    if points:
+                        last = points[-1]
+                        pose = Pose(last.x_mm, last.y_mm, last.yaw_deg)
             return pose
 
     def _step_anchor(self, index):
@@ -1017,6 +1045,8 @@ class MapEditorWidget(QWidget):
                     text = f"{index + 1}. 原地转向 {step.yaw_deg:.0f} deg"
                 elif isinstance(step, ContinuousPathSegment):
                     text = f"{index + 1}. 连续路径段 {step.name} ({max(0, len(step.points) - 1)} 点)"
+                elif isinstance(step, StepTurnPathSegment):
+                    text = f"{index + 1}. 垫步路径 {step.name} ({len(step.route_points)} 节点)"
                 else:
                     text = f"{index + 1}. 曲线路径 {step.name}"
                 self.waypoint_list.addItem(text)
@@ -1041,6 +1071,12 @@ class MapEditorWidget(QWidget):
             if step is None:
                 return
             continuous, rotating = isinstance(step, ContinuousPathSegment), isinstance(step, RotateInPlace)
+            if isinstance(step, StepTurnPathSegment):
+                self.continuous_panel.setVisible(False); self.bezier_panel.setVisible(False); self.step_turn_panel.setVisible(True)
+                self.step_turn_distance.setValue(step.step_distance_mm); self._refresh_step_turn_hint()
+                for widget in [*self.goto_form_widgets, self.yaw, self.node_wmax, self.timeout, self.update_action_button]:
+                    widget.setVisible(False)
+                return
             if isinstance(step, BezierPathSegment):
                 self.continuous_panel.setVisible(False)
                 self._show_bezier_editor(step, self._step_end_pose(index))
@@ -1050,6 +1086,7 @@ class MapEditorWidget(QWidget):
                     widget.setVisible(False)
                 return
             self.bezier_panel.setVisible(False)
+            self.step_turn_panel.setVisible(False)
             self.continuous_panel.setVisible(continuous)
             for widget in self.goto_form_widgets:
                 widget.setVisible(not continuous and not rotating)
@@ -1234,6 +1271,10 @@ class MapEditorWidget(QWidget):
                         self._bezier_points(previous, step)
                     except ValueError:
                         invalid.append(index)
+                elif isinstance(step, StepTurnPathSegment):
+                    result = StepTurnCompiler.analyze(previous, step)
+                    if len(step.route_points) < 2 or result.has_errors:
+                        invalid.append(index)
             return invalid
 
     def _bezier_points(self, start, step):
@@ -1293,6 +1334,12 @@ class MapEditorWidget(QWidget):
                     if index == self.active_index:
                         self._draw_bezier_controls(previous, step, points, False)
                     previous = Pose(points[-1].x_mm, points[-1].y_mm, points[-1].yaw_deg); continue
+                if isinstance(step, StepTurnPathSegment):
+                    self._draw_step_turn_path(previous, step, index == self.active_index, "step_turn")
+                    result = StepTurnCompiler.analyze(previous, step)
+                    if not result.has_errors and result.points:
+                        last = result.points[-1]; previous = Pose(last.x_mm, last.y_mm, last.yaw_deg)
+                    continue
                 for point_index, point in enumerate(step.points):
                     paper = self.paper_of(point); current = QPointF(paper.x_mm, paper.y_mm)
                     if point_index:
@@ -1302,6 +1349,33 @@ class MapEditorWidget(QWidget):
                     self._draw_direction_arrow(current.x(), current.y(), point.yaw_deg, color, "continuous_direction")
                 if step.points:
                     last = step.points[-1]; previous = Pose(last.x_mm, last.y_mm, last.yaw_deg)
+
+    def _draw_step_turn_path(self, start, step, active, marker):
+            """下层为编译后的垫步轨迹，上层为用户节点；所有辅助点均不可交互。"""
+            result = StepTurnCompiler.analyze(start, step)
+            color = QColor("#1565c0") if active else QColor("#00897b")
+            if not result.has_errors:
+                for first, second in zip(result.points, result.points[1:]):
+                    a, b = self.paper_of(first), self.paper_of(second)
+                    item = self.scene.addLine(a.x_mm, a.y_mm, b.x_mm, b.y_mm, QPen(QColor(color.red(), color.green(), color.blue(), 125), 4))
+                    item.setData(0, f"{marker}_materialized"); item.setZValue(7); item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                for point in result.points:
+                    paper = self.paper_of(point)
+                    item = self.scene.addEllipse(paper.x_mm - 4, paper.y_mm - 4, 8, 8, QPen(Qt.PenStyle.NoPen), color)
+                    item.setData(0, f"{marker}_auxiliary"); item.setZValue(8); item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            raw = [start, *step.route_points]
+            for first, second in zip(raw, raw[1:]):
+                a = self.paper_of(Pose(first.x_mm, first.y_mm, getattr(first, "yaw_deg", 0.0)))
+                b = self.paper_of(Pose(second.x_mm, second.y_mm, getattr(second, "yaw_deg", 0.0)))
+                item = self.scene.addLine(a.x_mm, a.y_mm, b.x_mm, b.y_mm, QPen(QColor("#ef6c00"), 2, Qt.PenStyle.DashLine))
+                item.setData(0, f"{marker}_route"); item.setZValue(12); item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            for point_index, point in enumerate(step.route_points):
+                paper = self.paper_of(Pose(point.x_mm, point.y_mm))
+                item = self.scene.addEllipse(paper.x_mm - 10, paper.y_mm - 10, 20, 20, QPen(QColor("#e65100"), 2), QColor("#fff3e0"))
+                item.setData(0, f"{marker}_node"); item.setZValue(13); item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                label = "End" if point_index == len(step.route_points) - 1 else str(point_index + 1)
+                text = self.scene.addText(label, QFont("Microsoft YaHei", 10)); text.setDefaultTextColor(QColor("#e65100")); text.setPos(paper.x_mm + 12, paper.y_mm - 22)
+                text.setData(0, f"{marker}_label"); text.setZValue(14); text.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
     def _draw_bezier_controls(self, start, step, points, draft):
             start_p = self.paper_of(start); end_p = self.paper_of(Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg))
@@ -1386,11 +1460,13 @@ class MapEditorWidget(QWidget):
             heading_ready = self.calibration_pending and self.calibration_stage == "heading"
             self.confirm_start_button.setVisible(heading_ready); self.confirm_start_button.setEnabled(heading_ready)
             enabled = not self.calibration_pending
-            for widget in (self.add_button, self.add_goto_button, self.add_continuous_button, self.add_bezier_button, self.append_rotation_button, self.move_up_button, self.move_down_button, self.delete_button, self.obstacle_button, self.save_button, self.save_as_button, self.play_button):
+            for widget in (self.add_button, self.add_goto_button, self.add_continuous_button, self.add_bezier_button, self.add_step_turn_button, self.continue_step_turn_button, self.append_rotation_button, self.move_up_button, self.move_down_button, self.delete_button, self.obstacle_button, self.save_button, self.save_as_button, self.play_button):
                 widget.setEnabled(enabled)
             self.codegen_button.setEnabled(enabled and bool(self.plan.steps))
             self.confirm_bezier_button.setEnabled(enabled and self.bezier_draft is not None)
             self.cancel_bezier_button.setEnabled(self.bezier_draft is not None)
+            self.confirm_step_turn_button.setEnabled(enabled and self.step_turn_draft is not None)
+            self.cancel_step_turn_button.setEnabled(self.step_turn_draft is not None)
 
     def undo(self):
             if not self.undo_stack:
@@ -1409,6 +1485,14 @@ class MapEditorWidget(QWidget):
             self._sync_continuous_entries(); self._invalidate_timeline(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
     def draw_preview(self):
+            if self.pending_action == "step_turn" and self.step_turn_draft is not None:
+                preview = copy.deepcopy(self.step_turn_draft)
+                if self.preview_paper is not None:
+                    pose = paper_to_world(self.preview_paper.x(), self.preview_paper.y(), self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                    preview.route_points.append(StepTurnNode(pose.x_mm, pose.y_mm))
+                self._draw_step_turn_path(self._step_turn_start_pose(), preview, True, "step_turn_preview")
+                self._refresh_step_turn_hint()
+                return
             if self.preview_paper is None or self.preview_yaw_deg is None:
                 return
             if self.pending_action == "bezier" or (self.pending_action == "bezier_edit" and self.bezier_draft is not None):
@@ -1458,6 +1542,110 @@ class MapEditorWidget(QWidget):
             self._discard_bezier_draft(); self.pending_action = "goto"
             self.set_mode("add")
             self.status.setText("新增点到点：在地图上点击目标位置。")
+
+    def begin_step_turn_add(self):
+            if self.calibration_pending:
+                return
+            self._discard_bezier_draft()
+            self.step_turn_draft = StepTurnPathSegment()
+            self.step_turn_edit_index = None
+            self.step_turn_distance.setValue(self.step_turn_draft.step_distance_mm)
+            self.pending_action = "step_turn"; self.set_mode("add")
+            self.step_turn_panel.setVisible(True)
+            self.update_calibration_ui()
+            self.status.setText("新增垫步路径：依次点击路径节点，Enter 确认，Esc 取消，Backspace 删除最后节点。")
+
+    def continue_step_turn_edit(self):
+            step = self._selected_step()
+            if not isinstance(step, StepTurnPathSegment) or self.calibration_pending:
+                return
+            self._discard_bezier_draft()
+            self.step_turn_draft = copy.deepcopy(step)
+            self.step_turn_edit_index = self.active_index
+            self.step_turn_distance.setValue(step.step_distance_mm)
+            self.pending_action = "step_turn"; self.set_mode("add")
+            self.step_turn_panel.setVisible(True)
+            self.update_calibration_ui()
+            self.status.setText("继续编辑垫步路径：点击追加节点，Enter 保存，Esc 恢复原路径。")
+
+    def _step_turn_start_pose(self) -> Pose:
+            index = len(self.plan.steps) if self.step_turn_edit_index is None else self.step_turn_edit_index
+            return self._step_end_pose(index)
+
+    def _step_turn_analysis(self):
+            if self.step_turn_draft is None:
+                return None
+            return StepTurnCompiler.analyze(self._step_turn_start_pose(), self.step_turn_draft)
+
+    def _refresh_step_turn_hint(self) -> None:
+            if not hasattr(self, "step_turn_hint"):
+                return
+            step = self.step_turn_draft or self._selected_step()
+            if not isinstance(step, StepTurnPathSegment):
+                self.step_turn_hint.clear(); return
+            result = StepTurnCompiler.analyze(self._step_turn_start_pose() if self.step_turn_draft else self._step_end_pose(self.active_index), step)
+            if result.has_errors:
+                self.step_turn_hint.setText("；".join(item.message for item in result.diagnostics))
+            else:
+                self.step_turn_hint.setText(f"{len(step.route_points)} 个节点，展开为 {len(result.points)} 个路径点")
+
+    def apply_step_turn_properties(self):
+            target = self.step_turn_draft or self._selected_step()
+            if not isinstance(target, StepTurnPathSegment):
+                return
+            if self.step_turn_draft is None:
+                self.push_undo()
+            target.step_distance_mm = self.step_turn_distance.value()
+            self._refresh_step_turn_hint(); self.redraw()
+            if self.step_turn_draft is None:
+                self.refresh_waypoints(); self.rebuild_timeline_after_edit()
+
+    def remove_last_step_turn_node(self):
+            if self.pending_action != "step_turn" or self.step_turn_draft is None:
+                return
+            if self.step_turn_draft.route_points:
+                self.step_turn_draft.route_points.pop()
+                self._refresh_step_turn_hint(); self.redraw()
+
+    def confirm_step_turn_draft(self):
+            draft = self.step_turn_draft
+            if draft is None:
+                return
+            if len(draft.route_points) < 2:
+                self.status.setText("垫步路径至少需要两个节点后才能确认。")
+                return
+            result = self._step_turn_analysis()
+            if result is None or result.has_errors:
+                self.status.setText("垫步路径无效：" + "；".join(item.message for item in result.diagnostics))
+                return
+            self.push_undo()
+            if self.step_turn_edit_index is None:
+                draft.name = f"垫步路径 {len(self.plan.steps) + 1}"
+                self.plan.steps.append(draft); self.active_index = len(self.plan.steps) - 1
+            else:
+                self.plan.steps[self.step_turn_edit_index] = draft; self.active_index = self.step_turn_edit_index
+            self.active_point_index = -1; self.step_turn_draft = None; self.step_turn_edit_index = None
+            self.pending_action = None; self.set_mode("select"); self.clear_preview(False)
+            self.update_calibration_ui(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+
+    def cancel_step_turn_draft(self):
+            if self.step_turn_draft is None:
+                return
+            self.step_turn_draft = None; self.step_turn_edit_index = None; self.pending_action = None
+            self.set_mode("select"); self.update_calibration_ui(); self.clear_preview(False); self.refresh_waypoints(); self.redraw()
+            self.status.setText("已取消垫步路径编辑。")
+
+    def confirm_draft(self):
+            if self.pending_action == "step_turn":
+                self.confirm_step_turn_draft()
+            else:
+                self.confirm_bezier_draft()
+
+    def cancel_draft(self):
+            if self.pending_action == "step_turn":
+                self.cancel_step_turn_draft()
+            else:
+                self.cancel_bezier_draft()
 
     def begin_bezier_add(self):
             if self.calibration_pending:
@@ -1644,6 +1832,12 @@ class MapEditorWidget(QWidget):
                 self.bezier_panel.setVisible(False)
 
     def _current_preview_anchor(self):
+            if self.pending_action == "step_turn" and self.step_turn_draft is not None:
+                if self.step_turn_draft.route_points:
+                    point = self.step_turn_draft.route_points[-1]; paper = self.paper_of(Pose(point.x_mm, point.y_mm))
+                    return QPointF(paper.x_mm, paper.y_mm), self._step_turn_start_pose().yaw_deg, ("step_turn", len(self.step_turn_draft.route_points), point.x_mm, point.y_mm)
+                anchor = self._step_turn_start_pose(); paper = self.paper_of(anchor)
+                return QPointF(paper.x_mm, paper.y_mm), anchor.yaw_deg, ("step_turn", 0, anchor.x_mm, anchor.y_mm)
             step = self._selected_step()
             if isinstance(step, ContinuousPathSegment) and step.points and self.pending_action != "goto":
                 point = step.points[-1]; paper = self.paper_of(point)
@@ -1683,6 +1877,11 @@ class MapEditorWidget(QWidget):
     def confirm_preview(self, x, y, shift=False):
             self.update_preview(x, y, shift)
             if self.preview_paper is None or self.preview_yaw_deg is None:
+                return
+            if self.pending_action == "step_turn" and self.step_turn_draft is not None:
+                pose = paper_to_world(self.preview_paper.x(), self.preview_paper.y(), self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                self.step_turn_draft.route_points.append(StepTurnNode(pose.x_mm, pose.y_mm))
+                self.clear_preview(False); self._refresh_step_turn_hint(); self.redraw()
                 return
             if self.pending_action == "bezier":
                 start = self._step_end_pose(len(self.plan.steps))

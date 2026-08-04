@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 from map_planner.gui import MapEditorWidget
 from map_planner.geometry import world_to_paper
-from map_planner.models import BezierPathSegment, Plan, Pose, Waypoint
+from map_planner.models import BezierPathSegment, Plan, Pose, StepTurnPathSegment, Waypoint
 
 
 class MapEditorWidgetTests(unittest.TestCase):
@@ -209,5 +209,33 @@ class MapEditorWidgetTests(unittest.TestCase):
             invalid = next(item for item in widget.scene.items()
                            if item.data(0) == "start_pose_preview")
             self.assertEqual(invalid.pen().color().name(), "#c62828")
+        finally:
+            widget.close()
+
+    def test_step_turn_draft_confirm_cancel_continue_and_path_preview(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget.begin_step_turn_add()
+            widget.on_map_release(2100, 200)
+            widget.on_map_release(1900, 400)
+            self.assertEqual(len(widget.step_turn_draft.route_points), 2)
+            self.assertTrue(widget.confirm_step_turn_button.isEnabled())
+            self.assertIn("step_turn_preview_materialized", [item.data(0) for item in widget.scene.items()])
+
+            widget.confirm_step_turn_button.click()
+            self.assertIsInstance(widget.plan.steps[0], StepTurnPathSegment)
+            self.assertGreaterEqual(len(widget.selected_step_path_points()), 2)
+
+            original_count = len(widget.plan.steps[0].route_points)
+            widget.continue_step_turn_edit()
+            widget.on_map_release(1700, 600)
+            widget.cancel_draft()
+            self.assertEqual(len(widget.plan.steps[0].route_points), original_count)
+
+            widget.continue_step_turn_edit()
+            widget.on_map_release(1700, 600)
+            widget.remove_last_step_turn_node()
+            self.assertEqual(len(widget.step_turn_draft.route_points), original_count)
         finally:
             widget.close()

@@ -1,6 +1,7 @@
 import unittest
 
-from map_planner.models import ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace, Waypoint
+from map_planner.models import (ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace,
+                                StepTurnNode, StepTurnPathSegment, Waypoint)
 from map_planner.sim import (
     ANGULAR_ACCELERATION_DEG_S2,
     DT_S,
@@ -9,7 +10,8 @@ from map_planner.sim import (
     build_plan_timeline,
 )
 from map_planner.models import Pose
-from map_planner.sweep import MAX_SAMPLE_DISTANCE_MM, MAX_SAMPLE_YAW_DEG, build_goto_sweep, build_rotation_sweep
+from map_planner.sweep import (MAX_SAMPLE_DISTANCE_MM, MAX_SAMPLE_YAW_DEG,
+                               build_goto_sweep, build_path_segment_sweep, build_rotation_sweep)
 
 
 class SimulationTests(unittest.TestCase):
@@ -82,3 +84,11 @@ class SimulationTests(unittest.TestCase):
         self.assertTrue(frames)
         self.assertEqual(frames[-1].actual, Pose(200, 0, 90))
         self.assertFalse(any(frame.stopped for frame in frames[:-1]))
+
+    def test_step_turn_uses_materialized_path_for_timeline_and_sweep(self):
+        step = StepTurnPathSegment([StepTurnNode(200, 0), StepTurnNode(200, 200)], 50)
+        frames = build_plan_timeline(Plan(steps=[step]))
+        sweep = build_path_segment_sweep(Pose(), step)
+
+        self.assertEqual(frames[-1].actual, Pose(200, 200, 0))
+        self.assertEqual(sweep.poses[-1], Pose(200, 200, 0))

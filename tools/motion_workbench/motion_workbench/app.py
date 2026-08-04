@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QF
                                QSplitter, QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from map_planner.gui import MapEditorWidget
-from map_planner.models import BezierPathSegment, ContinuousPathSegment, Pose
+from map_planner.models import BezierPathSegment, ContinuousPathSegment, Pose, StepTurnPathSegment
 from pid_tuner.gui.plots import TelemetryPlots
 from pid_tuner.gui.widgets import ConnectionPanel
 from pid_tuner.models import (GotoStrategySnapshot, MotionGoal, PathConfigState, PathControlConfig,
@@ -490,6 +490,12 @@ class MotionWorkbenchWindow(QMainWindow):
                 points = self.map_editor.selected_step_path_points()
             except (TypeError, ValueError) as error:
                 self.path_panel.status.setText(f"贝塞尔路径无效：{error}")
+                return
+        elif isinstance(step, StepTurnPathSegment):
+            try:
+                points = self.controller.selected_path_points()
+            except (TypeError, ValueError) as error:
+                self.path_panel.status.setText(f"垫步路径无效：{error}")
                 return
         else:
             self.path_panel.status.setText("当前步骤不是可上传的连续路径")

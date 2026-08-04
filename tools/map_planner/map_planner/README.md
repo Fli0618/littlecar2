@@ -12,6 +12,8 @@
 
 `models.py` 定义方案、停点动作、原地转向和连续路径段；`geometry.py` 提供坐标变换，`sim.py` 提供停点近似仿真和连续路径几何播放，`storage.py` 负责 JSON 方案存储，`gui.py` 负责 PySide6 地图编辑界面，`codegen_c.py` 按步骤顺序生成 STM32 代码。
 
+`step_turn.py` 负责将 `StepTurnPathSegment` 的用户折线编译为执行用的 A/B 点，原始拐点 C 不进入执行路径；`analyze_step_turn_path()` 和 `generate_step_turn_path_points()` 是公共编译入口。`path_materializer.py` 将连续、贝塞尔和垫步路径统一实体化，供仿真、上传和代码生成复用，不修改原始方案。
+
 地图编辑仅操作 `Plan.steps`。选择模式支持框选、Ctrl 追加选择和 Ctrl+A；批量平移仅作用于 `Waypoint` 步骤，批量删除按步骤索引从后向前执行，并同步后续连续段的入口点。
 
 ## 代码生成模式
