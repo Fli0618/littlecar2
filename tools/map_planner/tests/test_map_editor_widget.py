@@ -220,9 +220,10 @@ class MapEditorWidgetTests(unittest.TestCase):
             widget.on_map_release(2100, 200)
             widget.on_map_release(1900, 400)
             self.assertEqual(len(widget.step_turn_draft.route_points), 2)
+            self.assertTrue(widget.confirm_step_turn_button.isEnabled())
             self.assertIn("step_turn_preview_materialized", [item.data(0) for item in widget.scene.items()])
 
-            widget.confirm_draft()
+            widget.confirm_step_turn_button.click()
             self.assertIsInstance(widget.plan.steps[0], StepTurnPathSegment)
             self.assertGreaterEqual(len(widget.selected_step_path_points()), 2)
 

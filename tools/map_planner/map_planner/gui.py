@@ -519,6 +519,14 @@ class MapEditorWidget(QWidget):
             self.update_step_turn_button = QPushButton("应用垫步属性"); self.update_step_turn_button.clicked.connect(self.apply_step_turn_properties)
             step_turn_form.addRow("垫步距离 (mm)", self.step_turn_distance); step_turn_form.addRow(self.update_step_turn_button)
             step_turn_box.addLayout(step_turn_form); self.step_turn_hint = QLabel(); self.step_turn_hint.setWordWrap(True); step_turn_box.addWidget(self.step_turn_hint)
+            step_turn_actions = QHBoxLayout()
+            self.confirm_step_turn_button = QPushButton("确认垫步路径")
+            self.cancel_step_turn_button = QPushButton("取消垫步编辑")
+            self.confirm_step_turn_button.clicked.connect(self.confirm_step_turn_draft)
+            self.cancel_step_turn_button.clicked.connect(self.cancel_step_turn_draft)
+            step_turn_actions.addWidget(self.confirm_step_turn_button)
+            step_turn_actions.addWidget(self.cancel_step_turn_button)
+            step_turn_box.addLayout(step_turn_actions)
             box.addWidget(self.step_turn_panel); self.step_turn_panel.setVisible(False)
             box.addWidget(QLabel("仿真")); simrow=QHBoxLayout()
             for label, fn in (("播放",self.play),("暂停",self.pause),("重置",self.reset_simulation)):
@@ -1457,6 +1465,8 @@ class MapEditorWidget(QWidget):
             self.codegen_button.setEnabled(enabled and bool(self.plan.steps))
             self.confirm_bezier_button.setEnabled(enabled and self.bezier_draft is not None)
             self.cancel_bezier_button.setEnabled(self.bezier_draft is not None)
+            self.confirm_step_turn_button.setEnabled(enabled and self.step_turn_draft is not None)
+            self.cancel_step_turn_button.setEnabled(self.step_turn_draft is not None)
 
     def undo(self):
             if not self.undo_stack:
@@ -1542,6 +1552,7 @@ class MapEditorWidget(QWidget):
             self.step_turn_distance.setValue(self.step_turn_draft.step_distance_mm)
             self.pending_action = "step_turn"; self.set_mode("add")
             self.step_turn_panel.setVisible(True)
+            self.update_calibration_ui()
             self.status.setText("新增垫步路径：依次点击路径节点，Enter 确认，Esc 取消，Backspace 删除最后节点。")
 
     def continue_step_turn_edit(self):
@@ -1554,6 +1565,7 @@ class MapEditorWidget(QWidget):
             self.step_turn_distance.setValue(step.step_distance_mm)
             self.pending_action = "step_turn"; self.set_mode("add")
             self.step_turn_panel.setVisible(True)
+            self.update_calibration_ui()
             self.status.setText("继续编辑垫步路径：点击追加节点，Enter 保存，Esc 恢复原路径。")
 
     def _step_turn_start_pose(self) -> Pose:
@@ -1614,13 +1626,13 @@ class MapEditorWidget(QWidget):
                 self.plan.steps[self.step_turn_edit_index] = draft; self.active_index = self.step_turn_edit_index
             self.active_point_index = -1; self.step_turn_draft = None; self.step_turn_edit_index = None
             self.pending_action = None; self.set_mode("select"); self.clear_preview(False)
-            self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
+            self.update_calibration_ui(); self.refresh_waypoints(); self.redraw(); self.rebuild_timeline_after_edit()
 
     def cancel_step_turn_draft(self):
             if self.step_turn_draft is None:
                 return
             self.step_turn_draft = None; self.step_turn_edit_index = None; self.pending_action = None
-            self.set_mode("select"); self.clear_preview(False); self.refresh_waypoints(); self.redraw()
+            self.set_mode("select"); self.update_calibration_ui(); self.clear_preview(False); self.refresh_waypoints(); self.redraw()
             self.status.setText("已取消垫步路径编辑。")
 
     def confirm_draft(self):
