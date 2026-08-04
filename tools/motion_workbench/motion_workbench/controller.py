@@ -73,7 +73,10 @@ class MotionWorkbenchController(QObject):
         self.session.telemetry.connect(self.on_telemetry)
         self.session.motion_changed.connect(self._on_motion_changed)
         self.session.status.connect(self.status_changed)
-        self.session.operation_failed.connect(self._on_failure)
+        if hasattr(self.session, "operation_failed"):
+            self.session.operation_failed.connect(self._on_failure)
+        else:
+            self.session.failure.connect(self._on_failure)
         if hasattr(self.session, "path_telemetry"):
             self.session.path_telemetry.connect(self.on_path_telemetry)
         if hasattr(self.session, "path_committed"):
