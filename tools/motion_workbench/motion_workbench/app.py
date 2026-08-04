@@ -15,13 +15,12 @@ from map_planner.gui import MapEditorWidget
 from map_planner.models import BezierPathSegment, ContinuousPathSegment, Pose, StepTurnPathSegment
 from pid_tuner.gui.plots import TelemetryPlots
 from pid_tuner.gui.widgets import ConnectionPanel
-from pid_tuner.models import (GotoControlConfigState, GotoStrategySnapshot, MotionGoal, PathConfigState,
-                               PathControlConfig, PidConfigState, Telemetry)
+from pid_tuner.models import (GotoStrategySnapshot, MotionGoal, PathConfigState, PathControlConfig,
+                               PidConfigState, Telemetry)
 from pid_tuner.storage import export_motion_config_header
 
 from .control_panel import (
     HEADING_MODE_NONE,
-    GotoControlConfigPanel,
     PointControlPanel,
     WorkbenchPidControlPanel,
     protected_number,
@@ -187,7 +186,6 @@ class MotionWorkbenchWindow(QMainWindow):
         self._active_pid_state: PidConfigState | None = None
         self._active_path_state: PathConfigState | None = None
         self._active_goto_strategy: GotoStrategySnapshot | None = None
-        self._active_goto_config_state: GotoControlConfigState | None = None
         self._build()
         self._wire()
         self.refresh_timer = QTimer(self); self.refresh_timer.setInterval(MOTION_WORKBENCH_REFRESH_MS); self.refresh_timer.timeout.connect(self._refresh); self.refresh_timer.start()
@@ -210,7 +208,7 @@ class MotionWorkbenchWindow(QMainWindow):
         self.return_origin_button.setEnabled(False)
         self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton")
         self.export_motion_config = QPushButton("导出固化参数")
-        self.export_motion_config.setToolTip("导出 STM32 当前已生效的 PID、路径、GOTO 速度规划和默认策略")
+        self.export_motion_config.setToolTip("导出 STM32 当前已生效的 PID、路径控制参数和 GOTO 默认策略")
         self.export_motion_config.setEnabled(False)
         for widget in (self.connection, self.pose_status, self.motion_status,
                        self.upload_status, self.heading_status, self.map_start_status,
@@ -227,13 +225,11 @@ class MotionWorkbenchWindow(QMainWindow):
         self.connection_panel = ConnectionPanel()
         self.point_panel = PointControlPanel()
         self.path_panel = PathControlPanel()
-        self.goto_config_panel = GotoControlConfigPanel()
         self.tabs = QTabWidget()
         self.tabs.addTab(self.connection_panel, "连接")
         self.tabs.addTab(self.pid_panel, "PID")
         self.tabs.addTab(self.point_panel, "单点")
         self.tabs.addTab(self.path_panel, "路径")
-        self.tabs.addTab(self.goto_config_panel, "GOTO 规划")
         left_scroll = QScrollArea(); left_scroll.setWidgetResizable(True); left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); left_scroll.setWidget(self.tabs); left_scroll.setMinimumWidth(320)
 
         self.plots = TelemetryPlots()
@@ -303,14 +299,6 @@ class MotionWorkbenchWindow(QMainWindow):
         self.controller.session.path_config_applied.connect(
             lambda state: self.path_panel.set_config(state.revision, state.config))
         self.controller.session.path_config_applied.connect(self._cache_path_state)
-        self.goto_config_panel.read_requested.connect(self.controller.session.read_goto_control_config)
-        self.goto_config_panel.apply_requested.connect(self.controller.session.apply_goto_control_config)
-        self.goto_config_panel.restore_requested.connect(self.controller.session.restore_goto_control_config)
-        self.controller.session.goto_control_config_read.connect(self.goto_config_panel.set_config_state)
-        self.controller.session.goto_control_config_read.connect(self._cache_goto_config_state)
-        self.controller.session.goto_control_config_applied.connect(self.goto_config_panel.set_config_state)
-        self.controller.session.goto_control_config_applied.connect(self._cache_goto_config_state)
-        self.controller.session.connection_changed.connect(self.goto_config_panel.set_connected)
         self.map_editor.plan_changed.connect(self.controller.set_plan)
         self.map_editor.start_frame_changed.connect(lambda _frame: self.controller.invalidate_coordinate_sync())
         self.map_editor.calibration_state_changed.connect(self.controller.set_map_calibrated)
@@ -359,7 +347,6 @@ class MotionWorkbenchWindow(QMainWindow):
         self._active_pid_state = None
         self._active_path_state = None
         self._active_goto_strategy = None
-        self._active_goto_config_state = None
         self._refresh_motion_config_export()
 
     def _cache_pid_state(self, state: PidConfigState) -> None:
@@ -377,18 +364,12 @@ class MotionWorkbenchWindow(QMainWindow):
             self._active_goto_strategy = strategy
             self._refresh_motion_config_export()
 
-    def _cache_goto_config_state(self, state: GotoControlConfigState) -> None:
-        if self.controller.session.connected:
-            self._active_goto_config_state = state
-            self._refresh_motion_config_export()
-
     def _refresh_motion_config_export(self) -> None:
         self.export_motion_config.setEnabled(
             self.controller.session.connected
             and self._active_pid_state is not None
             and self._active_path_state is not None
-            and self._active_goto_strategy is not None
-            and self._active_goto_config_state is not None)
+            and self._active_goto_strategy is not None)
 
     def _export_motion_config(self) -> None:
         if not self.export_motion_config.isEnabled():
@@ -396,11 +377,9 @@ class MotionWorkbenchWindow(QMainWindow):
         assert self._active_pid_state is not None
         assert self._active_path_state is not None
         assert self._active_goto_strategy is not None
-        assert self._active_goto_config_state is not None
         try:
             header = export_motion_config_header(
-                self._active_pid_state, self._active_path_state, self._active_goto_strategy,
-                self._active_goto_config_state)
+                self._active_pid_state, self._active_path_state, self._active_goto_strategy)
         except ValueError as error:
             self.connection.setText(f"导出失败：{error}")
             return

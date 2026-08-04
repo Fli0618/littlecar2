@@ -10,8 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from motion_workbench.app import MotionConfigExportDialog, MotionWorkbenchWindow
-from pid_tuner.models import (GotoControlConfig, GotoControlConfigState, GotoStrategySnapshot,
-                               PathConfigSnapshot, PathConfigState, PidConfig, PidConfigState, Telemetry)
+from pid_tuner.models import (GotoStrategySnapshot, PathConfigSnapshot, PathConfigState, PidConfig,
+                               PidConfigState, Telemetry)
 
 
 class ConnectionPageTests(unittest.TestCase):
@@ -51,10 +51,6 @@ class ConnectionPageTests(unittest.TestCase):
             window._cache_path_state(path)
             self.assertFalse(window.export_motion_config.isEnabled())
             window._cache_goto_strategy(GotoStrategySnapshot(True))
-            self.assertFalse(window.export_motion_config.isEnabled())
-            goto_config = GotoControlConfigState(
-                3, GotoControlConfig(*[float(value) for value in range(1, 22)]))
-            window._cache_goto_config_state(goto_config)
             self.assertTrue(window.export_motion_config.isEnabled())
 
             window.pid_panel.pid[0].setValue(19.0)

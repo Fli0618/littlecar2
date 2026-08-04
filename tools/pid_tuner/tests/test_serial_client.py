@@ -3,11 +3,11 @@ import struct
 import time
 import unittest
 
-from pid_tuner.models import BoardError, GotoControlConfigSnapshot, MotionGoal, PathControlConfig, PidConfig
-from pid_tuner.protocol import (CMD_ACK, CMD_ERROR, CMD_GET_GOTO_CONFIG, CMD_GET_GOTO_STRATEGY, CMD_GOTO_CONFIG,
+from pid_tuner.models import BoardError, MotionGoal, PathControlConfig, PidConfig
+from pid_tuner.protocol import (CMD_ACK, CMD_ERROR, CMD_GET_GOTO_STRATEGY,
                                 CMD_GET_PATH_CONFIG, CMD_GET_PID, CMD_GOTO_STRATEGY,
                                 CMD_PATH_CONFIG, CMD_PID, CMD_RESET_ORIGIN,
-                                CMD_RESTORE_GOTO_CONFIG, CMD_RESTORE_PATH_CONFIG, CMD_SET_GOTO_CONFIG, CMD_SET_GOTO_STRATEGY,
+                                CMD_RESTORE_PATH_CONFIG, CMD_SET_GOTO_STRATEGY,
                                 CMD_SET_PATH_CONFIG, CMD_SET_YAW_SOURCE, CMD_TELEMETRY,
                                 StreamDecoder, encode_frame)
 from pid_tuner.serial_client import SerialClient
@@ -20,10 +20,6 @@ class SerialClientTests(unittest.TestCase):
         0.98, 0.62, 1.42, 0.427, 820.0, 100.0, 800.0, 1000.0,
         600.0, 300.0, 0.05, 60.0, 60.0, 0.15, 120.0, 180.0,
         400.0, 80.0, 60.0, 150.0,
-    )
-    GOTO_CONFIG = GotoControlConfigSnapshot(
-        500.0, 820.0, 800.0, 1000.0, 180.0, 150.0, 300.0, 0.8, 0.2, 180.0,
-        90.0, 180.0, 220.0, 25.0, 20.0, 60.0, 1.2, 0.3, 45.0, 250, 500,
     )
     def test_get_pid_and_close(self) -> None:
         def on_write(raw, _attempt):
@@ -150,27 +146,6 @@ class SerialClientTests(unittest.TestCase):
             self.assertEqual(client.restore_path_config().revision, 6)
         self.assertEqual([item.command for item in captured], [
             CMD_GET_PATH_CONFIG, CMD_SET_PATH_CONFIG, CMD_RESTORE_PATH_CONFIG,
-        ])
-
-    def test_goto_config_get_set_and_restore(self) -> None:
-        captured = []
-
-        def on_write(raw, _attempt):
-            request = StreamDecoder().feed(raw)[0]
-            captured.append(request)
-            if request.command == CMD_GET_GOTO_CONFIG:
-                payload = struct.pack("<I19f2I", 7, *self.GOTO_CONFIG.to_dict().values())
-                return [encode_frame(CMD_GOTO_CONFIG, request.sequence, payload)]
-            revision = 8 if request.command == CMD_SET_GOTO_CONFIG else 9
-            return [encode_frame(CMD_ACK, request.sequence,
-                                 bytes([request.command]) + revision.to_bytes(4, "little"))]
-
-        with SerialClient(FakeTransport(on_write)) as client:
-            self.assertEqual(client.get_goto_control_config().revision, 7)
-            self.assertEqual(client.set_goto_control_config(self.GOTO_CONFIG).revision, 8)
-            self.assertEqual(client.restore_goto_control_config().revision, 9)
-        self.assertEqual([item.command for item in captured], [
-            CMD_GET_GOTO_CONFIG, CMD_SET_GOTO_CONFIG, CMD_RESTORE_GOTO_CONFIG,
         ])
 
     def test_public_requests_return_typed_results_and_raw_request_is_private(self) -> None:

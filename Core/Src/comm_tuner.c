@@ -46,9 +46,6 @@
 #define COMM_TUNER_CMD_GET_PATH_CONFIG ((uint8_t)0x26U)
 #define COMM_TUNER_CMD_SET_PATH_CONFIG ((uint8_t)0x27U)
 #define COMM_TUNER_CMD_RESTORE_PATH_CONFIG ((uint8_t)0x28U)
-#define COMM_TUNER_CMD_GET_GOTO_CONFIG ((uint8_t)0x29U)
-#define COMM_TUNER_CMD_SET_GOTO_CONFIG ((uint8_t)0x2AU)
-#define COMM_TUNER_CMD_RESTORE_GOTO_CONFIG ((uint8_t)0x2BU)
 #define COMM_TUNER_CMD_ACK ((uint8_t)0x80U)
 #define COMM_TUNER_CMD_PID ((uint8_t)0x81U)
 #define COMM_TUNER_CMD_TELEMETRY ((uint8_t)0x82U)
@@ -56,7 +53,6 @@
 #define COMM_TUNER_CMD_PATH_STATUS_RESPONSE ((uint8_t)0x84U)
 #define COMM_TUNER_CMD_PATH_TELEMETRY ((uint8_t)0x85U)
 #define COMM_TUNER_CMD_PATH_CONFIG ((uint8_t)0x86U)
-#define COMM_TUNER_CMD_GOTO_CONFIG ((uint8_t)0x87U)
 #define COMM_TUNER_CMD_ERROR ((uint8_t)0xE0U)
 
 #define COMM_TUNER_ERROR_BAD_CRC ((uint8_t)0x01U)
@@ -70,7 +66,6 @@
 #define COMM_TUNER_ERROR_NO_POSE ((uint8_t)0x09U)
 #define COMM_TUNER_ERROR_POSE_TIMEOUT ((uint8_t)0x0AU)
 #define COMM_TUNER_ERROR_BAD_PATH_CONFIG ((uint8_t)0x0BU)
-#define COMM_TUNER_ERROR_BAD_GOTO_CONFIG ((uint8_t)0x0CU)
 
 #define COMM_TUNER_SET_PID_PAYLOAD_SIZE ((uint16_t)24U)
 #define COMM_TUNER_PID_PAYLOAD_SIZE ((uint16_t)28U)
@@ -83,8 +78,6 @@
 #define COMM_TUNER_PATH_TELEMETRY_PAYLOAD_SIZE ((uint16_t)94U)
 #define COMM_TUNER_SET_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)80U)
 #define COMM_TUNER_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)84U)
-#define COMM_TUNER_SET_GOTO_CONFIG_PAYLOAD_SIZE ((uint16_t)84U)
-#define COMM_TUNER_GOTO_CONFIG_PAYLOAD_SIZE ((uint16_t)88U)
 
 typedef enum
 {
@@ -417,50 +410,6 @@ static void CommTuner_SendPathConfig(uint8_t request_command, uint8_t request_se
     CommTuner_WriteFloat(&payload[4U + ((uint16_t)index * 4U)], values[index]);
   }
   CommTuner_SendResponse(request_command, request_sequence, COMM_TUNER_CMD_PATH_CONFIG,
-                         payload, sizeof(payload), 1U);
-}
-
-static void CommTuner_SendGotoConfig(uint8_t request_command, uint8_t request_sequence)
-{
-  AdvanceMotion_GotoControlConfig_t config;
-  uint32_t revision;
-  uint8_t payload[COMM_TUNER_GOTO_CONFIG_PAYLOAD_SIZE];
-  float values[19U];
-  uint8_t index;
-
-  if (AdvanceMotion_GetGotoControlConfig(&config, &revision) != ADVANCE_MOTION_STATUS_OK)
-  {
-    CommTuner_SendError(request_command, request_sequence,
-                        COMM_TUNER_ERROR_BAD_GOTO_CONFIG, 1U);
-    return;
-  }
-  values[0] = config.profile_threshold_mm;
-  values[1] = config.cruise_speed_mm_s;
-  values[2] = config.accel_mm_s2;
-  values[3] = config.decel_mm_s2;
-  values[4] = config.capture_distance_mm;
-  values[5] = config.capture_speed_mm_s;
-  values[6] = config.final_max_speed_mm_s;
-  values[7] = config.cross_track_kp;
-  values[8] = config.cross_track_kd;
-  values[9] = config.cross_track_correction_max_mm_s;
-  values[10] = config.yaw_cruise_rate_deg_s;
-  values[11] = config.yaw_accel_deg_s2;
-  values[12] = config.yaw_decel_deg_s2;
-  values[13] = config.yaw_capture_equivalent_mm;
-  values[14] = config.yaw_capture_rate_deg_s;
-  values[15] = config.yaw_final_max_rate_deg_s;
-  values[16] = config.yaw_correction_kp;
-  values[17] = config.yaw_correction_kd;
-  values[18] = config.yaw_correction_max_deg_s;
-  CommTuner_WriteU32(&payload[0], revision);
-  for (index = 0U; index < 19U; ++index)
-  {
-    CommTuner_WriteFloat(&payload[4U + ((uint16_t)index * 4U)], values[index]);
-  }
-  CommTuner_WriteU32(&payload[80], config.correction_open_loop_ms);
-  CommTuner_WriteU32(&payload[84], config.correction_blend_ms);
-  CommTuner_SendResponse(request_command, request_sequence, COMM_TUNER_CMD_GOTO_CONFIG,
                          payload, sizeof(payload), 1U);
 }
 
@@ -1016,83 +965,6 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
     if (status != ADVANCE_MOTION_STATUS_OK)
     {
       CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_PATH_CONFIG, 1U);
-      return;
-    }
-    CommTuner_SendAck(command, sequence, revision, 1U);
-    break;
-  }
-
-  case COMM_TUNER_CMD_GET_GOTO_CONFIG:
-    if (payload_length != 0U)
-    {
-      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
-      return;
-    }
-    CommTuner_SendGotoConfig(command, sequence);
-    break;
-
-  case COMM_TUNER_CMD_SET_GOTO_CONFIG:
-  {
-    AdvanceMotion_GotoControlConfig_t config;
-    AdvanceMotion_Status_t status;
-    uint32_t revision;
-    float values[19U];
-    uint8_t index;
-
-    if (payload_length != COMM_TUNER_SET_GOTO_CONFIG_PAYLOAD_SIZE)
-    {
-      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
-      return;
-    }
-    for (index = 0U; index < 19U; ++index)
-    {
-      values[index] = CommTuner_ReadFloat(&payload[(uint16_t)index * 4U]);
-    }
-    config.profile_threshold_mm = values[0];
-    config.cruise_speed_mm_s = values[1];
-    config.accel_mm_s2 = values[2];
-    config.decel_mm_s2 = values[3];
-    config.capture_distance_mm = values[4];
-    config.capture_speed_mm_s = values[5];
-    config.final_max_speed_mm_s = values[6];
-    config.cross_track_kp = values[7];
-    config.cross_track_kd = values[8];
-    config.cross_track_correction_max_mm_s = values[9];
-    config.yaw_cruise_rate_deg_s = values[10];
-    config.yaw_accel_deg_s2 = values[11];
-    config.yaw_decel_deg_s2 = values[12];
-    config.yaw_capture_equivalent_mm = values[13];
-    config.yaw_capture_rate_deg_s = values[14];
-    config.yaw_final_max_rate_deg_s = values[15];
-    config.yaw_correction_kp = values[16];
-    config.yaw_correction_kd = values[17];
-    config.yaw_correction_max_deg_s = values[18];
-    config.correction_open_loop_ms = CommTuner_ReadU32(&payload[76]);
-    config.correction_blend_ms = CommTuner_ReadU32(&payload[80]);
-    status = AdvanceMotion_RequestGotoControlConfig(&config, &revision);
-    if (status != ADVANCE_MOTION_STATUS_OK)
-    {
-      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_GOTO_CONFIG, 1U);
-      return;
-    }
-    CommTuner_SendAck(command, sequence, revision, 1U);
-    break;
-  }
-
-  case COMM_TUNER_CMD_RESTORE_GOTO_CONFIG:
-  {
-    AdvanceMotion_Status_t status;
-    uint32_t revision;
-
-    if (payload_length != 0U)
-    {
-      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
-      return;
-    }
-    status = AdvanceMotion_RestoreDefaultGotoControlConfig(&revision);
-    if (status != ADVANCE_MOTION_STATUS_OK)
-    {
-      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_GOTO_CONFIG, 1U);
       return;
     }
     CommTuner_SendAck(command, sequence, revision, 1U);

@@ -8,8 +8,6 @@ from typing import Iterable
 
 from .models import (
     AckResponse,
-    GotoControlConfigState,
-    GotoControlConfigSnapshot,
     GotoStrategySnapshot,
     PathConfigState,
     PathConfigSnapshot,
@@ -50,9 +48,6 @@ CMD_PATH_STATUS = 0x25
 CMD_GET_PATH_CONFIG = 0x26
 CMD_SET_PATH_CONFIG = 0x27
 CMD_RESTORE_PATH_CONFIG = 0x28
-CMD_GET_GOTO_CONFIG = 0x29
-CMD_SET_GOTO_CONFIG = 0x2A
-CMD_RESTORE_GOTO_CONFIG = 0x2B
 CMD_ACK = 0x80
 CMD_PID = 0x81
 CMD_TELEMETRY = 0x82
@@ -60,7 +55,6 @@ CMD_GOTO_STRATEGY = 0x83
 CMD_PATH_STATUS_RESPONSE = 0x84
 CMD_PATH_TELEMETRY = 0x85
 CMD_PATH_CONFIG = 0x86
-CMD_GOTO_CONFIG = 0x87
 CMD_ERROR = 0xE0
 
 TELEMETRY_PAYLOAD_SIZE = 96
@@ -72,14 +66,6 @@ PATH_CONFIG_FIELDS = (
     "lookahead_min_mm", "lookahead_base_mm", "lookahead_speed_gain_s",
     "lookahead_curve_gain_mm", "lookahead_max_mm", "lookahead_rate_mm_s",
     "initial_lookahead_mm", "final_capture_distance_mm", "final_capture_speed_mm_s",
-)
-GOTO_CONFIG_FIELDS = (
-    "profile_threshold_mm", "cruise_speed_mm_s", "accel_mm_s2", "decel_mm_s2",
-    "capture_distance_mm", "capture_speed_mm_s", "final_max_speed_mm_s",
-    "cross_track_kp", "cross_track_kd", "cross_track_correction_max_mm_s",
-    "yaw_cruise_rate_deg_s", "yaw_accel_deg_s2", "yaw_decel_deg_s2",
-    "yaw_capture_equivalent_mm", "yaw_capture_rate_deg_s", "yaw_final_max_rate_deg_s",
-    "yaw_correction_kp", "yaw_correction_kd", "yaw_correction_max_deg_s",
 )
 PATH_MAX_POINTS = 256
 PATH_CHUNK_MAX_POINTS = 7
@@ -153,39 +139,6 @@ def encode_path_config(config: PathControlConfig) -> bytes:
             mapping["initial_lookahead_mm"] <= mapping["lookahead_max_mm"]):
         raise ProtocolError("path lookahead must satisfy min <= base <= max")
     return struct.pack("<20f", *values)
-
-
-def encode_goto_config(config: GotoControlConfigSnapshot) -> bytes:
-    """Encode the fixed-order single-pose GOTO configuration payload."""
-    values = tuple(getattr(config, field) for field in GOTO_CONFIG_FIELDS)
-    if not all(math.isfinite(value) for value in values):
-        raise ProtocolError("GOTO config float values must be finite")
-    if not all(0 <= getattr(config, field) <= 0xFFFFFFFF
-               for field in ("correction_open_loop_ms", "correction_blend_ms")):
-        raise ProtocolError("GOTO config timeout values are out of range")
-    if not (
-            0.0 < config.profile_threshold_mm and
-            0.0 < config.capture_distance_mm <= config.profile_threshold_mm and
-            0.0 < config.yaw_capture_equivalent_mm <= config.profile_threshold_mm and
-            0.0 < config.cruise_speed_mm_s <= 1500.0 and
-            0.0 < config.accel_mm_s2 <= 5000.0 and
-            0.0 < config.decel_mm_s2 <= 5000.0 and
-            0.0 < config.capture_speed_mm_s <= config.cruise_speed_mm_s and
-            0.0 < config.final_max_speed_mm_s <= config.cruise_speed_mm_s and
-            0.0 <= config.cross_track_kp <= 20.0 and
-            0.0 <= config.cross_track_kd <= 20.0 and
-            0.0 <= config.cross_track_correction_max_mm_s <= config.cruise_speed_mm_s and
-            0.0 < config.yaw_cruise_rate_deg_s <= 180.0 and
-            0.0 < config.yaw_accel_deg_s2 <= 5000.0 and
-            0.0 < config.yaw_decel_deg_s2 <= 5000.0 and
-            0.0 < config.yaw_capture_rate_deg_s <= config.yaw_cruise_rate_deg_s and
-            0.0 < config.yaw_final_max_rate_deg_s <= config.yaw_cruise_rate_deg_s and
-            0.0 <= config.yaw_correction_kp <= 20.0 and
-            0.0 <= config.yaw_correction_kd <= 20.0 and
-            0.0 <= config.yaw_correction_max_deg_s <= config.yaw_cruise_rate_deg_s and
-            config.correction_open_loop_ms <= 5000 and config.correction_blend_ms <= 10000):
-        raise ProtocolError("GOTO config value is outside its supported range")
-    return struct.pack("<19f2I", *values, config.correction_open_loop_ms, config.correction_blend_ms)
 
 
 def encode_goal(goal: "MotionGoal") -> bytes:
@@ -276,13 +229,6 @@ def decode_path_config(frame: Frame) -> PathConfigState:
         raise ProtocolError("invalid path config frame")
     revision, *values = struct.unpack("<I20f", frame.payload)
     return PathConfigState(revision, PathConfigSnapshot(*values))
-
-
-def decode_goto_config(frame: Frame) -> GotoControlConfigState:
-    if frame.version != VERSION or frame.command != CMD_GOTO_CONFIG or len(frame.payload) != 88:
-        raise ProtocolError("invalid GOTO config frame")
-    revision, *values = struct.unpack("<I19f2I", frame.payload)
-    return GotoControlConfigState(revision, GotoControlConfigSnapshot(*values))
 
 
 def decode_telemetry(frame: Frame) -> Telemetry:
