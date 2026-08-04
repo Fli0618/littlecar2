@@ -1,6 +1,9 @@
 import math
 import pytest
-from map_planner.codegen_c import CodeGenerationError, CodeGenerationMode, format_c_float, generate_task_function, validate_plan_for_blocking_codegen
+from map_planner.codegen_c import (CodeGenerationError, CodeGenerationMode,
+                                   format_c_float, generate_standalone_c,
+                                   generate_task_function,
+                                   validate_plan_for_blocking_codegen)
 from map_planner.models import (ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace,
                                 StepTurnNode, StepTurnPathSegment, Waypoint)
 
@@ -39,6 +42,16 @@ def test_default_codegen_mode_remains_feedback_control():
 
     assert "if (AdvanceMotion_GotoPoseBlocking(" in code
     assert "AdvanceMotion_Cancel();" in code
+
+
+def test_standalone_codegen_contains_include_prototype_and_call_hint():
+    code = generate_standalone_c(
+        Plan(steps=[Waypoint(10, 20, 30)]), "Task_CompetitionRoute")
+
+    assert '#include "advance_motion.h"' in code
+    assert "void Task_CompetitionRoute(void);" in code
+    assert "void Task_CompetitionRoute(void)\n{" in code
+    assert "Task_CompetitionRoute();" in code
 
 def test_segment_requires_previous_endpoint_as_entry_point():
     plan = Plan(steps=[Waypoint(10, 20), ContinuousPathSegment([PathPosePoint(11, 20), PathPosePoint(50, 20)])])

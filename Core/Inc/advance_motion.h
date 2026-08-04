@@ -24,6 +24,12 @@ extern "C"
 /* 曲率预览与法向前馈。 */
 #define ADVANCE_MOTION_PATH_CURVATURE_EPSILON_1_MM (0.00001f) /*!< 曲率除数下限，单位为 1/mm。 */
 #define ADVANCE_MOTION_PATH_YAW_GRADIENT_EPSILON_DEG_PER_MM (0.0001f) /*!< 航向梯度除数下限，单位为 deg/mm。 */
+#define ADVANCE_MOTION_PATH_CURVATURE_LOCAL_SUPPORT_MM (60.0f) /*!< 稀疏折线路径中，顶点曲率前馈仅在顶点两侧该距离内生效。 */
+
+/* 400 mm 窄车道偏离保护；车宽 300 mm，中心线到禁区的理论余量仅 50 mm。 */
+#define ADVANCE_MOTION_PATH_CROSS_TRACK_SLOWDOWN_MM (20.0f) /*!< 超过该横向误差后连续降低参考速度。 */
+#define ADVANCE_MOTION_PATH_CROSS_TRACK_ABORT_MM (50.0f) /*!< 横向误差持续达到该值时安全终止路径。 */
+#define ADVANCE_MOTION_PATH_OFF_PATH_HOLD_MS ((uint32_t)60U) /*!< 严重偏离必须持续的时间，过滤单帧 OPS 跳点。 */
 
 /* 路径超时与底盘驱动。 */
 #define ADVANCE_MOTION_PATH_TIMEOUT_BASE_MS ((uint32_t)3000U) /*!< 路径超时基础值，单位为 ms。 */
@@ -106,7 +112,8 @@ extern "C"
     ADVANCE_MOTION_STATE_TIMEOUT,
     ADVANCE_MOTION_STATE_NO_POSE,
     ADVANCE_MOTION_STATE_NO_ORIGIN,
-    ADVANCE_MOTION_STATE_CANCELED
+    ADVANCE_MOTION_STATE_CANCELED,
+    ADVANCE_MOTION_STATE_OFF_PATH
   } AdvanceMotion_RunState_t;
 
   /** @brief 位姿外环 PID 的完整运行时参数组。 */

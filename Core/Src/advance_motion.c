@@ -55,6 +55,7 @@ typedef struct
   uint16_t target_index;
   uint32_t progress_tick;
   uint32_t reference_tick;
+  uint32_t off_path_start_tick;
   uint32_t timeout_ms;
   float progress_on_segment;
   float completed_length_mm;
@@ -709,6 +710,59 @@ static AdvanceMotion_PathVertexCurvature_t AdvanceMotion_EvaluatePathVertexCurva
   return curvature;
 }
 
+/*
+ * 在当前投影点计算局部曲率。等距密集采样的曲线直接在段两端曲率间插值；
+ * 对稀疏折线则把顶点曲率限制在拐点附近，避免一个拐点向整条长直线施加法向前馈。
+ */
+static float AdvanceMotion_EvaluatePathCurvatureAtProjection(uint16_t segment_index,
+                                                             float progress_on_segment)
+{
+  AdvanceMotion_PathVertexCurvature_t start_curvature;
+  AdvanceMotion_PathVertexCurvature_t end_curvature;
+  float segment_length;
+  float progress;
+  float distance_from_start_mm;
+  float distance_to_end_mm;
+  float support_mm = ADVANCE_MOTION_PATH_CURVATURE_LOCAL_SUPPORT_MM;
+
+  if ((g_path.points == NULL) ||
+      (segment_index >= (uint16_t)(g_path.point_count - 1U)) ||
+      (support_mm <= 0.0f))
+  {
+    return 0.0f;
+  }
+
+  segment_length = AdvanceMotion_GetPathSegmentLength(segment_index);
+  if (segment_length < ADVANCE_MOTION_PATH_MIN_SEGMENT_MM)
+  {
+    return 0.0f;
+  }
+
+  progress = AdvanceWorld_LimitFloat(progress_on_segment, 0.0f, 1.0f);
+  start_curvature = AdvanceMotion_EvaluatePathVertexCurvature(segment_index);
+  end_curvature = AdvanceMotion_EvaluatePathVertexCurvature((uint16_t)(segment_index + 1U));
+
+  if (segment_length <= (2.0f * support_mm))
+  {
+    return ((1.0f - progress) * start_curvature.signed_curvature_1_mm) +
+           (progress * end_curvature.signed_curvature_1_mm);
+  }
+
+  distance_from_start_mm = progress * segment_length;
+  distance_to_end_mm = (1.0f - progress) * segment_length;
+  if (distance_from_start_mm < support_mm)
+  {
+    return start_curvature.signed_curvature_1_mm *
+           (1.0f - (distance_from_start_mm / support_mm));
+  }
+  if (distance_to_end_mm < support_mm)
+  {
+    return end_curvature.signed_curvature_1_mm *
+           (1.0f - (distance_to_end_mm / support_mm));
+  }
+  return 0.0f;
+}
+
 static void AdvanceMotion_UpdatePathPreview(void)
 {
   uint16_t segment_index;
@@ -771,9 +825,23 @@ static float AdvanceMotion_GetPathSpeedLimit(void)
       (g_path_config_active.final_capture_speed_mm_s *
        g_path_config_active.final_capture_speed_mm_s) +
       (2.0f * g_path_config_active.decel_mm_s2 * braking_distance));
+  float cross_track_abs_mm = AdvanceMotion_AbsFloat(g_path.cross_track_mm);
+  float recovery_speed = g_path_config_active.cruise_speed_mm_s;
+
+  if (cross_track_abs_mm > ADVANCE_MOTION_PATH_CROSS_TRACK_SLOWDOWN_MM)
+  {
+    float recovery_ratio = 1.0f -
+        ((cross_track_abs_mm - ADVANCE_MOTION_PATH_CROSS_TRACK_SLOWDOWN_MM) /
+         (ADVANCE_MOTION_PATH_CROSS_TRACK_ABORT_MM -
+          ADVANCE_MOTION_PATH_CROSS_TRACK_SLOWDOWN_MM));
+
+    recovery_ratio = AdvanceWorld_LimitFloat(recovery_ratio, 0.0f, 1.0f);
+    recovery_speed = recovery_ratio * g_path_config_active.cruise_speed_mm_s;
+  }
 
   return fminf(g_path_config_active.cruise_speed_mm_s,
-               fminf(curvature_speed, fminf(yaw_speed, final_speed)));
+               fminf(recovery_speed,
+                     fminf(curvature_speed, fminf(yaw_speed, final_speed))));
 }
 
 static void AdvanceMotion_UpdatePathLookahead(float dt_s)
@@ -920,18 +988,8 @@ static void AdvanceMotion_UpdatePathReference(uint32_t now_tick)
         a->yaw_deg + (best_t * AdvanceWorld_WrapAngleDeg(b->yaw_deg - a->yaw_deg)));
   }
 
-  g_path.signed_curvature_1_mm = 0.0f;
-  if (g_path.point_count >= 3U)
-  {
-    uint16_t vertex_index = (uint16_t)(g_path.nearest_index + 1U);
-
-    if (vertex_index >= (uint16_t)(g_path.point_count - 1U))
-    {
-      vertex_index = (uint16_t)(g_path.point_count - 2U);
-    }
-    g_path.signed_curvature_1_mm =
-        AdvanceMotion_EvaluatePathVertexCurvature(vertex_index).signed_curvature_1_mm;
-  }
+  g_path.signed_curvature_1_mm = AdvanceMotion_EvaluatePathCurvatureAtProjection(
+      g_path.nearest_index, g_path.progress_on_segment);
 
   AdvanceMotion_UpdatePathPreview();
   target_speed = AdvanceMotion_GetPathSpeedLimit();
@@ -1439,6 +1497,25 @@ void AdvanceMotion_Update(void)
   if (g_path.active != 0U)
   {
     AdvanceMotion_UpdatePathReference(now_tick);
+    if (AdvanceMotion_AbsFloat(g_path.cross_track_mm) >=
+        ADVANCE_MOTION_PATH_CROSS_TRACK_ABORT_MM)
+    {
+      if (g_path.off_path_start_tick == 0U)
+      {
+        g_path.off_path_start_tick = now_tick;
+      }
+      else if ((now_tick - g_path.off_path_start_tick) >=
+               ADVANCE_MOTION_PATH_OFF_PATH_HOLD_MS)
+      {
+        AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_OFF_PATH);
+        AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
+        return;
+      }
+    }
+    else
+    {
+      g_path.off_path_start_tick = 0U;
+    }
     path_final_stage = g_path.final_stage;
     if (path_final_stage == 0U)
     {

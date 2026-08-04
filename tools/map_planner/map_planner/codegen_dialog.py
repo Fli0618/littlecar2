@@ -19,6 +19,7 @@ from .codegen_c import (
     CodeGenerationMode,
     CodeGenerationError,
     default_task_function_name,
+    generate_standalone_c,
     generate_task_function,
     validate_plan_for_blocking_codegen,
 )
@@ -33,6 +34,7 @@ class CodeGenerationDialog(QDialog):
         self.plan = plan
         self.mode = CodeGenerationMode.FEEDBACK
         self.generated_code = ""
+        self.standalone = True
         self._warnings: list[str] = []
         self.setWindowTitle("生成 STM32 业务函数")
         self.resize(820, 640)
@@ -52,10 +54,12 @@ class CodeGenerationDialog(QDialog):
 
         self.regenerate_button = QPushButton("重新生成")
         self.mode_button = QPushButton()
+        self.output_button = QPushButton()
         self.copy_button = QPushButton("复制代码")
         self.close_button = QPushButton("关闭")
         self.regenerate_button.clicked.connect(self.regenerate)
         self.mode_button.clicked.connect(self.toggle_mode)
+        self.output_button.clicked.connect(self.toggle_output)
         self.copy_button.clicked.connect(self.copy_code)
         self.close_button.clicked.connect(self.close)
 
@@ -68,12 +72,14 @@ class CodeGenerationDialog(QDialog):
         layout.addWidget(self.code_preview, 1)
         buttons = QHBoxLayout()
         buttons.addWidget(self.mode_button)
+        buttons.addWidget(self.output_button)
         buttons.addStretch()
         buttons.addWidget(self.regenerate_button)
         buttons.addWidget(self.copy_button)
         buttons.addWidget(self.close_button)
         layout.addLayout(buttons)
         self._update_mode_button()
+        self._update_output_button()
         self.regenerate()
 
     def _update_mode_button(self) -> None:
@@ -92,6 +98,15 @@ class CodeGenerationDialog(QDialog):
         self._update_mode_button()
         self.regenerate()
 
+    def _update_output_button(self) -> None:
+        self.output_button.setText(
+            "输出：完整 competition_route.c" if self.standalone else "输出：仅业务函数")
+
+    def toggle_output(self) -> None:
+        self.standalone = not self.standalone
+        self._update_output_button()
+        self.regenerate()
+
     def _mode_message(self) -> str:
         if self.mode is CodeGenerationMode.FEEDBACK:
             return "严谨反馈：运动未到达时取消后续步骤并退出函数。"
@@ -102,7 +117,8 @@ class CodeGenerationDialog(QDialog):
 
         try:
             self._warnings = validate_plan_for_blocking_codegen(self.plan)
-            code = generate_task_function(self.plan, self.function_name_edit.text(), self.mode)
+            generator = generate_standalone_c if self.standalone else generate_task_function
+            code = generator(self.plan, self.function_name_edit.text(), self.mode)
         except CodeGenerationError as error:
             self.warning_label.setText(str(error))
             self.copy_button.setEnabled(False)

@@ -34,6 +34,12 @@ class FakeSession(QObject):
 
 
 class ControllerTests(unittest.TestCase):
+    def test_off_path_terminal_state_has_specific_failure_reason(self) -> None:
+        self.assertEqual(
+            MotionWorkbenchController._terminal_reason(7),
+            "偏离路径，已安全停车",
+        )
+
     def test_candidate_is_snapshotted_when_explicit_send_occurs(self) -> None:
         session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
         controller.select_candidate(TargetPose(10, 20, 30))
