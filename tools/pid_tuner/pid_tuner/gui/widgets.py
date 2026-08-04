@@ -58,6 +58,7 @@ class ConnectionPanel(QWidget):
         self.connect_button = QPushButton("连接")
         self.status = QLabel("未连接")
         self._connected = False
+        self._connecting = False
 
         form = QFormLayout(self)
         form.addRow("串口", self.port)
@@ -174,6 +175,7 @@ class ConnectionMotionPanel(QWidget):
         self.yaw_source.addItem("OPS yaw（用于航向控制）", HEADING_MODE_OPS)
         self.yaw_source.addItem("不使用航向（仅控制 X/Y）", HEADING_MODE_NONE)
         self._connected = False
+        self._connecting = False
         self._motion_active = False
         self.reset_origin = QPushButton("重置零点")
         self.goto = QPushButton("开始组合 GOTO")
@@ -214,6 +216,7 @@ class ConnectionMotionPanel(QWidget):
         self.yaw_source.currentIndexChanged.connect(self._heading_mode_changed)
         self.reset_origin.clicked.connect(self.origin_reset_requested)
         self.large_yaw_align.toggled.connect(self.goto_strategy_requested)
+        self._update_connection_controls()
         self._update_heading_controls()
 
     def set_available_ports(self, ports: list[str]) -> None:
@@ -222,8 +225,13 @@ class ConnectionMotionPanel(QWidget):
 
     def set_connected(self, connected: bool) -> None:
         self._connected = connected
-        self.connect_button.setText("断开" if connected else "连接")
+        self._connecting = False
+        self._update_connection_controls()
         self._update_heading_controls()
+
+    def set_connecting(self, connecting: bool) -> None:
+        self._connecting = connecting
+        self._update_connection_controls()
 
     def set_motion_active(self, active: bool) -> None:
         """锁定运行中的航向模式，避免一次 GOTO 中途改变控制语义。"""
@@ -262,6 +270,15 @@ class ConnectionMotionPanel(QWidget):
         )
         self.yaw_source.setEnabled(not self._motion_active)
         self.goto.setText("开始位置+航向 GOTO" if uses_yaw else "开始仅位置 GOTO")
+
+    def _update_connection_controls(self) -> None:
+        self.port.setEnabled(not self._connected and not self._connecting)
+        self.baud.setEnabled(not self._connected and not self._connecting)
+        self.refresh_ports_button.setEnabled(not self._connected and not self._connecting)
+        self.connect_button.setEnabled(self._connected or (
+            not self._connecting and bool(self.port.currentText())))
+        self.connect_button.setText("连接中" if self._connecting else (
+            "断开" if self._connected else "连接"))
 
     def current_motion_goal(self, use_position: bool, use_yaw: bool) -> MotionGoal:
         return MotionGoal(*(widget.value() for widget in self.goal), self.timeout.value(),

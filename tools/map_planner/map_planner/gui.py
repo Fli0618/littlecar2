@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import math
 import sys
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, QPen, QPolygonF, QShortcut
@@ -23,6 +24,9 @@ from .models import BezierPathSegment, CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPat
 from .sim import SimulationFrame, build_plan_timeline
 from .sweep import SweepGeometry, build_continuous_segment_sweep, build_goto_sweep, build_rotation_sweep, car_polygon
 from .storage import list_plans, load_plan, rename_plan, save_plan
+
+if TYPE_CHECKING:
+    from motion_workbench.models import RuntimeUiSnapshot
 
 PLATFORMS = ((550, 550), (1400, 550), (550, 1400), (1400, 1400))
 MATERIAL_SLOTS = ((75, 1050), (75, 1200), (75, 1350), (1050, 2325), (1200, 2325), (1350, 2325))
@@ -232,12 +236,10 @@ class MapEditorWidget(QWidget):
 
     plan_changed = Signal(object)
     candidate_selected = Signal(int)
-    runtime_overlay_changed = Signal(object)
     hardware_enabled_changed = Signal(bool)
     single_step_requested = Signal(int)
     continuous_requested = Signal(int)
     execution_stop_requested = Signal()
-    execution_state_changed = Signal(object)
     start_frame_changed = Signal(object)
     calibration_state_changed = Signal(bool)
 
@@ -257,6 +259,8 @@ class MapEditorWidget(QWidget):
             self._execution_target: Pose | None = None
             self._execution_error: tuple[float, float, float] | None = None
             self._execution_trace: list[Pose] = []
+            self._runtime_trace_path = QPainterPath()
+            self._runtime_trace_path_point_count = 0
             self._path_runtime = None
             self._execution_enabled = False
             self._hardware_motion_active = False
@@ -322,17 +326,6 @@ class MapEditorWidget(QWidget):
                 raise IndexError("候选项索引超出范围")
             self.activate_node(index)
 
-    def set_runtime_pose(self, pose: Pose | None) -> None:
-            """显示工作台运行时车辆位姿；传入 None 可清除覆盖层。"""
-            if pose is not None and not isinstance(pose, Pose):
-                raise TypeError("pose 必须是 Pose 实例或 None")
-            self._runtime_pose = copy.deepcopy(pose)
-            self.runtime_overlay_changed.emit(copy.deepcopy(self._runtime_pose))
-            self._refresh_runtime_overlay()
-
-    def clear_runtime_pose(self) -> None:
-            self.set_runtime_pose(None)
-
     @property
     def execution_enabled(self) -> bool:
             """实机执行许可状态；控件仅发射信号，不直接访问串口。"""
@@ -349,86 +342,26 @@ class MapEditorWidget(QWidget):
             self.execution_enabled_switch.blockSignals(False)
             self._refresh_execution_controls()
             self.hardware_enabled_changed.emit(enabled)
-            self._emit_execution_state()
 
     def set_hardware_motion_active(self, active: bool) -> None:
             self._hardware_motion_active = bool(active)
 
-    def apply_runtime_snapshot(self, snapshot: object) -> None:
+    def apply_runtime_snapshot(self, snapshot: RuntimeUiSnapshot) -> None:
             """Apply the controller's 40 ms snapshot without rebuilding the scene."""
-            actual = getattr(snapshot, "actual_pose", None)
-            target = getattr(snapshot, "target_pose", None)
+            actual = snapshot.actual_pose
+            target = snapshot.target_pose
             self._runtime_pose = None if actual is None else Pose(actual.x_mm, actual.y_mm, actual.yaw_deg)
             self._execution_target = None if target is None else Pose(target.x_mm, target.y_mm, target.yaw_deg)
-            self._path_runtime = getattr(snapshot, "path_telemetry", None)
-            if getattr(snapshot, "trace_reset", False):
-                self._execution_trace = []
-            self._execution_trace.extend(Pose(point.x_mm, point.y_mm, point.yaw_deg)
-                                         for point in getattr(snapshot, "new_trace_points", ()))
+            self._execution_error = snapshot.error
+            self._path_runtime = snapshot.path_telemetry
+            self._hardware_motion_active = snapshot.motion_active
+            if snapshot.trace_reset:
+                self._clear_runtime_trace()
+            new_trace_points = [Pose(point.x_mm, point.y_mm, point.yaw_deg)
+                                for point in snapshot.new_trace_points]
+            self._execution_trace.extend(new_trace_points)
+            self._append_runtime_trace_points(new_trace_points)
             self._refresh_runtime_overlay()
-
-    def set_execution_target(self, pose: Pose | None) -> None:
-            self._execution_target = self._copy_execution_pose(pose)
-            self._refresh_runtime_overlay()
-            self._emit_execution_state()
-
-    def set_execution_actual_pose(self, pose: Pose | None) -> None:
-            """更新实车位姿；只刷新运行叠加项，适用于高频遥测。"""
-            self._runtime_pose = self._copy_execution_pose(pose)
-            self.runtime_overlay_changed.emit(copy.deepcopy(self._runtime_pose))
-            self._refresh_runtime_overlay()
-            self._emit_execution_state()
-
-    def set_execution_error(self, x_mm: float, y_mm: float, yaw_deg: float) -> None:
-            self._execution_error = (float(x_mm), float(y_mm), float(yaw_deg))
-            self._refresh_execution_status()
-            self._emit_execution_state()
-
-    def set_execution_trace(self, poses: list[Pose]) -> None:
-            if not all(isinstance(pose, Pose) for pose in poses):
-                raise TypeError("poses 必须全部为 Pose 实例")
-            self._execution_trace = copy.deepcopy(poses)
-            self._refresh_runtime_overlay()
-            self._emit_execution_state()
-
-    def set_path_runtime(self, telemetry: object | None) -> None:
-            """更新路径投影和 lookahead 运行时覆盖层，不重绘编辑场景。"""
-            self._path_runtime = copy.deepcopy(telemetry)
-            self._refresh_runtime_overlay()
-
-    def update_execution_telemetry(self, *, target: Pose | None = None, actual: Pose | None = None,
-                                   error: tuple[float, float, float] | None = None,
-                                   trace: list[Pose] | None = None) -> None:
-            """批量写入工作台遥测；参数为 None 时保持原值，避免完整场景重绘。"""
-            if target is not None:
-                self._execution_target = self._copy_execution_pose(target)
-            if actual is not None:
-                self._runtime_pose = self._copy_execution_pose(actual)
-                self.runtime_overlay_changed.emit(copy.deepcopy(self._runtime_pose))
-            if error is not None:
-                if len(error) != 3:
-                    raise ValueError("error 必须包含 x、y、航向三个误差")
-                self._execution_error = tuple(float(value) for value in error)
-            if trace is not None:
-                self.set_execution_trace(trace)
-                return
-            self._refresh_runtime_overlay()
-            self._emit_execution_state()
-
-    def _copy_execution_pose(self, pose: Pose | None) -> Pose | None:
-            if pose is not None and not isinstance(pose, Pose):
-                raise TypeError("pose 必须是 Pose 实例或 None")
-            return copy.deepcopy(pose)
-
-    def _emit_execution_state(self) -> None:
-            self.execution_state_changed.emit({
-                "enabled": self._execution_enabled,
-                "target": copy.deepcopy(self._execution_target),
-                "actual": copy.deepcopy(self._runtime_pose),
-                "error": self._execution_error,
-                "trace": copy.deepcopy(self._execution_trace),
-                "status": getattr(self, "_execution_status", "等待工作台命令"),
-            })
 
     def set_execution_status(self, status: str) -> None:
             """更新工作台提供的运行状态文本，不触发运动或串口操作。"""
@@ -436,7 +369,6 @@ class MapEditorWidget(QWidget):
                 raise TypeError("status 必须是字符串")
             self._execution_status = status
             self._refresh_execution_status()
-            self._emit_execution_state()
 
     def _refresh_execution_controls(self) -> None:
             for button in (self.execution_step_button, self.execution_run_button, self.execution_stop_button):
@@ -715,6 +647,7 @@ class MapEditorWidget(QWidget):
                 self.plan.start_heading_deg = new.heading_deg
             if start_kind is not None:
                 self.plan.start_kind = start_kind
+            self._clear_runtime_trace()
             self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw()
             self.rebuild_timeline_after_edit(); self.plan_changed.emit(copy.deepcopy(self.plan))
             self.start_frame_changed.emit(new)
@@ -817,6 +750,7 @@ class MapEditorWidget(QWidget):
             self._runtime_car_item = None; self._runtime_direction_item = None
             self._runtime_target_item = None; self._runtime_target_direction_item = None
             self._runtime_trace_item = None
+            self._runtime_trace_path_point_count = 0
             self._runtime_projection_item = None
             self._runtime_lookahead_item = None
             self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_start(); self.draw_route(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None); self.draw_runtime_overlay(); self.position_layout_sliders()
@@ -1598,6 +1532,33 @@ class MapEditorWidget(QWidget):
             car = CarOutlineItem(self.rotate_car_clockwise); car.setPos(x, y); car.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, p.yaw_deg)); car.setPen(QPen(color, 5)); car.setBrush(QColor(120, 144, 156, 105)); car.setZValue(15); self.scene.addItem(car)
             self._draw_direction_arrow(x, y, p.yaw_deg, QColor("#1565c0"), "car_direction")
 
+    def _clear_runtime_trace(self) -> None:
+            self._execution_trace.clear()
+            self._runtime_trace_path = QPainterPath()
+            self._runtime_trace_path_point_count = 0
+            if self._runtime_trace_item is not None:
+                self._runtime_trace_item.setPath(self._runtime_trace_path)
+
+    def _append_runtime_trace_points(self, points: list[Pose]) -> None:
+            if not points:
+                return
+            if self._runtime_trace_path_point_count != len(self._execution_trace) - len(points):
+                self._rebuild_runtime_trace_path()
+                return
+            for pose in points:
+                point = world_to_paper(pose, self.plan.start_paper_x_mm,
+                                       self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                if self._runtime_trace_path_point_count == 0:
+                    self._runtime_trace_path.moveTo(*point)
+                else:
+                    self._runtime_trace_path.lineTo(*point)
+                self._runtime_trace_path_point_count += 1
+
+    def _rebuild_runtime_trace_path(self) -> None:
+            self._runtime_trace_path = QPainterPath()
+            self._runtime_trace_path_point_count = 0
+            self._append_runtime_trace_points(list(self._execution_trace))
+
     def _ensure_runtime_overlay_items(self) -> None:
             if self._runtime_car_item is not None and self._runtime_car_item.scene() is self.scene:
                 return
@@ -1636,15 +1597,11 @@ class MapEditorWidget(QWidget):
                          self._runtime_trace_item, self._runtime_projection_item,
                          self._runtime_lookahead_item):
                 item.setVisible(False)
+            if self._runtime_trace_path_point_count != len(self._execution_trace):
+                self._rebuild_runtime_trace_path()
             if len(self._execution_trace) >= 2:
-                path = QPainterPath()
-                points = [world_to_paper(pose, self.plan.start_paper_x_mm,
-                                         self.plan.start_paper_y_mm, self.plan.start_heading_deg)
-                          for pose in self._execution_trace]
-                path.moveTo(*points[0])
-                for point in points[1:]:
-                    path.lineTo(*point)
-                self._runtime_trace_item.setPath(path); self._runtime_trace_item.setVisible(True)
+                self._runtime_trace_item.setPath(self._runtime_trace_path)
+                self._runtime_trace_item.setVisible(True)
             if self._execution_target is not None:
                 x, y = world_to_paper(self._execution_target, self.plan.start_paper_x_mm,
                                       self.plan.start_paper_y_mm, self.plan.start_heading_deg)

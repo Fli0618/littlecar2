@@ -22,7 +22,9 @@ from .control_panel import (
     protected_number,
 )
 from .controller import MotionWorkbenchController
-from .models import CoordinateSyncState, PathUploadSnapshot, TargetPose
+from .models import CoordinateSyncState, PathUploadSnapshot, PathUploadState, TargetPose
+
+MOTION_WORKBENCH_REFRESH_MS = 40
 
 
 class PathControlPanel(QWidget):
@@ -127,10 +129,9 @@ class MotionWorkbenchWindow(QMainWindow):
         self.resize(1500, 920)
         self.controller = MotionWorkbenchController()
         self._active_heading_mode = "WIT"
-        self._origin_reset_pending = False
         self._build()
         self._wire()
-        self.refresh_timer = QTimer(self); self.refresh_timer.setInterval(40); self.refresh_timer.timeout.connect(self._refresh); self.refresh_timer.start()
+        self.refresh_timer = QTimer(self); self.refresh_timer.setInterval(MOTION_WORKBENCH_REFRESH_MS); self.refresh_timer.timeout.connect(self._refresh); self.refresh_timer.start()
         self.heartbeat_timer = QTimer(self); self.heartbeat_timer.setInterval(500); self.heartbeat_timer.timeout.connect(self.controller.session.heartbeat); self.heartbeat_timer.start()
 
     def _build(self) -> None:
@@ -193,19 +194,20 @@ class MotionWorkbenchWindow(QMainWindow):
         self.point_panel.stop_requested.connect(self.controller.stop)
         self.point_panel.clear_requested.connect(self.controller.clear_candidate)
         self.controller.candidate_changed.connect(self.point_panel.set_candidate)
-        self.controller.execution_changed.connect(self._set_execution_target)
         self.controller.upload_changed.connect(self._set_upload_status)
         self.controller.coordinate_sync_changed.connect(self._set_coordinate_sync_status)
         self.controller.plan_execution_changed.connect(self._set_plan_execution_status)
         self.controller.plan_finished.connect(self._set_plan_execution_status)
         self.controller.motion_state_changed.connect(lambda value: self.motion_status.setText(f"运动: {value}"))
         self.controller.status_changed.connect(self._on_session_status)
-        self.controller.session.failure.connect(self._on_connection_failure)
+        self.controller.session.connection_failed.connect(self._on_connection_failure)
+        self.controller.session.connection_changed.connect(self._on_connection_changed)
         self.pid_panel.read_requested.connect(self.controller.session.read_pid)
         self.pid_panel.apply_requested.connect(self.controller.session.apply_pid)
         self.pid_panel.restore_requested.connect(self.controller.session.restore_pid)
-        self.controller.session.pid_read.connect(lambda state: self.pid_panel.set_pid(state.config))
-        self.controller.session.pid_applied.connect(lambda state: self.pid_panel.set_pid(state.config))
+        self.controller.session.pid_read.connect(self.pid_panel.set_pid_state)
+        self.controller.session.pid_applied.connect(self.pid_panel.set_pid_state)
+        self.controller.session.connection_changed.connect(self.pid_panel.set_connected)
         self.pid_panel.goto_strategy_changed.connect(self.controller.session.set_goto_strategy)
         self.controller.session.goto_strategy_read.connect(
             lambda strategy: self.pid_panel.set_goto_strategy(strategy.large_yaw_align_enabled))
@@ -239,7 +241,6 @@ class MotionWorkbenchWindow(QMainWindow):
         self.map_editor.execution_stop_requested.connect(self.controller.stop)
         self.view_switch.clicked.connect(self._switch_workspace)
         self._uploaded_path_id = 0
-        self._next_path_id = 1
         self.controller.set_plan(self.map_editor.get_plan())
         self.controller.set_map_calibrated(not self.map_editor.calibration_pending)
 
@@ -255,20 +256,18 @@ class MotionWorkbenchWindow(QMainWindow):
 
     def _disconnect_port(self) -> None:
         self.controller.session.disconnect()
-        self.connection_panel.set_connected(False, "已断开")
+
+    def _on_connection_changed(self, connected: bool) -> None:
+        self.connection_panel.set_connected(
+            connected, "已连接，参数已同步" if connected else "已断开")
+        self._refresh_origin_controls()
 
     def _on_session_status(self, status: str) -> None:
         self.connection.setText(status)
         self.connection_panel.set_connected(self.controller.session.connected, status)
         self._refresh_origin_controls()
-        if status == "已连接":
-            mode = self.point_panel.current_heading_mode()
-            if mode != HEADING_MODE_NONE:
-                self.controller.session.set_yaw_source(mode)
-            self.controller.session.read_path_config()
 
     def _on_connection_failure(self, message: str) -> None:
-        self._origin_reset_pending = False
         self._refresh_origin_controls()
         self.connection_panel.set_connected(False, f"连接失败: {message}")
 
@@ -284,7 +283,6 @@ class MotionWorkbenchWindow(QMainWindow):
         self._refresh_origin_controls()
 
     def _on_origin_reset(self) -> None:
-        self._origin_reset_pending = False
         self.controller.confirm_origin_reset()
         self.controller.select_candidate(TargetPose(0.0, 0.0, 0.0))
         self.pose_status.setText("位姿: 零点已重置，等待遥测")
@@ -344,10 +342,6 @@ class MotionWorkbenchWindow(QMainWindow):
         else:
             self.heading_status.setText(f"航向控制: {self._active_heading_mode}")
 
-    def _set_execution_target(self, target: TargetPose | None) -> None:
-        pose = None if target is None else Pose(target.x_mm, target.y_mm, target.yaw_deg)
-        self.map_editor.set_execution_target(pose)
-
     def _set_hardware_execution(self, enabled: bool) -> None:
         if enabled and not self.controller.session.connected:
             self.map_editor.set_execution_enabled(False)
@@ -386,8 +380,7 @@ class MotionWorkbenchWindow(QMainWindow):
         else:
             self.path_panel.status.setText("当前步骤不是可上传的连续路径")
             return
-        path_id = self._next_path_id
-        self._next_path_id += 1
+        path_id = self.controller.allocate_path_id()
         self._uploaded_path_id = path_id
         self.controller.upload_path(path_id, points)
         self.path_panel.start.setEnabled(False)
@@ -396,7 +389,7 @@ class MotionWorkbenchWindow(QMainWindow):
     def _set_upload_status(self, snapshot: PathUploadSnapshot) -> None:
         self.upload_status.setText(f"路径: {snapshot.state.value}")
         self.path_panel.status.setText(snapshot.message or snapshot.state.value)
-        self.path_panel.start.setEnabled(snapshot.state.value == "COMMITTED")
+        self.path_panel.start.setEnabled(snapshot.state == PathUploadState.COMMITTED)
 
     def _set_coordinate_sync_status(self, state: CoordinateSyncState) -> None:
         mapping = {

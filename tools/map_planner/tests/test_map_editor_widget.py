@@ -1,5 +1,6 @@
 import os
 import unittest
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -31,22 +32,27 @@ class MapEditorWidgetTests(unittest.TestCase):
         finally:
             widget.close()
 
-    def test_canvas_selection_and_runtime_overlay_api(self):
+    def test_canvas_selection_and_runtime_snapshot_overlay(self):
         widget = MapEditorWidget()
         selected = []
-        overlays = []
         widget.candidate_selected.connect(selected.append)
-        widget.runtime_overlay_changed.connect(overlays.append)
         try:
             widget.set_plan(Plan(steps=[Waypoint(100, 200, 30)]))
             self.assertIs(widget.canvas, widget.view)
             widget.select_candidate(0)
             self.assertEqual((widget.selected_candidate_index, selected), (0, [0]))
 
-            widget.set_runtime_pose(Pose(300, 400, 90))
+            widget.apply_runtime_snapshot(SimpleNamespace(
+                actual_pose=Pose(300, 400, 90), target_pose=None, error=None,
+                path_telemetry=None, new_trace_points=(), trace_reset=True,
+                pose_valid=True, motion_active=False,
+            ))
             self.assertIn("runtime_car", [item.data(0) for item in widget.scene.items()])
-            widget.clear_runtime_pose()
-            self.assertEqual(len(overlays), 2)
+            widget.apply_runtime_snapshot(SimpleNamespace(
+                actual_pose=None, target_pose=None, error=None,
+                path_telemetry=None, new_trace_points=(), trace_reset=False,
+                pose_valid=False, motion_active=False,
+            ))
             runtime_car = next(item for item in widget.scene.items() if item.data(0) == "runtime_car")
             self.assertFalse(runtime_car.isVisible())
         finally:
@@ -67,11 +73,12 @@ class MapEditorWidgetTests(unittest.TestCase):
             widget.active_index = 0
             widget.execution_step_button.click()
             widget.execution_run_button.click()
-            widget.set_execution_target(Pose(100, 200, 30))
-            widget.update_execution_telemetry(
-                actual=Pose(110, 210, 40), error=(10, 10, 10),
-                trace=[Pose(0, 0, 0), Pose(110, 210, 40)],
-            )
+            widget.apply_runtime_snapshot(SimpleNamespace(
+                actual_pose=Pose(110, 210, 40), target_pose=Pose(100, 200, 30),
+                error=(10, 10, 10), path_telemetry=None,
+                new_trace_points=(Pose(0, 0, 0), Pose(110, 210, 40)),
+                trace_reset=True, pose_valid=True, motion_active=False,
+            ))
 
             markers = [item.data(0) for item in widget.scene.items()]
             self.assertEqual(enabled, [True])
@@ -85,6 +92,27 @@ class MapEditorWidgetTests(unittest.TestCase):
             self.assertFalse(widget.execution_step_button.isEnabled())
             self.assertFalse(widget.execution_run_button.isEnabled())
             self.assertFalse(widget.execution_stop_button.isEnabled())
+        finally:
+            widget.close()
+
+    def test_runtime_trace_appends_and_clears_on_reset_or_start_change(self):
+        widget = MapEditorWidget()
+        try:
+            snapshot = lambda points, reset=False: SimpleNamespace(
+                actual_pose=None, target_pose=None, error=None, path_telemetry=None,
+                new_trace_points=points, trace_reset=reset, pose_valid=True, motion_active=False,
+            )
+            widget.apply_runtime_snapshot(snapshot((Pose(0, 0, 0), Pose(100, 0, 0)), True))
+            path = widget._runtime_trace_path
+            widget.apply_runtime_snapshot(snapshot((Pose(200, 0, 0),)))
+            self.assertIs(widget._runtime_trace_path, path)
+            self.assertEqual(widget._runtime_trace_path.elementCount(), 3)
+
+            widget.apply_runtime_snapshot(snapshot((Pose(0, 100, 0),), True))
+            self.assertEqual(widget._runtime_trace_path.elementCount(), 1)
+            widget.set_start_frame(2250, 2250, 180)
+            self.assertEqual(widget._execution_trace, [])
+            self.assertEqual(widget._runtime_trace_path.elementCount(), 0)
         finally:
             widget.close()
 

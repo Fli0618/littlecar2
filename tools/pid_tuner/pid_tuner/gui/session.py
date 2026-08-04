@@ -2,20 +2,25 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import time
-from typing import Callable, cast
+from typing import Callable, TypeVar
 
 from PySide6.QtCore import QObject, Signal
 
-from ..models import (GotoStrategySnapshot, MotionGoal, PathBeginCommand, PathChunkCommand,
+from ..models import (AckResponse, GotoStrategySnapshot, MotionGoal, PathBeginCommand, PathChunkCommand,
                       PathCommitCommand, PathConfigState, PathControlConfig, PathStartCommand,
                       PathTelemetry, PidConfig, PidConfigState, Telemetry)
 from ..serial_client import SerialClient
 
 
+ConfigState = TypeVar("ConfigState", PidConfigState, PathConfigState)
+
+
 class SessionController(QObject):
     telemetry = Signal(object)
     status = Signal(str)
-    failure = Signal(str)
+    connection_changed = Signal(bool)
+    connection_failed = Signal(str)
+    operation_failed = Signal(str)
     pid_read = Signal(object)
     pid_applied = Signal(object)
     yaw_source_changed = Signal(str)
@@ -24,7 +29,6 @@ class SessionController(QObject):
     origin_reset = Signal()
     motion_changed = Signal(bool)
     path_telemetry = Signal(object)
-    path_upload_changed = Signal(str)
     path_committed = Signal(int)
     path_started = Signal(int)
     path_config_read = Signal(object)
@@ -38,35 +42,43 @@ class SessionController(QObject):
         self.motion_active = False
         self._heartbeat_in_flight = False
         self._motion_generation = 0
-        self._pending_pid: PidConfigState | None = None
-        self._pending_path_config: PathConfigState | None = None
 
     def connect_port(self, port: str, baud: int) -> None:
-        def action() -> tuple[SerialClient, PidConfigState, GotoStrategySnapshot]:
+        def action() -> tuple[SerialClient, PidConfigState, PathConfigState, GotoStrategySnapshot]:
             client = SerialClient.open_port(port, baud)
-            client.start()
-            client.add_telemetry_callback(self._handle_telemetry)
-            client.add_path_telemetry_callback(self._handle_path_telemetry)
-            return client, client.get_pid(), client.get_goto_strategy()
+            try:
+                client.start()
+                client.add_telemetry_callback(self._handle_telemetry)
+                client.add_path_telemetry_callback(self._handle_path_telemetry)
+                return client, client.get_pid(), client.get_path_config(), client.get_goto_strategy()
+            except Exception:
+                client.close()
+                raise
 
         future = self._executor.submit(action)
         future.add_done_callback(self._connected)
 
     def _connected(self, future: object) -> None:
         try:
-            client, pid, goto_strategy = future.result()  # type: ignore[attr-defined]
+            client, pid, path_config, goto_strategy = future.result()  # type: ignore[attr-defined]
             self._client = client
             self.connected = True
             self.pid_read.emit(pid)
+            self.path_config_read.emit(path_config)
             self.goto_strategy_read.emit(goto_strategy)
-            self.status.emit("已连接")
+            self.connection_changed.emit(True)
+            self.status.emit("已连接，参数已同步")
         except Exception as error:
-            self.failure.emit(str(error))
+            self._client = None
+            self.connected = False
+            self.connection_changed.emit(False)
+            self.connection_failed.emit(str(error))
 
     def disconnect(self) -> None:
         client = self._client
         self._client = None
         self.connected = False
+        self.connection_changed.emit(False)
         self._motion_generation += 1
         if client is not None:
             self._executor.submit(self._stop_and_close, client, self.motion_active)
@@ -91,7 +103,7 @@ class SessionController(QObject):
     def _submit(self, operation: Callable[[SerialClient], object],
                 callback: Callable[[object], None] | None = None) -> None:
         if self._client is None:
-            self.failure.emit("未连接串口")
+            self.operation_failed.emit("未连接串口")
             return
         future = self._executor.submit(operation, self._client)
 
@@ -101,66 +113,60 @@ class SessionController(QObject):
                 if callback:
                     callback(value)
             except Exception as error:
-                self.failure.emit(str(error))
+                self.operation_failed.emit(str(error))
 
         future.add_done_callback(done)
+
+    @staticmethod
+    def _wait_for_revision(response: AckResponse, read_active: Callable[[], ConfigState],
+                           label: str) -> ConfigState:
+        """Wait until the board reports the ACK revision as its active configuration."""
+        if response.revision is None:
+            raise RuntimeError(f"{label} ACK 缺少修订号")
+        deadline = time.monotonic() + 1.0
+        while True:
+            active = read_active()
+            if active.revision == response.revision:
+                return active
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        raise RuntimeError(f"{label} 修订号 {response.revision} 未在周期边界生效")
 
     def read_pid(self) -> None:
         self._submit(lambda client: client.get_pid(), self.pid_read.emit)
 
     def apply_pid(self, pid: PidConfig) -> None:
-        def set_and_confirm(client: SerialClient) -> PidConfigState:
-            response = client.set_pid(pid)
-            if response.revision is None:
-                raise RuntimeError("SET_PID ACK 缺少修订号")
-            for _ in range(25):
-                active = client.get_pid()
-                if active.revision == response.revision:
-                    return PidConfigState(active.revision, pid)
-                time.sleep(0.02)
-            raise RuntimeError(f"PID 修订号 {response.revision} 未在周期边界生效")
-
-        self._submit(set_and_confirm, self.pid_applied.emit)
+        self._submit(lambda client: self._wait_for_revision(
+            client.set_pid(pid), client.get_pid, "PID"), self.pid_applied.emit)
 
     def restore_pid(self) -> None:
-        self._submit(lambda client: client.restore_pid(),
-                     lambda response: self.status.emit(f"PID 已恢复默认，修订号 {response.revision}"))
+        def restored(state: object) -> None:
+            active = state  # Signal callbacks receive object, narrowed at this boundary.
+            assert isinstance(active, PidConfigState)
+            self.pid_read.emit(active)
+            self.status.emit(f"PID 已恢复默认，修订号 {active.revision}")
+
+        self._submit(lambda client: self._wait_for_revision(
+            client.restore_pid(), client.get_pid, "PID"), restored)
 
     def read_path_config(self) -> None:
         self._submit(lambda client: client.get_path_config(), self.path_config_read.emit)
 
     def apply_path_config(self, config: PathControlConfig) -> None:
-        def set_and_confirm(client: SerialClient) -> PathConfigState:
-            response = client.set_path_config(config)
-            if response.revision is None:
-                raise RuntimeError("SET_PATH_CONFIG ACK 缺少修订号")
-            for _ in range(25):
-                active = client.get_path_config()
-                if active.revision == response.revision:
-                    return PathConfigState(active.revision, config)
-                time.sleep(0.02)
-            raise RuntimeError(f"路径参数修订号 {response.revision} 未在周期边界生效")
-
-        self._submit(set_and_confirm, self.path_config_applied.emit)
+        self._submit(lambda client: self._wait_for_revision(
+            client.set_path_config(config), client.get_path_config, "路径参数"),
+            self.path_config_applied.emit)
 
     def restore_path_config(self) -> None:
-        def restore_and_read(client: SerialClient) -> tuple[int, PathConfigState]:
-            response = client.restore_path_config()
-            if response.revision is None:
-                raise RuntimeError("RESTORE_PATH_CONFIG ACK 缺少修订号")
-            for _ in range(25):
-                active = client.get_path_config()
-                if active.revision == response.revision:
-                    return response.revision, active
-                time.sleep(0.02)
-            raise RuntimeError(f"路径默认参数修订号 {response.revision} 未生效")
-
         def restored(value: object) -> None:
-            revision, active = cast(tuple[int, PathConfigState], value)
-            self.status.emit(f"路径参数已恢复默认，修订号 {revision}")
+            assert isinstance(value, PathConfigState)
+            active = value
+            self.status.emit(f"路径参数已恢复默认，修订号 {active.revision}")
             self.path_config_read.emit(active)
 
-        self._submit(restore_and_read, restored)
+        self._submit(lambda client: self._wait_for_revision(
+            client.restore_path_config(), client.get_path_config, "路径参数"), restored)
 
     def set_yaw_source(self, source: str) -> None:
         self._submit(lambda client: client.set_yaw_source(source),
@@ -190,10 +196,6 @@ class SessionController(QObject):
 
     def _handle_telemetry(self, item: Telemetry) -> None:
         self.telemetry.emit(item)
-        if self._pending_pid is not None and item.pid_revision == self._pending_pid.revision:
-            state = self._pending_pid
-            self._pending_pid = None
-            self.pid_applied.emit(state)
         if self.motion_active and (item.state not in (0, 1) or item.heartbeat_timed_out):
             self._set_motion_active(False)
 
@@ -212,7 +214,7 @@ class SessionController(QObject):
             except Exception as error:
                 if generation == self._motion_generation:
                     self._set_motion_active(False)
-                    self.failure.emit(str(error))
+                    self.operation_failed.emit(str(error))
 
         future.add_done_callback(done)
 
@@ -235,9 +237,7 @@ class SessionController(QObject):
                 client.path_chunk(chunk)
             client.path_commit(commit)
 
-        self.path_upload_changed.emit("正在上传")
-        self._submit(upload, lambda _: (self.path_upload_changed.emit("路径已提交"),
-                                        self.path_committed.emit(commit.path_id)))
+        self._submit(upload, lambda _: self.path_committed.emit(commit.path_id))
 
     def start_path(self, command: PathStartCommand) -> None:
         def started(_: object) -> None:
@@ -253,7 +253,6 @@ class SessionController(QObject):
                 client.path_chunk(chunk)
             client.path_commit(commit)
             client.path_start(start)
-        self.path_upload_changed.emit("正在上传")
         def done(_: object) -> None:
             self.path_committed.emit(commit.path_id)
             self.path_started.emit(start.path_id)
@@ -263,15 +262,9 @@ class SessionController(QObject):
     def abort_path(self) -> None:
         self._motion_generation += 1
         self._set_motion_active(False)
-        self._submit(lambda client: client.path_abort(),
-                     lambda _: self.path_upload_changed.emit("路径已中止"))
+        self._submit(lambda client: client.path_abort())
 
     def _handle_path_telemetry(self, telemetry: PathTelemetry) -> None:
-        if (self._pending_path_config is not None and
-                telemetry.path_config_revision == self._pending_path_config.revision):
-            state = self._pending_path_config
-            self._pending_path_config = None
-            self.path_config_applied.emit(state)
         self.path_telemetry.emit(telemetry)
 
     def shutdown(self) -> None:
