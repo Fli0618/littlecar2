@@ -39,5 +39,5 @@
 - `advance_arm` 不读取机械臂限位或电机反馈；Pick/Place 以固定顺序完成五个 1000 ms 原子动作，不能证明机械机构实际到位。
 - TIM6 是周期 Update 的唯一入口；主循环只运行一次顺序业务入口，之后以 `__WFI()` 等待中断。
 - 视觉通信使用 USART6 DMA + IDLE。业务层通过 `detect_color_start()`、`detect_circle_start()`、`detect_disk_center_start()`、`detect_qr_start()` 和 `detect_stop()` 控制服务，默认周期由 `DETECT_DEFAULT_PERIOD_MS` 配置为 40 ms。
-- `advance_visual` 的 CIRCLE 使用 `detect_circle_start()`，COLOR 与 MATERIAL 使用 `detect_color_start()`；三种模式均从 `detect_get_targets()` 消费新帧。阻塞接口只执行 `__WFI()`，目标控制、丢失和超时处理均在 TIM6 中完成。
+- `advance_visual` 提供 `AdvanceVisual_AlignColorBlocking()`、`AdvanceVisual_AlignDiskCenterBlocking()` 和 `AdvanceVisual_AlignCircleBlocking()` 三个业务接口。COLOR 使用 `detect_color_start()`/`detect_get_targets()`，CIRCLE 使用 `detect_circle_start()`/`detect_get_targets()`，DISK_CENTER 使用 `detect_disk_center_start()`/`detect_get_disk_center()`；三个接口共享同一套 `AdvanceVisual_Update()`、控制权、丢失和超时处理流程。
 - 详细配置、参数含义与上板验收流程见 `MDK-ARM/docs/下位机闭环与安全修复说明.md`。
