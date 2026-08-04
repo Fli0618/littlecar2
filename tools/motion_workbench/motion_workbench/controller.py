@@ -65,7 +65,7 @@ class MotionWorkbenchController(QObject):
         self._plan_waiting = False
         self._plan_active_step_name = ""
         self._plan_reason = ""
-        self._plan_path_id = 100
+        self._next_path_id = 1
         self._upload = PathUploadSnapshot(PathUploadState.IDLE, None)
         self._coordinate_sync_state = CoordinateSyncState.MAP_UNCALIBRATED
         self._map_calibration_known = False
@@ -283,6 +283,16 @@ class MotionWorkbenchController(QObject):
         self._set_upload(PathUploadState.UPLOADING, path_id, "正在上传路径")
         self.session.upload_path(begin, chunks, commit)
 
+    def allocate_path_id(self) -> int:
+        """Allocate one uint32 path id for manual and workflow uploads."""
+        active = self._upload.path_id
+        for _ in range(0xFFFFFFFF):
+            path_id = self._next_path_id
+            self._next_path_id = 1 if path_id >= 0xFFFFFFFF else path_id + 1
+            if path_id != active:
+                return path_id
+        raise RuntimeError("没有可用路径 ID")
+
     def start_path(self, path_id: int) -> None:
         if self._upload.state != PathUploadState.COMMITTED or self._upload.path_id != path_id:
             self.status_changed.emit("路径尚未提交，不能启动")
@@ -432,8 +442,7 @@ class MotionWorkbenchController(QObject):
             self._finish_plan(PlanExecutionState.FAILED, str(error))
 
     def _send_plan_path(self, points: list[PathPosePoint]) -> None:
-        path_id = self._plan_path_id
-        self._plan_path_id += 1
+        path_id = self.allocate_path_id()
         begin, chunks, commit = build_path_upload(path_id, points)
         self._set_upload(PathUploadState.UPLOADING, path_id, "正在上传流程路径")
         self.session.upload_and_start_path(begin, chunks, commit, PathStartCommand(path_id))
