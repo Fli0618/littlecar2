@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import math
 import sys
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, QPen, QPolygonF, QShortcut
@@ -23,6 +24,9 @@ from .models import BezierPathSegment, CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPat
 from .sim import SimulationFrame, build_plan_timeline
 from .sweep import SweepGeometry, build_continuous_segment_sweep, build_goto_sweep, build_rotation_sweep, car_polygon
 from .storage import list_plans, load_plan, rename_plan, save_plan
+
+if TYPE_CHECKING:
+    from motion_workbench.models import RuntimeUiSnapshot
 
 PLATFORMS = ((550, 550), (1400, 550), (550, 1400), (1400, 1400))
 MATERIAL_SLOTS = ((75, 1050), (75, 1200), (75, 1350), (1050, 2325), (1200, 2325), (1350, 2325))
@@ -232,12 +236,10 @@ class MapEditorWidget(QWidget):
 
     plan_changed = Signal(object)
     candidate_selected = Signal(int)
-    runtime_overlay_changed = Signal(object)
     hardware_enabled_changed = Signal(bool)
     single_step_requested = Signal(int)
     continuous_requested = Signal(int)
     execution_stop_requested = Signal()
-    execution_state_changed = Signal(object)
     start_frame_changed = Signal(object)
     calibration_state_changed = Signal(bool)
 
@@ -322,17 +324,6 @@ class MapEditorWidget(QWidget):
                 raise IndexError("候选项索引超出范围")
             self.activate_node(index)
 
-    def set_runtime_pose(self, pose: Pose | None) -> None:
-            """显示工作台运行时车辆位姿；传入 None 可清除覆盖层。"""
-            if pose is not None and not isinstance(pose, Pose):
-                raise TypeError("pose 必须是 Pose 实例或 None")
-            self._runtime_pose = copy.deepcopy(pose)
-            self.runtime_overlay_changed.emit(copy.deepcopy(self._runtime_pose))
-            self._refresh_runtime_overlay()
-
-    def clear_runtime_pose(self) -> None:
-            self.set_runtime_pose(None)
-
     @property
     def execution_enabled(self) -> bool:
             """实机执行许可状态；控件仅发射信号，不直接访问串口。"""
@@ -349,86 +340,24 @@ class MapEditorWidget(QWidget):
             self.execution_enabled_switch.blockSignals(False)
             self._refresh_execution_controls()
             self.hardware_enabled_changed.emit(enabled)
-            self._emit_execution_state()
 
     def set_hardware_motion_active(self, active: bool) -> None:
             self._hardware_motion_active = bool(active)
 
-    def apply_runtime_snapshot(self, snapshot: object) -> None:
+    def apply_runtime_snapshot(self, snapshot: RuntimeUiSnapshot) -> None:
             """Apply the controller's 40 ms snapshot without rebuilding the scene."""
-            actual = getattr(snapshot, "actual_pose", None)
-            target = getattr(snapshot, "target_pose", None)
+            actual = snapshot.actual_pose
+            target = snapshot.target_pose
             self._runtime_pose = None if actual is None else Pose(actual.x_mm, actual.y_mm, actual.yaw_deg)
             self._execution_target = None if target is None else Pose(target.x_mm, target.y_mm, target.yaw_deg)
-            self._path_runtime = getattr(snapshot, "path_telemetry", None)
-            if getattr(snapshot, "trace_reset", False):
+            self._execution_error = snapshot.error
+            self._path_runtime = snapshot.path_telemetry
+            self._hardware_motion_active = snapshot.motion_active
+            if snapshot.trace_reset:
                 self._execution_trace = []
             self._execution_trace.extend(Pose(point.x_mm, point.y_mm, point.yaw_deg)
-                                         for point in getattr(snapshot, "new_trace_points", ()))
+                                         for point in snapshot.new_trace_points)
             self._refresh_runtime_overlay()
-
-    def set_execution_target(self, pose: Pose | None) -> None:
-            self._execution_target = self._copy_execution_pose(pose)
-            self._refresh_runtime_overlay()
-            self._emit_execution_state()
-
-    def set_execution_actual_pose(self, pose: Pose | None) -> None:
-            """更新实车位姿；只刷新运行叠加项，适用于高频遥测。"""
-            self._runtime_pose = self._copy_execution_pose(pose)
-            self.runtime_overlay_changed.emit(copy.deepcopy(self._runtime_pose))
-            self._refresh_runtime_overlay()
-            self._emit_execution_state()
-
-    def set_execution_error(self, x_mm: float, y_mm: float, yaw_deg: float) -> None:
-            self._execution_error = (float(x_mm), float(y_mm), float(yaw_deg))
-            self._refresh_execution_status()
-            self._emit_execution_state()
-
-    def set_execution_trace(self, poses: list[Pose]) -> None:
-            if not all(isinstance(pose, Pose) for pose in poses):
-                raise TypeError("poses 必须全部为 Pose 实例")
-            self._execution_trace = copy.deepcopy(poses)
-            self._refresh_runtime_overlay()
-            self._emit_execution_state()
-
-    def set_path_runtime(self, telemetry: object | None) -> None:
-            """更新路径投影和 lookahead 运行时覆盖层，不重绘编辑场景。"""
-            self._path_runtime = copy.deepcopy(telemetry)
-            self._refresh_runtime_overlay()
-
-    def update_execution_telemetry(self, *, target: Pose | None = None, actual: Pose | None = None,
-                                   error: tuple[float, float, float] | None = None,
-                                   trace: list[Pose] | None = None) -> None:
-            """批量写入工作台遥测；参数为 None 时保持原值，避免完整场景重绘。"""
-            if target is not None:
-                self._execution_target = self._copy_execution_pose(target)
-            if actual is not None:
-                self._runtime_pose = self._copy_execution_pose(actual)
-                self.runtime_overlay_changed.emit(copy.deepcopy(self._runtime_pose))
-            if error is not None:
-                if len(error) != 3:
-                    raise ValueError("error 必须包含 x、y、航向三个误差")
-                self._execution_error = tuple(float(value) for value in error)
-            if trace is not None:
-                self.set_execution_trace(trace)
-                return
-            self._refresh_runtime_overlay()
-            self._emit_execution_state()
-
-    def _copy_execution_pose(self, pose: Pose | None) -> Pose | None:
-            if pose is not None and not isinstance(pose, Pose):
-                raise TypeError("pose 必须是 Pose 实例或 None")
-            return copy.deepcopy(pose)
-
-    def _emit_execution_state(self) -> None:
-            self.execution_state_changed.emit({
-                "enabled": self._execution_enabled,
-                "target": copy.deepcopy(self._execution_target),
-                "actual": copy.deepcopy(self._runtime_pose),
-                "error": self._execution_error,
-                "trace": copy.deepcopy(self._execution_trace),
-                "status": getattr(self, "_execution_status", "等待工作台命令"),
-            })
 
     def set_execution_status(self, status: str) -> None:
             """更新工作台提供的运行状态文本，不触发运动或串口操作。"""
@@ -436,7 +365,6 @@ class MapEditorWidget(QWidget):
                 raise TypeError("status 必须是字符串")
             self._execution_status = status
             self._refresh_execution_status()
-            self._emit_execution_state()
 
     def _refresh_execution_controls(self) -> None:
             for button in (self.execution_step_button, self.execution_run_button, self.execution_stop_button):
