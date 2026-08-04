@@ -65,6 +65,44 @@ class PathConfigState:
 
 
 @dataclass(frozen=True)
+class GotoControlConfigSnapshot:
+    """Runtime-tunable single-pose GOTO controller values."""
+
+    profile_threshold_mm: float
+    cruise_speed_mm_s: float
+    accel_mm_s2: float
+    decel_mm_s2: float
+    capture_distance_mm: float
+    capture_speed_mm_s: float
+    final_max_speed_mm_s: float
+    cross_track_kp: float
+    cross_track_kd: float
+    cross_track_correction_max_mm_s: float
+    yaw_cruise_rate_deg_s: float
+    yaw_accel_deg_s2: float
+    yaw_decel_deg_s2: float
+    yaw_capture_equivalent_mm: float
+    yaw_capture_rate_deg_s: float
+    yaw_final_max_rate_deg_s: float
+    yaw_correction_kp: float
+    yaw_correction_kd: float
+    yaw_correction_max_deg_s: float
+    correction_open_loop_ms: int
+    correction_blend_ms: int
+
+    def to_dict(self) -> dict[str, float | int]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class GotoControlConfigState:
+    """One single-pose GOTO configuration revision reported by the controller."""
+
+    revision: int
+    config: GotoControlConfigSnapshot
+
+
+@dataclass(frozen=True)
 class MotionGoal:
     x_mm: float
     y_mm: float
@@ -213,6 +251,7 @@ class PathTelemetry:
 # 兼容已有工具调用方；新代码应使用带 Snapshot 后缀的类型名。
 PidConfig = PidConfigSnapshot
 PathControlConfig = PathConfigSnapshot
+GotoControlConfig = GotoControlConfigSnapshot
 
 
 class TunerError(RuntimeError):

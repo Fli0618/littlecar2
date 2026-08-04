@@ -6,13 +6,14 @@ from typing import Callable, TypeVar
 
 from PySide6.QtCore import QObject, Signal
 
-from ..models import (AckResponse, GotoStrategySnapshot, MotionGoal, PathBeginCommand, PathChunkCommand,
+from ..models import (AckResponse, GotoControlConfigState, GotoControlConfigSnapshot, GotoStrategySnapshot,
+                      MotionGoal, PathBeginCommand, PathChunkCommand,
                       PathCommitCommand, PathConfigState, PathControlConfig, PathStartCommand,
                       PathTelemetry, PidConfig, PidConfigState, Telemetry)
 from ..serial_client import SerialClient
 
 
-ConfigState = TypeVar("ConfigState", PidConfigState, PathConfigState)
+ConfigState = TypeVar("ConfigState", PidConfigState, PathConfigState, GotoControlConfigState)
 
 
 class SessionController(QObject):
@@ -33,6 +34,8 @@ class SessionController(QObject):
     path_started = Signal(int)
     path_config_read = Signal(object)
     path_config_applied = Signal(object)
+    goto_control_config_read = Signal(object)
+    goto_control_config_applied = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -44,13 +47,14 @@ class SessionController(QObject):
         self._motion_generation = 0
 
     def connect_port(self, port: str, baud: int) -> None:
-        def action() -> tuple[SerialClient, PidConfigState, PathConfigState, GotoStrategySnapshot]:
+        def action() -> tuple[SerialClient, PidConfigState, PathConfigState, GotoControlConfigState, GotoStrategySnapshot]:
             client = SerialClient.open_port(port, baud)
             try:
                 client.start()
                 client.add_telemetry_callback(self._handle_telemetry)
                 client.add_path_telemetry_callback(self._handle_path_telemetry)
-                return client, client.get_pid(), client.get_path_config(), client.get_goto_strategy()
+                return (client, client.get_pid(), client.get_path_config(),
+                        client.get_goto_control_config(), client.get_goto_strategy())
             except Exception:
                 client.close()
                 raise
@@ -60,11 +64,12 @@ class SessionController(QObject):
 
     def _connected(self, future: object) -> None:
         try:
-            client, pid, path_config, goto_strategy = future.result()  # type: ignore[attr-defined]
+            client, pid, path_config, goto_config, goto_strategy = future.result()  # type: ignore[attr-defined]
             self._client = client
             self.connected = True
             self.pid_read.emit(pid)
             self.path_config_read.emit(path_config)
+            self.goto_control_config_read.emit(goto_config)
             self.goto_strategy_read.emit(goto_strategy)
             self.connection_changed.emit(True)
             self.status.emit("已连接，参数已同步")
@@ -167,6 +172,23 @@ class SessionController(QObject):
 
         self._submit(lambda client: self._wait_for_revision(
             client.restore_path_config(), client.get_path_config, "路径参数"), restored)
+
+    def read_goto_control_config(self) -> None:
+        self._submit(lambda client: client.get_goto_control_config(), self.goto_control_config_read.emit)
+
+    def apply_goto_control_config(self, config: GotoControlConfigSnapshot) -> None:
+        self._submit(lambda client: self._wait_for_revision(
+            client.set_goto_control_config(config), client.get_goto_control_config, "GOTO 参数"),
+            self.goto_control_config_applied.emit)
+
+    def restore_goto_control_config(self) -> None:
+        def restored(value: object) -> None:
+            assert isinstance(value, GotoControlConfigState)
+            self.status.emit(f"GOTO 参数已恢复默认，修订号 {value.revision}")
+            self.goto_control_config_read.emit(value)
+
+        self._submit(lambda client: self._wait_for_revision(
+            client.restore_goto_control_config(), client.get_goto_control_config, "GOTO 参数"), restored)
 
     def set_yaw_source(self, source: str) -> None:
         self._submit(lambda client: client.set_yaw_source(source),

@@ -9,7 +9,8 @@ import math
 from pathlib import Path
 import re
 
-from .models import GotoStrategySnapshot, PathConfigState, PidConfig, PidConfigState, Telemetry
+from .models import (GotoControlConfigState, GotoStrategySnapshot, PathConfigState, PidConfig,
+                     PidConfigState, Telemetry)
 from .protocol import telemetry_csv_row
 
 DEFAULT_PROFILES_DIR = Path(__file__).resolve().parents[1] / "profiles"
@@ -46,6 +47,28 @@ PATH_C_MACROS = (
     ("ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM", "initial_lookahead_mm"),
     ("ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM", "final_capture_distance_mm"),
     ("ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S", "final_capture_speed_mm_s"),
+)
+
+GOTO_CONTROL_C_MACROS = (
+    ("ADVANCE_MOTION_GOTO_PROFILE_THRESHOLD_MM", "profile_threshold_mm"),
+    ("ADVANCE_MOTION_GOTO_CRUISE_SPEED_MM_S", "cruise_speed_mm_s"),
+    ("ADVANCE_MOTION_GOTO_ACCEL_MM_S2", "accel_mm_s2"),
+    ("ADVANCE_MOTION_GOTO_DECEL_MM_S2", "decel_mm_s2"),
+    ("ADVANCE_MOTION_GOTO_CAPTURE_DISTANCE_MM", "capture_distance_mm"),
+    ("ADVANCE_MOTION_GOTO_CAPTURE_SPEED_MM_S", "capture_speed_mm_s"),
+    ("ADVANCE_MOTION_GOTO_FINAL_MAX_SPEED_MM_S", "final_max_speed_mm_s"),
+    ("ADVANCE_MOTION_GOTO_CROSS_TRACK_KP", "cross_track_kp"),
+    ("ADVANCE_MOTION_GOTO_CROSS_TRACK_KD", "cross_track_kd"),
+    ("ADVANCE_MOTION_GOTO_CROSS_TRACK_MAX_MM_S", "cross_track_correction_max_mm_s"),
+    ("ADVANCE_MOTION_GOTO_YAW_CRUISE_DEG_S", "yaw_cruise_rate_deg_s"),
+    ("ADVANCE_MOTION_GOTO_YAW_ACCEL_DEG_S2", "yaw_accel_deg_s2"),
+    ("ADVANCE_MOTION_GOTO_YAW_DECEL_DEG_S2", "yaw_decel_deg_s2"),
+    ("ADVANCE_MOTION_GOTO_YAW_CAPTURE_EQUIVALENT_MM", "yaw_capture_equivalent_mm"),
+    ("ADVANCE_MOTION_GOTO_YAW_CAPTURE_RATE_DEG_S", "yaw_capture_rate_deg_s"),
+    ("ADVANCE_MOTION_GOTO_YAW_FINAL_MAX_DEG_S", "yaw_final_max_rate_deg_s"),
+    ("ADVANCE_MOTION_GOTO_YAW_CORRECTION_KP", "yaw_correction_kp"),
+    ("ADVANCE_MOTION_GOTO_YAW_CORRECTION_KD", "yaw_correction_kd"),
+    ("ADVANCE_MOTION_GOTO_YAW_CORRECTION_MAX_DEG_S", "yaw_correction_max_deg_s"),
 )
 
 
@@ -115,10 +138,21 @@ def _macro_lines(config: object, mappings: tuple[tuple[str, str], ...]) -> list[
             for macro, field in mappings]
 
 
+def _macro_u32_lines(config: object) -> list[str]:
+    values = (
+        ("ADVANCE_MOTION_GOTO_CORRECTION_OPEN_LOOP_MS", config.correction_open_loop_ms),
+        ("ADVANCE_MOTION_GOTO_CORRECTION_BLEND_MS", config.correction_blend_ms),
+    )
+    if not all(isinstance(value, int) and 0 <= value <= 0xFFFFFFFF for _, value in values):
+        raise ValueError("GOTO correction times must be uint32 values")
+    return [f"#define {macro} ((uint32_t){value}U)" for macro, value in values]
+
+
 def export_motion_config_header(
     pid_state: PidConfigState,
     path_state: PathConfigState,
     goto_strategy: GotoStrategySnapshot,
+    goto_control_state: GotoControlConfigState,
 ) -> str:
     """Export board-confirmed motion values as a replaceable C configuration header."""
     strategy_value = "1U" if goto_strategy.large_yaw_align_enabled else "0U"
@@ -133,6 +167,7 @@ def export_motion_config_header(
         " *",
         f" * PID revision: {pid_state.revision}",
         f" * Path revision: {path_state.revision}",
+        f" * GOTO control revision: {goto_control_state.revision}",
         " *",
         " * 将本文件复制到 Core/Inc/advance_motion_config.h，",
         " * 然后重新编译并烧录 STM32。",
@@ -155,6 +190,10 @@ def export_motion_config_header(
         "",
         "/* 末段捕获。 */",
         *_macro_lines(path_state.config, PATH_C_MACROS[18:]),
+        "",
+        "/* 单点 GOTO 分阶段速度规划与捕获。 */",
+        *_macro_lines(goto_control_state.config, GOTO_CONTROL_C_MACROS),
+        *_macro_u32_lines(goto_control_state.config),
         "",
         "/* 组合 GOTO 默认策略。 */",
         f"#define ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE ((uint8_t){strategy_value})",

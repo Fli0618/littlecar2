@@ -222,6 +222,7 @@ class ConnectionMotionPanel(QWidget):
     def set_available_ports(self, ports: list[str]) -> None:
         self.port.clear()
         self.port.addItems(ports)
+        self._update_connection_controls()
 
     def set_connected(self, connected: bool) -> None:
         self._connected = connected
