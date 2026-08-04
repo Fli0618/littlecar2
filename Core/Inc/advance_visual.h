@@ -88,10 +88,7 @@ typedef enum
 void AdvanceVisual_Init(void);
 void AdvanceVisual_Update(void);
 
-/*
- * 顺序业务可直接调用本接口，例如：
- * 函数仅等待 TIM6 推进视觉控制并在终态返回。
- */
+/* 顺序业务可直接调用以下阻塞接口；函数仅等待 TIM6 推进视觉控制并在终态返回。 */
 AdvanceVisual_State_t AdvanceVisual_AlignColorBlocking(ColorType_t color);
 AdvanceVisual_State_t AdvanceVisual_AlignDiskCenterBlocking(void);
 AdvanceVisual_State_t AdvanceVisual_AlignCircleBlocking(CircleType_t number);
