@@ -42,14 +42,34 @@ class MotionCompatibilityTests(unittest.TestCase):
         self.assertEqual(protocol.VERSION, 3)
         self.assertEqual(protocol.TELEMETRY_PAYLOAD_SIZE, 96)
         self.assertEqual(protocol.PATH_TELEMETRY_PAYLOAD_SIZE, 94)
-        self.assertEqual(len(protocol.PATH_CONFIG_FIELDS), 20)
+        self.assertEqual(protocol.PATH_CONFIG_FIELDS, (
+            "kp_cross_track", "kd_cross_track_velocity", "kp_yaw", "kd_yaw_rate",
+            "cruise_speed_mm_s", "max_yaw_rate_deg_s", "accel_mm_s2", "decel_mm_s2",
+            "max_lateral_accel_mm_s2", "curvature_preview_mm", "curvature_ff_time_s",
+            "lookahead_min_mm", "lookahead_base_mm", "lookahead_speed_gain_s",
+            "lookahead_curve_gain_mm", "lookahead_max_mm", "lookahead_rate_mm_s",
+            "initial_lookahead_mm", "final_capture_distance_mm", "final_capture_speed_mm_s",
+        ))
         self.assertEqual(len(protocol.encode_path_config(self._path_config())), 80)
         self.assertEqual(len(protocol.encode_path_config(self._path_config())) + 4, 84)
         self.assertRegex(source, r"#define COMM_TUNER_PROTOCOL_VERSION \(\(uint8_t\)3U\)")
-        for name, value in vars(protocol).items():
-            if name.startswith("CMD_") and isinstance(value, int):
-                macro = "COMM_TUNER_" + name
-                self.assertRegex(source, rf"#define {macro} \(\(uint8_t\)0x{value:02X}U\)")
+        commands = {
+            "CMD_GET_PID": 0x01, "CMD_SET_PID": 0x02, "CMD_RESTORE_PID": 0x03,
+            "CMD_GOTO_POSE": 0x10, "CMD_STOP": 0x11, "CMD_HEARTBEAT": 0x12,
+            "CMD_SET_YAW_SOURCE": 0x13, "CMD_RESET_ORIGIN": 0x14,
+            "CMD_GET_GOTO_STRATEGY": 0x15, "CMD_SET_GOTO_STRATEGY": 0x16,
+            "CMD_PATH_BEGIN": 0x20, "CMD_PATH_CHUNK": 0x21, "CMD_PATH_COMMIT": 0x22,
+            "CMD_PATH_START": 0x23, "CMD_PATH_ABORT": 0x24, "CMD_PATH_STATUS": 0x25,
+            "CMD_GET_PATH_CONFIG": 0x26, "CMD_SET_PATH_CONFIG": 0x27,
+            "CMD_RESTORE_PATH_CONFIG": 0x28, "CMD_ACK": 0x80, "CMD_PID": 0x81,
+            "CMD_TELEMETRY": 0x82, "CMD_GOTO_STRATEGY": 0x83,
+            "CMD_PATH_STATUS_RESPONSE": 0x84, "CMD_PATH_TELEMETRY": 0x85,
+            "CMD_PATH_CONFIG": 0x86, "CMD_ERROR": 0xE0,
+        }
+        for name, value in commands.items():
+            self.assertEqual(getattr(protocol, name), value)
+            macro = "COMM_TUNER_" + name
+            self.assertRegex(source, rf"#define {macro} \(\(uint8_t\)0x{value:02X}U\)")
 
     @staticmethod
     def _path_config():
