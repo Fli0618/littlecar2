@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -17,7 +19,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pid_tuner.models import MotionGoal, PidConfig, PidConfigState
+from pid_tuner.models import (
+    GotoControlConfig,
+    GotoControlConfigState,
+    MotionGoal,
+    PidConfig,
+    PidConfigState,
+)
 
 from .models import TargetPose
 
@@ -141,6 +149,117 @@ class WorkbenchPidControlPanel(QWidget):
     def set_motion_active(self, active: bool) -> None:
         self._motion_active = active
         self.large_yaw_align.setEnabled(self._connected and not active)
+
+
+class GotoControlConfigPanel(QWidget):
+    """Board-confirmed GOTO controller and speed-planning configuration."""
+
+    read_requested = Signal()
+    apply_requested = Signal(object)
+    restore_requested = Signal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.config_inputs: dict[str, ProtectedDoubleSpinBox | QSpinBox] = {}
+        self._connected = False
+        layout = QVBoxLayout(self)
+        groups = (
+            ("距离速度规划", (
+                ("profile_threshold_mm", "规划距离阈值 (mm)", 40.0, 1.0, 5000.0, 10.0),
+                ("cruise_speed_mm_s", "巡航速度 (mm/s)", 700.0, 1.0, 1500.0, 10.0),
+                ("accel_mm_s2", "加速度 (mm/s2)", 1200.0, 1.0, 5000.0, 10.0),
+                ("decel_mm_s2", "减速度 (mm/s2)", 1500.0, 1.0, 5000.0, 10.0),
+                ("capture_distance_mm", "捕获距离 (mm)", 40.0, 1.0, 2000.0, 5.0),
+                ("capture_speed_mm_s", "捕获速度 (mm/s)", 100.0, 1.0, 1500.0, 5.0),
+                ("final_max_speed_mm_s", "末段最大速度 (mm/s)", 160.0, 1.0, 1500.0, 10.0),
+            )),
+            ("位置修正", (
+                ("cross_track_kp", "横向修正 Kp", 0.98, 0.0, 20.0, 0.01),
+                ("cross_track_kd", "横向修正 Kd", 0.62, 0.0, 20.0, 0.01),
+                ("cross_track_correction_max_mm_s", "横向最大修正 (mm/s)", 150.0, 0.0, 1500.0, 10.0),
+            )),
+            ("航向速度规划", (
+                ("yaw_cruise_rate_deg_s", "巡航角速度 (deg/s)", 80.0, 1.0, 180.0, 5.0),
+                ("yaw_accel_deg_s2", "角加速度 (deg/s2)", 200.0, 1.0, 5000.0, 10.0),
+                ("yaw_decel_deg_s2", "角减速度 (deg/s2)", 280.0, 1.0, 5000.0, 10.0),
+                ("yaw_capture_equivalent_mm", "航向捕获等效距离 (mm)", 40.0, 1.0, 2000.0, 5.0),
+                ("yaw_capture_rate_deg_s", "航向捕获角速度 (deg/s)", 15.0, 1.0, 180.0, 5.0),
+                ("yaw_final_max_rate_deg_s", "末段最大角速度 (deg/s)", 25.0, 1.0, 180.0, 5.0),
+            )),
+            ("航向修正", (
+                ("yaw_correction_kp", "航向修正 Kp", 1.42, 0.0, 20.0, 0.01),
+                ("yaw_correction_kd", "航向修正 Kd", 0.427, 0.0, 20.0, 0.01),
+                ("yaw_correction_max_deg_s", "航向最大修正 (deg/s)", 20.0, 0.0, 180.0, 5.0),
+            )),
+        )
+        for title, fields in groups:
+            group = QGroupBox(title)
+            form = QFormLayout(group)
+            for name, label, value, minimum, maximum, step in fields:
+                box = protected_number(value, minimum, maximum, step, decimals=3)
+                self.config_inputs[name] = box
+                form.addRow(label, box)
+            layout.addWidget(group)
+
+        timeout_group = QGroupBox("时间约束")
+        timeout_form = QFormLayout(timeout_group)
+        for name, label, value in (
+            ("correction_open_loop_ms", "开环修正时间 (ms)", 500),
+            ("correction_blend_ms", "修正融合时间 (ms)", 1000),
+        ):
+            box = QSpinBox()
+            box.setRange(0, 5000 if name == "correction_open_loop_ms" else 10000)
+            box.setSingleStep(10)
+            box.setValue(value)
+            self.config_inputs[name] = box
+            timeout_form.addRow(label, box)
+        layout.addWidget(timeout_group)
+
+        buttons = QHBoxLayout()
+        self.read_config = QPushButton("读取 GOTO 参数")
+        self.apply_config = QPushButton("应用 GOTO 参数")
+        self.restore_config = QPushButton("恢复默认值")
+        for button in (self.read_config, self.apply_config, self.restore_config):
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+        self.status = QLabel("GOTO 参数：未同步")
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+        layout.addStretch()
+        self.read_config.clicked.connect(self.read_requested)
+        self.apply_config.clicked.connect(self._emit_config)
+        self.restore_config.clicked.connect(self.restore_requested)
+        self.set_connected(False)
+
+    def current_config(self) -> GotoControlConfig:
+        values = {name: box.value() for name, box in self.config_inputs.items()}
+        if values["capture_distance_mm"] < values["profile_threshold_mm"]:
+            raise ValueError("捕获距离必须不小于规划距离阈值")
+        if values["capture_speed_mm_s"] > values["cruise_speed_mm_s"]:
+            raise ValueError("捕获速度不能超过巡航速度")
+        return GotoControlConfig(**values)
+
+    def set_config_state(self, state: GotoControlConfigState) -> None:
+        for name, value in state.config.to_dict().items():
+            self.config_inputs[name].setValue(value)
+        self.status.setText(f"GOTO 参数修订号：{state.revision}")
+
+    def set_connected(self, connected: bool) -> None:
+        self._connected = connected
+        self.read_config.setEnabled(connected)
+        self.apply_config.setEnabled(connected)
+        self.restore_config.setEnabled(connected)
+        if not connected:
+            self.status.setText("GOTO 参数：未同步")
+
+    def _emit_config(self) -> None:
+        try:
+            config = self.current_config()
+        except ValueError as error:
+            self.status.setText(str(error))
+            return
+        self.apply_requested.emit(config)
+        self.status.setText("GOTO 参数：等待板端确认")
 
 
 def _number(value: float = 0.0, minimum: float = -5000.0, maximum: float = 5000.0) -> QDoubleSpinBox:

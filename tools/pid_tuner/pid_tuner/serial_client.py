@@ -8,20 +8,21 @@ import threading
 import time
 from typing import Protocol
 
-from .models import (AckResponse, BoardError, GotoStrategySnapshot, MotionGoal,
+from .models import (AckResponse, BoardError, GotoControlConfigState, GotoControlConfigSnapshot,
+                     GotoStrategySnapshot, MotionGoal,
                      PathBeginCommand, PathChunkCommand, PathCommitCommand,
                      PathConfigState, PathControlConfig, PathStartCommand, PathStatus,
                      PathTelemetry, PidConfig, PidConfigState, RequestTimeout, Telemetry)
 from .protocol import (
-    CMD_ACK, CMD_ERROR, CMD_GET_GOTO_STRATEGY, CMD_GET_PID, CMD_GOTO_POSE,
-    CMD_GOTO_STRATEGY, CMD_HEARTBEAT, CMD_PATH_ABORT, CMD_PATH_BEGIN, CMD_PATH_CHUNK,
+    CMD_ACK, CMD_ERROR, CMD_GET_GOTO_CONFIG, CMD_GET_GOTO_STRATEGY, CMD_GET_PID, CMD_GOTO_CONFIG,
+    CMD_GOTO_POSE, CMD_GOTO_STRATEGY, CMD_HEARTBEAT, CMD_PATH_ABORT, CMD_PATH_BEGIN, CMD_PATH_CHUNK,
     CMD_GET_PATH_CONFIG, CMD_PATH_COMMIT, CMD_PATH_CONFIG, CMD_PATH_START,
     CMD_PATH_TELEMETRY, CMD_PATH_STATUS, CMD_PATH_STATUS_RESPONSE, CMD_PID, CMD_RESET_ORIGIN, CMD_RESTORE_PATH_CONFIG,
-    CMD_RESTORE_PID,
-    CMD_SET_GOTO_STRATEGY, CMD_SET_PATH_CONFIG, CMD_SET_PID, CMD_SET_YAW_SOURCE,
+    CMD_RESTORE_GOTO_CONFIG, CMD_RESTORE_PID,
+    CMD_SET_GOTO_CONFIG, CMD_SET_GOTO_STRATEGY, CMD_SET_PATH_CONFIG, CMD_SET_PID, CMD_SET_YAW_SOURCE,
     CMD_STOP, CMD_TELEMETRY, Frame, ProtocolError, StreamDecoder,
-    decode_ack, decode_goto_strategy, decode_path_config, decode_path_status, decode_pid,
-    decode_path_telemetry, decode_telemetry, encode_frame, encode_goal, encode_goto_strategy,
+    decode_ack, decode_goto_config, decode_goto_strategy, decode_path_config, decode_path_status, decode_pid,
+    decode_path_telemetry, decode_telemetry, encode_frame, encode_goal, encode_goto_config, encode_goto_strategy,
     encode_path_begin, encode_path_chunk, encode_path_commit, encode_path_config,
     encode_path_start, encode_pid, encode_yaw_source,
 )
@@ -124,6 +125,15 @@ class SerialClient:
 
     def restore_path_config(self) -> AckResponse:
         return self._request_ack(CMD_RESTORE_PATH_CONFIG)
+
+    def get_goto_control_config(self) -> GotoControlConfigState:
+        return decode_goto_config(self._request_frame(CMD_GET_GOTO_CONFIG, expected_command=CMD_GOTO_CONFIG))
+
+    def set_goto_control_config(self, config: GotoControlConfigSnapshot) -> AckResponse:
+        return self._request_ack(CMD_SET_GOTO_CONFIG, encode_goto_config(config))
+
+    def restore_goto_control_config(self) -> AckResponse:
+        return self._request_ack(CMD_RESTORE_GOTO_CONFIG)
 
     def goto(self, goal: MotionGoal) -> AckResponse:
         return self._request_ack(CMD_GOTO_POSE, encode_goal(goal))

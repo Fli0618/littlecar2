@@ -2,16 +2,16 @@ import struct
 import unittest
 
 from pid_tuner.protocol import (
-    CMD_ACK, CMD_GOTO_STRATEGY, CMD_PATH_CONFIG, CMD_PID, CMD_TELEMETRY, decode_ack,
-    decode_goto_strategy, decode_path_config, decode_pid, encode_goal,
-    encode_goto_strategy, encode_path_config, encode_yaw_source,
+    CMD_ACK, CMD_GOTO_CONFIG, CMD_GOTO_STRATEGY, CMD_PATH_CONFIG, CMD_PID, CMD_TELEMETRY, decode_ack,
+    decode_goto_config, decode_goto_strategy, decode_path_config, decode_pid, encode_goal,
+    encode_goto_config, encode_goto_strategy, encode_path_config, encode_yaw_source,
     Frame,
     StreamDecoder,
     crc16_ccitt_false,
     decode_path_telemetry, decode_telemetry,
     encode_frame,
 )
-from pid_tuner.models import PathControlConfig
+from pid_tuner.models import GotoControlConfigSnapshot, PathControlConfig
 
 
 PATH_CONFIG = PathControlConfig(
@@ -22,6 +22,11 @@ PATH_CONFIG = PathControlConfig(
 
 
 class ProtocolTests(unittest.TestCase):
+    GOTO_CONFIG = GotoControlConfigSnapshot(
+        500.0, 820.0, 800.0, 1000.0, 180.0, 150.0, 300.0, 0.8, 0.2, 180.0,
+        90.0, 180.0, 220.0, 25.0, 20.0, 60.0, 1.2, 0.3, 45.0, 250, 500,
+    )
+
     def test_crc_reference_vector(self) -> None:
         self.assertEqual(crc16_ccitt_false(b"123456789"), 0x29B1)
 
@@ -84,6 +89,26 @@ class ProtocolTests(unittest.TestCase):
                 **{**PATH_CONFIG.to_dict(), "lookahead_min_mm": 200.0,
                    "lookahead_max_mm": 100.0}
             ))
+
+    def test_goto_config_round_trip_has_fixed_84_and_88_byte_layouts(self) -> None:
+        encoded = encode_goto_config(self.GOTO_CONFIG)
+        self.assertEqual(len(encoded), 84)
+        state = decode_goto_config(Frame(CMD_GOTO_CONFIG, 4, struct.pack("<I", 11) + encoded))
+        self.assertEqual(state.revision, 11)
+        for actual, expected in zip(state.config.to_dict().values(), self.GOTO_CONFIG.to_dict().values()):
+            self.assertAlmostEqual(actual, expected, places=5)
+        with self.assertRaises(ValueError):
+            decode_goto_config(Frame(CMD_GOTO_CONFIG, 4, encoded))
+
+    def test_goto_config_rejects_out_of_range_values(self) -> None:
+        invalid = GotoControlConfigSnapshot(
+            **{**self.GOTO_CONFIG.to_dict(), "capture_distance_mm": 600.0})
+        with self.assertRaises(ValueError):
+            encode_goto_config(invalid)
+        invalid = GotoControlConfigSnapshot(
+            **{**self.GOTO_CONFIG.to_dict(), "correction_blend_ms": 10001})
+        with self.assertRaises(ValueError):
+            encode_goto_config(invalid)
 
     def test_response_decoders_require_matching_frame_shapes(self) -> None:
         pid = decode_pid(Frame(CMD_PID, 5, struct.pack("<I6f", 8, 1, 2, 3, 4, 5, 6)))
