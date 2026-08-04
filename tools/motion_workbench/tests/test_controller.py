@@ -5,7 +5,8 @@ import unittest
 from PySide6.QtCore import QObject, Signal
 
 from pid_tuner.models import MotionGoal, Telemetry
-from map_planner.models import BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace, Waypoint
+from map_planner.models import (BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan,
+                                RotateInPlace, StepTurnNode, StepTurnPathSegment, Waypoint)
 
 from motion_workbench.controller import MotionWorkbenchController
 from motion_workbench.models import (CoordinateSyncState, PathUploadState, PlanExecutionState,
@@ -92,6 +93,16 @@ class ControllerTests(unittest.TestCase):
         session.telemetry.emit(self._telemetry(2))
         self.assertEqual(len(session.uploaded), 2)
         self.assertEqual(len(session.paths_started), 2)
+
+    def test_step_turn_uploads_once_and_starts_one_path(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        controller.set_plan(Plan(steps=[StepTurnPathSegment(
+            [StepTurnNode(200, 0), StepTurnNode(200, 200)], 50,
+        )]))
+
+        self.assertTrue(controller.start_single(0))
+        self.assertEqual(len(session.uploaded), 1)
+        self.assertEqual(len(session.paths_started), 1)
 
     def test_workflow_failure_and_stop_terminate_without_advancing_cursor(self) -> None:
         session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]

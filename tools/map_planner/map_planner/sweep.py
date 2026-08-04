@@ -6,7 +6,9 @@ from dataclasses import dataclass
 import math
 
 from .geometry import wrap_deg
-from .models import CAR_SIZE_MM, Pose, RotateInPlace, Waypoint
+from .models import (BezierPathSegment, CAR_SIZE_MM, ContinuousPathSegment, PathPosePoint,
+                     Plan, Pose, RotateInPlace, StepTurnPathSegment, Waypoint)
+from .path_materializer import materialize_steps
 from .sim import Simulation
 
 
@@ -74,4 +76,35 @@ def build_continuous_segment_sweep(start: Pose, target: Pose) -> SweepGeometry:
     """连续路径的纯几何扫掠；不复用停点动作的加减速模型。"""
 
     poses = [start, *_interpolate_poses(start, target)]
+    return SweepGeometry(poses, [car_polygon(pose) for pose in poses])
+
+
+def build_path_segment_sweep(
+    start: Pose, step: ContinuousPathSegment | BezierPathSegment | StepTurnPathSegment,
+) -> SweepGeometry:
+    """Build a geometric sweep after expanding a path segment through the shared materializer."""
+
+    materialized = materialize_steps(Plan(steps=[
+        Waypoint(start.x_mm, start.y_mm, start.yaw_deg), step,
+    ]))
+    resolved = materialized[-1]
+    if isinstance(resolved, BezierPathSegment):
+        from .bezier import generate_bezier_path_points
+        points = generate_bezier_path_points(
+            start,
+            (resolved.control_1_x_mm, resolved.control_1_y_mm),
+            (resolved.control_2_x_mm, resolved.control_2_y_mm),
+            Pose(resolved.end_x_mm, resolved.end_y_mm, resolved.end_yaw_deg),
+            resolved.yaw_mode,
+            resolved.sample_spacing_mm,
+        )
+    elif isinstance(resolved, ContinuousPathSegment):
+        points = resolved.points
+    else:
+        raise ValueError("路径步骤无法展开为连续路径")
+    if len(points) < 2:
+        raise ValueError("连续路径至少需要两个点")
+    poses = [Pose(points[0].x_mm, points[0].y_mm, points[0].yaw_deg)]
+    for target in points[1:]:
+        poses.extend(_interpolate_poses(poses[-1], Pose(target.x_mm, target.y_mm, target.yaw_deg)))
     return SweepGeometry(poses, [car_polygon(pose) for pose in poses])
