@@ -7,6 +7,7 @@ from .bezier import generate_bezier_path_points
 from .models import (BezierPathSegment, ContinuousPathSegment, Plan, Pose, RotateInPlace,
                      StepTurnPathSegment, Waypoint)
 from .path_materializer import materialize_plan
+from .step_turn import analyze_step_turn_path
 
 class CodeGenerationError(ValueError):
     """Raised when a plan cannot be represented by the blocking STM32 API."""
@@ -94,6 +95,7 @@ def generate_task_function(plan: Plan, function_name: str,
     """Generate one sequential STM32 task function in the selected result-handling mode."""
 
     validate_task_function_name(function_name); validate_plan_for_blocking_codegen(plan)
+    source_steps = plan.steps
     try:
         plan = materialize_plan(plan)
     except ValueError as error:
@@ -113,6 +115,8 @@ def generate_task_function(plan: Plan, function_name: str,
             lines += [f"    /* {index}. ROTATE */", *goto(current_x, current_y, step.yaw_deg)]
         elif isinstance(step, ContinuousPathSegment):
             name = f"path_{index}"
+            lines += _step_turn_codegen_summary(current_x, current_y, current_yaw,
+                                                source_steps[index - 1], len(step.points))
             lines.append(f"    static const AdvanceMotion_PathPoint_t {name}[] = {{")
             lines += [f"        {{{format_c_float(p.x_mm)}, {format_c_float(p.y_mm)}, {format_c_float(p.yaw_deg)}}}," for p in step.points]
             lines += ["    };", f"    /* {index}. FOLLOW PATH */"]
@@ -129,3 +133,18 @@ def generate_task_function(plan: Plan, function_name: str,
             else: lines += [f"    (void)AdvanceMotion_FollowPathBlocking({name}, sizeof({name}) / sizeof({name}[0]));"]
             current_x, current_y, current_yaw = points[-1].x_mm, points[-1].y_mm, points[-1].yaw_deg
     return "\n".join([*lines, "}", ""])
+
+
+def _step_turn_codegen_summary(x_mm: float, y_mm: float, yaw_deg: float,
+                               source_step: object, point_count: int) -> list[str]:
+    if not isinstance(source_step, StepTurnPathSegment):
+        return []
+    result = analyze_step_turn_path(Pose(x_mm, y_mm, yaw_deg), source_step)
+    turns = [corner for corner in result.corners if corner.has_step]
+    angles = [corner.angle_deg for corner in result.corners]
+    distances = [corner.effective_distance_mm for corner in turns if corner.effective_distance_mm is not None]
+    return [
+        "    /* STEP TURN: "
+        f"nodes={len(source_step.route_points) + 1}, turns={len(turns)}, points={point_count}, "
+        f"max_angle={max(angles, default=0.0):.1f} deg, min_step={min(distances, default=0.0):.1f} mm */",
+    ]
