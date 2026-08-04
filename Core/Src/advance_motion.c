@@ -1547,7 +1547,8 @@ void AdvanceMotion_Update(void)
       float normal_velocity;
       float normal_accel_ff_mm_s2;
       float normal_velocity_ff_mm_s;
-      float correction;
+      float normal_feedback_mm_s;
+      float normal_command_mm_s;
 
       tx /= length;
       ty /= length;
@@ -1562,16 +1563,17 @@ void AdvanceMotion_Update(void)
           g_path_config_active.max_lateral_accel_mm_s2);
       normal_velocity_ff_mm_s =
           g_path_config_active.curvature_ff_time_s * normal_accel_ff_mm_s2;
-      /* cross_track 与 normal_velocity 正值表示左侧，correction 正值施加右法向；
+      /* cross_track 与 normal_velocity 正值表示左侧，normal_command 正值施加右法向；
        * 左弯的正曲率内侧在左方，因此曲率前馈使用负号。 */
-      correction = (g_path_config_active.kp_cross_track * g_path.cross_track_mm) +
-                   (g_path_config_active.kd_cross_track_velocity * normal_velocity) -
-                   normal_velocity_ff_mm_s;
+      normal_feedback_mm_s =
+          (g_path_config_active.kp_cross_track * g_path.cross_track_mm) +
+          (g_path_config_active.kd_cross_track_velocity * normal_velocity);
+      normal_command_mm_s = normal_feedback_mm_s - normal_velocity_ff_mm_s;
       g_path.measured_normal_velocity_mm_s = normal_velocity;
       g_path.normal_velocity_ff_mm_s = normal_velocity_ff_mm_s;
-      g_path.normal_feedback_mm_s = correction;
-      vx_world_mm_s = g_path.feedforward_vx_mm_s + (ty * correction);
-      vy_world_mm_s = g_path.feedforward_vy_mm_s - (tx * correction);
+      g_path.normal_feedback_mm_s = normal_feedback_mm_s;
+      vx_world_mm_s = g_path.feedforward_vx_mm_s + (ty * normal_command_mm_s);
+      vy_world_mm_s = g_path.feedforward_vy_mm_s - (tx * normal_command_mm_s);
       vmax_mm_s = g_path.reference_speed_mm_s;
       raw_linear_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
                                     (vy_world_mm_s * vy_world_mm_s));

@@ -36,6 +36,49 @@ class PlanExecutionState(str, Enum):
     CANCELED = "CANCELED"
 
 
+class PathUploadState(str, Enum):
+    """Lifecycle of one uploaded board path."""
+
+    IDLE = "IDLE"
+    UPLOADING = "UPLOADING"
+    COMMITTED = "COMMITTED"
+    STARTING = "STARTING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    ABORTED = "ABORTED"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True)
+class PathUploadSnapshot:
+    state: PathUploadState
+    path_id: int | None
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeUiSnapshot:
+    """The one 40 ms UI update consumes this immutable runtime view."""
+
+    actual_pose: TargetPose | None
+    target_pose: TargetPose | None
+    error: tuple[float, float, float] | None
+    path_telemetry: PathTelemetry | None
+    new_trace_points: tuple[TargetPose, ...]
+    trace_reset: bool
+    pose_valid: bool
+    motion_active: bool
+
+
+class CoordinateSyncState(str, Enum):
+    MAP_UNCALIBRATED = "MAP_UNCALIBRATED"
+    BOARD_ORIGIN_UNKNOWN = "BOARD_ORIGIN_UNKNOWN"
+    RESET_PENDING = "RESET_PENDING"
+    WAITING_ZERO_TELEMETRY = "WAITING_ZERO_TELEMETRY"
+    SYNCED = "SYNCED"
+    MISMATCH = "MISMATCH"
+
+
 @dataclass(frozen=True)
 class PlanExecution:
     """A small immutable workflow snapshot suitable for Qt views."""

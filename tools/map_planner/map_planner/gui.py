@@ -18,7 +18,7 @@ from .geometry import (StartFrame, paper_heading_to_world_yaw, paper_to_world, p
                        rebase_plan_world_frame, wrap_deg)
 from .codegen_c import CodeGenerationError, validate_plan_for_blocking_codegen
 from .codegen_dialog import CodeGenerationDialog
-from .bezier import generate_bezier_path_points
+from .bezier import bezier_tangent_yaw, generate_bezier_path_points
 from .models import BezierPathSegment, CAR_SIZE_MM, FIELD_SIZE_MM, ContinuousPathSegment, Obstacle, PathPosePoint, Plan, Pose, RotateInPlace, Waypoint
 from .sim import SimulationFrame, build_plan_timeline
 from .sweep import SweepGeometry, build_continuous_segment_sweep, build_goto_sweep, build_rotation_sweep, car_polygon
@@ -238,6 +238,8 @@ class MapEditorWidget(QWidget):
     continuous_requested = Signal(int)
     execution_stop_requested = Signal()
     execution_state_changed = Signal(object)
+    start_frame_changed = Signal(object)
+    calibration_state_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
             super().__init__(parent)
@@ -257,6 +259,7 @@ class MapEditorWidget(QWidget):
             self._execution_trace: list[Pose] = []
             self._path_runtime = None
             self._execution_enabled = False
+            self._hardware_motion_active = False
             self._start_preview_paper: QPointF | None = None
             self._runtime_car_item = None
             self._runtime_direction_item = None
@@ -347,6 +350,22 @@ class MapEditorWidget(QWidget):
             self._refresh_execution_controls()
             self.hardware_enabled_changed.emit(enabled)
             self._emit_execution_state()
+
+    def set_hardware_motion_active(self, active: bool) -> None:
+            self._hardware_motion_active = bool(active)
+
+    def apply_runtime_snapshot(self, snapshot: object) -> None:
+            """Apply the controller's 40 ms snapshot without rebuilding the scene."""
+            actual = getattr(snapshot, "actual_pose", None)
+            target = getattr(snapshot, "target_pose", None)
+            self._runtime_pose = None if actual is None else Pose(actual.x_mm, actual.y_mm, actual.yaw_deg)
+            self._execution_target = None if target is None else Pose(target.x_mm, target.y_mm, target.yaw_deg)
+            self._path_runtime = getattr(snapshot, "path_telemetry", None)
+            if getattr(snapshot, "trace_reset", False):
+                self._execution_trace = []
+            self._execution_trace.extend(Pose(point.x_mm, point.y_mm, point.yaw_deg)
+                                         for point in getattr(snapshot, "new_trace_points", ()))
+            self._refresh_runtime_overlay()
 
     def set_execution_target(self, pose: Pose | None) -> None:
             self._execution_target = self._copy_execution_pose(pose)
@@ -628,11 +647,19 @@ class MapEditorWidget(QWidget):
             elif mode == "obstacle": self.obstacle_button.setChecked(True)
 
     def begin_start(self, kind):
-            self.push_undo(); self.calibration_pending=True
+            if self._hardware_motion_active or self.timer.isActive():
+                raise RuntimeError("执行期间不能修改起点帧")
+            self.calibration_pending=True
+            if kind in START_PRESETS:
+                paper_x_mm, paper_y_mm = START_PRESETS[kind]
+                self.set_start_frame(paper_x_mm, paper_y_mm, self.plan.start_heading_deg,
+                                     start_kind="zone_1" if kind.endswith("1") else "zone_2")
+            else:
+                self.set_start_frame(self.plan.start_paper_x_mm, self.plan.start_paper_y_mm,
+                                     self.plan.start_heading_deg, start_kind="custom")
             if kind == "自定义":
-                self.plan.start_kind="custom"; self.calibration_stage="position"; self.mode="calibrate"; self.view.mode="calibrate"; self._start_preview_paper=None; self.calibration_label.setText("在地图上点击自定义起点位置"); self.update_calibration_ui(); self.redraw(); return
-            self.plan.start_kind="zone_1" if kind.endswith("1") else "zone_2"
-            self.plan.start_paper_x_mm, self.plan.start_paper_y_mm = START_PRESETS[kind]; self.calibration_stage="heading"; self.mode="calibrate"; self.view.mode="calibrate"; self.update_calibration_ui(); self.redraw()
+                self.calibration_stage="position"; self.mode="calibrate"; self.view.mode="calibrate"; self._start_preview_paper=None; self.calibration_label.setText("在地图上点击自定义起点位置"); self.update_calibration_ui(); self.redraw(); return
+            self.calibration_stage="heading"; self.mode="calibrate"; self.view.mode="calibrate"; self.update_calibration_ui(); self.redraw()
 
     def on_map_click(self, x, y, shift=False):
             if math.isnan(x):
@@ -644,7 +671,8 @@ class MapEditorWidget(QWidget):
                 self.add_obstacle(QPointF(x, y)); return
             if self.mode == "calibrate":
                 if self.calibration_stage != "position": return
-                self.plan.start_paper_x_mm, self.plan.start_paper_y_mm = x, y; self._start_preview_paper=None; self.calibration_stage="heading"; self.update_calibration_ui(); self.redraw(); return
+                self.set_start_frame(x, y, self.plan.start_heading_deg)
+                self._start_preview_paper=None; self.calibration_stage="heading"; self.update_calibration_ui(); self.redraw(); return
             # 添加动作统一在鼠标释放时提交，避免一次点击同时触发 clicked/released 两次。
             if self.mode != "add" or self.calibration_pending: return
 
@@ -661,7 +689,8 @@ class MapEditorWidget(QWidget):
 
     def rotate_start_clockwise(self):
             if self.calibration_pending and self.calibration_stage == "heading":
-                self.push_undo(); self.plan.start_heading_deg=((self.plan.start_heading_deg-90+180)%360)-180
+                self.set_start_frame(self.plan.start_paper_x_mm, self.plan.start_paper_y_mm,
+                                     self.plan.start_heading_deg - 90.0)
             elif not self.calibration_pending:
                 self.set_start_frame(self.plan.start_paper_x_mm, self.plan.start_paper_y_mm,
                                      self.plan.start_heading_deg - 90.0)
@@ -669,24 +698,33 @@ class MapEditorWidget(QWidget):
                 return
             self.redraw(); self.status.setText("起点朝向已顺时针旋转 90 度，可继续右击修改或点击确认朝向。")
 
-    def set_start_frame(self, paper_x_mm: float, paper_y_mm: float, heading_deg: float) -> None:
+    def set_start_frame(self, paper_x_mm: float, paper_y_mm: float, heading_deg: float,
+                        *, preserve_paper_geometry: bool = True, start_kind: str | None = None) -> None:
             """修改起点帧并对固定世界目标执行一次性重基准。"""
-            if self._execution_enabled or self.timer.isActive():
+            if self._hardware_motion_active or self.timer.isActive():
                 raise RuntimeError("执行期间不能修改起点帧")
             old = StartFrame(self.plan.start_paper_x_mm, self.plan.start_paper_y_mm,
                              self.plan.start_heading_deg)
             new = StartFrame(float(paper_x_mm), float(paper_y_mm), float(heading_deg))
             self.push_undo()
-            self.plan = rebase_plan_world_frame(self.plan, old, new)
+            if preserve_paper_geometry and self.plan.steps:
+                self.plan = rebase_plan_world_frame(self.plan, old, new)
+            else:
+                self.plan.start_paper_x_mm = new.paper_x_mm
+                self.plan.start_paper_y_mm = new.paper_y_mm
+                self.plan.start_heading_deg = new.heading_deg
+            if start_kind is not None:
+                self.plan.start_kind = start_kind
             self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw()
             self.rebuild_timeline_after_edit(); self.plan_changed.emit(copy.deepcopy(self.plan))
+            self.start_frame_changed.emit(new)
 
     def confirm_start_heading(self):
             if not (self.calibration_pending and self.calibration_stage == "heading"): return
             if not self.is_valid_start_pose():
                 self.status.setText("起点车体进入黄色禁行区或超出场地边界，无法确认。")
                 return
-            self.calibration_pending=False; self.calibration_stage="complete"; self.set_mode("select"); self.update_calibration_ui(); self.redraw(); self.status.setText("起点标定完成。")
+            self.calibration_pending=False; self.calibration_stage="complete"; self.set_mode("select"); self.update_calibration_ui(); self.redraw(); self.status.setText("起点标定完成。"); self.calibration_state_changed.emit(True)
 
     def select_box(self,rect,append):
             if not append: self.scene.clearSelection()
@@ -1007,7 +1045,12 @@ class MapEditorWidget(QWidget):
                     point = step.points[-1]
                     pose = Pose(point.x_mm, point.y_mm, point.yaw_deg)
                 elif isinstance(step, BezierPathSegment):
-                    pose = Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg)
+                    end_yaw = (bezier_tangent_yaw(
+                        pose, (step.control_1_x_mm, step.control_1_y_mm),
+                        (step.control_2_x_mm, step.control_2_y_mm),
+                        Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg), 1.0)
+                        if step.yaw_mode == "tangent" else step.end_yaw_deg)
+                    pose = Pose(step.end_x_mm, step.end_y_mm, end_yaw)
             return pose
 
     def _step_anchor(self, index):
@@ -1109,8 +1152,9 @@ class MapEditorWidget(QWidget):
             self.bezier_end_yaw_label.setVisible(not tangent); self.bezier_end_yaw.setVisible(not tangent)
 
     def _bezier_tangent_yaw(self, start, step):
-            dx, dy = step.control_1_x_mm - start.x_mm, step.control_1_y_mm - start.y_mm
-            return wrap_deg(math.degrees(math.atan2(dx, dy))) if math.hypot(dx, dy) > 1e-6 else start.yaw_deg
+            return bezier_tangent_yaw(start, (step.control_1_x_mm, step.control_1_y_mm),
+                                      (step.control_2_x_mm, step.control_2_y_mm),
+                                      Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg), 0.0)
 
     def _insert_bezier_start_rotation(self, index, yaw):
             previous = self._step_end_pose(index)

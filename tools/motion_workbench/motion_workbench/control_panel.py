@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QFocusEvent, QMouseEvent, QWheelEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -82,11 +83,12 @@ class WorkbenchPidControlPanel(QWidget):
     read_requested = Signal()
     apply_requested = Signal(object)
     restore_requested = Signal()
+    goto_strategy_changed = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
-        defaults = (1.0, 0.03, 0.1, 2.0, 0.05, 0.08)
-        self.pid = [protected_number(value, 0.0, 100000.0, 0.01) for value in defaults]
+        defaults = (1.5, 0.10, 0.78, 2.50, 1.0, 0.80)
+        self.pid = [protected_number(value, 0.0, 20.0, 0.01) for value in defaults]
         self.read_pid = QPushButton("读取 PID")
         self.apply_pid = QPushButton("应用 PID")
         self.restore_pid = QPushButton("恢复默认")
@@ -99,9 +101,12 @@ class WorkbenchPidControlPanel(QWidget):
         form.addRow(self.read_pid)
         form.addRow(self.apply_pid)
         form.addRow(self.restore_pid)
+        self.large_yaw_align = QCheckBox("大航向误差时先对准航向")
+        form.addRow(self.large_yaw_align)
         self.read_pid.clicked.connect(self.read_requested)
         self.apply_pid.clicked.connect(lambda: self.apply_requested.emit(self.current_pid()))
         self.restore_pid.clicked.connect(self.restore_requested)
+        self.large_yaw_align.toggled.connect(self.goto_strategy_changed)
 
     def current_pid(self) -> PidConfig:
         return PidConfig(*(widget.value() for widget in self.pid))
@@ -109,6 +114,14 @@ class WorkbenchPidControlPanel(QWidget):
     def set_pid(self, pid: PidConfig) -> None:
         for widget, value in zip(self.pid, pid.to_dict().values()):
             widget.setValue(value)
+
+    def set_goto_strategy(self, enabled: bool) -> None:
+        self.large_yaw_align.blockSignals(True)
+        self.large_yaw_align.setChecked(enabled)
+        self.large_yaw_align.blockSignals(False)
+
+    def set_motion_active(self, active: bool) -> None:
+        self.large_yaw_align.setEnabled(not active)
 
 
 def _number(value: float = 0.0, minimum: float = -5000.0, maximum: float = 5000.0) -> QDoubleSpinBox:

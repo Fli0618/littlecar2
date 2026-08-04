@@ -4,7 +4,7 @@ from map_planner.geometry import (paper_to_world, paper_heading_to_world_yaw,
                                   StartFrame, polyline_length, rebase_plan_world_frame,
                                   world_to_paper,
                                   world_yaw_to_paper_heading, wrap_deg)
-from map_planner.models import Plan, Pose, Waypoint
+from map_planner.models import BezierPathSegment, Plan, Pose, Waypoint
 
 
 class GeometryTests(unittest.TestCase):
@@ -43,3 +43,16 @@ class GeometryTests(unittest.TestCase):
     def test_wrap_and_polyline_length(self):
         self.assertEqual(wrap_deg(190), -170)
         self.assertAlmostEqual(polyline_length([Pose(0, 0), Pose(3, 4), Pose(6, 8)]), 10)
+
+    def test_rebase_keeps_tangent_bezier_endpoint_heading_derived_from_geometry(self):
+        old = StartFrame(1000, 1000, 0)
+        new = StartFrame(1200, 800, 90)
+        plan = Plan(start_paper_x_mm=old.paper_x_mm, start_paper_y_mm=old.paper_y_mm,
+                    start_heading_deg=old.heading_deg,
+                    steps=[BezierPathSegment(0, 100, 100, 300, 200, 300, 17, "tangent")])
+
+        rebased = rebase_plan_world_frame(plan, old, new)
+
+        step = rebased.steps[0]
+        self.assertEqual(step.yaw_mode, "tangent")
+        self.assertEqual(step.end_yaw_deg, 17)

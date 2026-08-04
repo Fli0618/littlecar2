@@ -8,9 +8,10 @@ import threading
 import time
 from typing import Protocol
 
-from .models import (BoardError, MotionGoal, PathBeginCommand, PathChunkCommand,
-                     PathCommitCommand, PathControlConfig, PathStartCommand,
-                     PathStatus, PathTelemetry, PidConfig, RequestTimeout, Telemetry)
+from .models import (AckResponse, BoardError, GotoStrategySnapshot, MotionGoal,
+                     PathBeginCommand, PathChunkCommand, PathCommitCommand,
+                     PathConfigState, PathControlConfig, PathStartCommand, PathStatus,
+                     PathTelemetry, PidConfig, PidConfigState, RequestTimeout, Telemetry)
 from .protocol import (
     CMD_ACK, CMD_ERROR, CMD_GET_GOTO_STRATEGY, CMD_GET_PID, CMD_GOTO_POSE,
     CMD_GOTO_STRATEGY, CMD_HEARTBEAT, CMD_PATH_ABORT, CMD_PATH_BEGIN, CMD_PATH_CHUNK,
@@ -19,7 +20,7 @@ from .protocol import (
     CMD_RESTORE_PID,
     CMD_SET_GOTO_STRATEGY, CMD_SET_PATH_CONFIG, CMD_SET_PID, CMD_SET_YAW_SOURCE,
     CMD_STOP, CMD_TELEMETRY, Frame, ProtocolError, StreamDecoder,
-    decode_goto_strategy, decode_path_config, decode_path_status, decode_pid,
+    decode_ack, decode_goto_strategy, decode_path_config, decode_path_status, decode_pid,
     decode_path_telemetry, decode_telemetry, encode_frame, encode_goal, encode_goto_strategy,
     encode_path_begin, encode_path_chunk, encode_path_commit, encode_path_config,
     encode_path_start, encode_pid, encode_yaw_source,
@@ -102,79 +103,68 @@ class SerialClient:
     def get_telemetry(self, timeout_s: float | None = None) -> Telemetry:
         return self._telemetry.get(timeout=timeout_s)
 
-    def get_pid(self) -> tuple[int, PidConfig]:
-        return decode_pid(self.request(CMD_GET_PID, expected_command=CMD_PID).payload)
+    def get_pid(self) -> PidConfigState:
+        return decode_pid(self._request_frame(CMD_GET_PID, expected_command=CMD_PID))
 
-    def set_pid(self, config: PidConfig) -> int:
-        frame = self.request(CMD_SET_PID, encode_pid(config))
-        if len(frame.payload) != 5:
-            raise ProtocolError("SET_PID ACK payload must contain a revision")
-        return int.from_bytes(frame.payload[1:], "little")
+    def set_pid(self, config: PidConfig) -> AckResponse:
+        return self._request_ack(CMD_SET_PID, encode_pid(config))
 
-    def restore_pid(self) -> int:
-        frame = self.request(CMD_RESTORE_PID)
-        if len(frame.payload) != 5:
-            raise ProtocolError("RESTORE_PID ACK payload must contain a revision")
-        return int.from_bytes(frame.payload[1:], "little")
+    def restore_pid(self) -> AckResponse:
+        return self._request_ack(CMD_RESTORE_PID)
 
-    def get_path_config(self) -> tuple[int, PathControlConfig]:
-        frame = self.request(CMD_GET_PATH_CONFIG, expected_command=CMD_PATH_CONFIG)
-        return decode_path_config(frame.payload)
+    def get_path_config(self) -> PathConfigState:
+        return decode_path_config(self._request_frame(CMD_GET_PATH_CONFIG, expected_command=CMD_PATH_CONFIG))
 
     def get_path_status(self) -> PathStatus:
         return decode_path_status(
-            self.request(CMD_PATH_STATUS, expected_command=CMD_PATH_STATUS_RESPONSE))
+            self._request_frame(CMD_PATH_STATUS, expected_command=CMD_PATH_STATUS_RESPONSE))
 
-    def set_path_config(self, config: PathControlConfig) -> int:
-        frame = self.request(CMD_SET_PATH_CONFIG, encode_path_config(config))
-        if len(frame.payload) != 5:
-            raise ProtocolError("SET_PATH_CONFIG ACK payload must contain a revision")
-        return int.from_bytes(frame.payload[1:], "little")
+    def set_path_config(self, config: PathControlConfig) -> AckResponse:
+        return self._request_ack(CMD_SET_PATH_CONFIG, encode_path_config(config))
 
-    def restore_path_config(self) -> int:
-        frame = self.request(CMD_RESTORE_PATH_CONFIG)
-        if len(frame.payload) != 5:
-            raise ProtocolError("RESTORE_PATH_CONFIG ACK payload must contain a revision")
-        return int.from_bytes(frame.payload[1:], "little")
+    def restore_path_config(self) -> AckResponse:
+        return self._request_ack(CMD_RESTORE_PATH_CONFIG)
 
-    def goto(self, goal: MotionGoal) -> None:
-        self.request(CMD_GOTO_POSE, encode_goal(goal))
+    def goto(self, goal: MotionGoal) -> AckResponse:
+        return self._request_ack(CMD_GOTO_POSE, encode_goal(goal))
 
-    def set_yaw_source(self, source: str) -> None:
-        self.request(CMD_SET_YAW_SOURCE, encode_yaw_source(source))
+    def set_yaw_source(self, source: str) -> AckResponse:
+        return self._request_ack(CMD_SET_YAW_SOURCE, encode_yaw_source(source))
 
-    def get_goto_strategy(self) -> bool:
-        return decode_goto_strategy(
-            self.request(CMD_GET_GOTO_STRATEGY, expected_command=CMD_GOTO_STRATEGY).payload)
+    def get_goto_strategy(self) -> GotoStrategySnapshot:
+        return decode_goto_strategy(self._request_frame(CMD_GET_GOTO_STRATEGY, expected_command=CMD_GOTO_STRATEGY))
 
-    def set_goto_strategy(self, large_yaw_align_enabled: bool) -> None:
-        self.request(CMD_SET_GOTO_STRATEGY, encode_goto_strategy(large_yaw_align_enabled))
+    def set_goto_strategy(self, large_yaw_align_enabled: bool) -> AckResponse:
+        return self._request_ack(CMD_SET_GOTO_STRATEGY, encode_goto_strategy(large_yaw_align_enabled))
 
-    def reset_origin(self) -> None:
-        self.request(CMD_RESET_ORIGIN)
+    def reset_origin(self) -> AckResponse:
+        return self._request_ack(CMD_RESET_ORIGIN)
 
-    def heartbeat(self) -> None:
-        self.request(CMD_HEARTBEAT)
+    def heartbeat(self) -> AckResponse:
+        return self._request_ack(CMD_HEARTBEAT)
 
-    def stop(self) -> None:
-        self.request(CMD_STOP)
+    def stop(self) -> AckResponse:
+        return self._request_ack(CMD_STOP)
 
-    def path_begin(self, command: PathBeginCommand) -> None:
-        self.request(CMD_PATH_BEGIN, encode_path_begin(command))
+    def path_begin(self, command: PathBeginCommand) -> AckResponse:
+        return self._request_ack(CMD_PATH_BEGIN, encode_path_begin(command))
 
-    def path_chunk(self, command: PathChunkCommand) -> None:
-        self.request(CMD_PATH_CHUNK, encode_path_chunk(command))
+    def path_chunk(self, command: PathChunkCommand) -> AckResponse:
+        return self._request_ack(CMD_PATH_CHUNK, encode_path_chunk(command))
 
-    def path_commit(self, command: PathCommitCommand) -> None:
-        self.request(CMD_PATH_COMMIT, encode_path_commit(command))
+    def path_commit(self, command: PathCommitCommand) -> AckResponse:
+        return self._request_ack(CMD_PATH_COMMIT, encode_path_commit(command))
 
-    def path_start(self, command: PathStartCommand) -> None:
-        self.request(CMD_PATH_START, encode_path_start(command))
+    def path_start(self, command: PathStartCommand) -> AckResponse:
+        return self._request_ack(CMD_PATH_START, encode_path_start(command))
 
-    def path_abort(self) -> None:
-        self.request(CMD_PATH_ABORT)
+    def path_abort(self) -> AckResponse:
+        return self._request_ack(CMD_PATH_ABORT)
 
-    def request(self, command: int, payload: bytes = b"", expected_command: int = CMD_ACK) -> Frame:
+    def _request_ack(self, command: int, payload: bytes = b"") -> AckResponse:
+        return decode_ack(self._request_frame(command, payload), command)
+
+    def _request_frame(self, command: int, payload: bytes = b"", expected_command: int = CMD_ACK) -> Frame:
         self.start()
         with self._request_lock:
             sequence = self._next_sequence()
