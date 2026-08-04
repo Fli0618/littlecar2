@@ -35,12 +35,12 @@ class MotionCompatibilityTests(unittest.TestCase):
         config = (ROOT / "Core" / "Inc" / "advance_motion_config.h").read_text(encoding="utf-8")
         source = (ROOT / "Core" / "Src" / "advance_motion.c").read_text(encoding="utf-8")
 
-        self.assertRegex(config, r"#define ADVANCE_MOTION_CONFIG_SCHEMA_VERSION \(\(uint32_t\)1U\)")
         for name in self.CONFIG_MACROS:
             self.assertEqual(len(re.findall(rf"^#define {name}\b", config, re.MULTILINE)), 1)
             self.assertNotRegex(header, rf"^#define {name}\b")
         self.assertIn('#include "advance_motion_config.h"', source)
-        self.assertIn("#if ADVANCE_MOTION_CONFIG_SCHEMA_VERSION != ((uint32_t)1U)", source)
+        self.assertNotIn("ADVANCE_MOTION_CONFIG_SCHEMA_VERSION", config)
+        self.assertNotIn("ADVANCE_MOTION_CONFIG_SCHEMA_VERSION", source)
         self.assertRegex(source, r"g_pid_default = \{\s*\.kp_pos =", re.DOTALL)
         self.assertRegex(source, r"g_path_config_default = \{\s*\.kp_cross_track =", re.DOTALL)
         for field in (

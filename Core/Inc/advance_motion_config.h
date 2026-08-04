@@ -3,8 +3,6 @@
 
 #include <stdint.h>
 
-#define ADVANCE_MOTION_CONFIG_SCHEMA_VERSION ((uint32_t)1U)
-
 /* 单点位姿 PID。 */
 #define ADVANCE_MOTION_DEFAULT_KP_POS (1.5f)
 #define ADVANCE_MOTION_DEFAULT_KI_POS (0.10f)

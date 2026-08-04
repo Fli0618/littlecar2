@@ -1,14 +1,6 @@
 #include "advance_motion.h"
 #include "advance_motion_config.h"
 
-#if !defined(ADVANCE_MOTION_CONFIG_SCHEMA_VERSION)
-#error "advance_motion_config.h is missing ADVANCE_MOTION_CONFIG_SCHEMA_VERSION"
-#endif
-
-#if ADVANCE_MOTION_CONFIG_SCHEMA_VERSION != ((uint32_t)1U)
-#error "advance_motion_config.h schema version mismatch"
-#endif
-
 typedef struct
 {
   WorldGoalPose2D_t goal;

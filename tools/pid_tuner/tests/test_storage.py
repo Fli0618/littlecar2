@@ -43,10 +43,10 @@ class StorageTests(unittest.TestCase):
         macros = re.findall(r"^#define (ADVANCE_MOTION_[A-Z0-9_]+) ", exported, re.MULTILINE)
         expected = [name for name, _ in PID_C_MACROS + PATH_C_MACROS]
         expected.append("ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE")
-        self.assertEqual([name for name in macros if name != "ADVANCE_MOTION_CONFIG_SCHEMA_VERSION"], expected)
+        self.assertEqual(macros, expected)
         self.assertEqual(len(macros), len(set(macros)))
         self.assertTrue(exported.startswith("#ifndef __ADVANCE_MOTION_CONFIG_H__\n"))
-        self.assertIn("#define ADVANCE_MOTION_CONFIG_SCHEMA_VERSION ((uint32_t)1U)", exported)
+        self.assertNotIn("ADVANCE_MOTION_CONFIG_SCHEMA_VERSION", exported)
         self.assertIn("#define ADVANCE_MOTION_PATH_CRUISE_SPEED_MM_S (14.0f)", exported)
         self.assertIn("#define ADVANCE_MOTION_DEFAULT_KI_POS (0.0f)", exported)
         self.assertIn("#define ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE ((uint8_t)1U)", exported)

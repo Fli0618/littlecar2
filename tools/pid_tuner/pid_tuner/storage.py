@@ -138,8 +138,6 @@ def export_motion_config_header(
         " * 然后重新编译并烧录 STM32。",
         " */",
         "",
-        "#define ADVANCE_MOTION_CONFIG_SCHEMA_VERSION ((uint32_t)1U)",
-        "",
         "/* 单点位姿 PID。 */",
         *_macro_lines(pid_state.config, PID_C_MACROS),
         "",
