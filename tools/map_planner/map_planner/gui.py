@@ -238,6 +238,8 @@ class MapEditorWidget(QWidget):
     continuous_requested = Signal(int)
     execution_stop_requested = Signal()
     execution_state_changed = Signal(object)
+    start_frame_changed = Signal(object)
+    calibration_state_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
             super().__init__(parent)
@@ -257,6 +259,7 @@ class MapEditorWidget(QWidget):
             self._execution_trace: list[Pose] = []
             self._path_runtime = None
             self._execution_enabled = False
+            self._hardware_motion_active = False
             self._start_preview_paper: QPointF | None = None
             self._runtime_car_item = None
             self._runtime_direction_item = None
@@ -347,6 +350,22 @@ class MapEditorWidget(QWidget):
             self._refresh_execution_controls()
             self.hardware_enabled_changed.emit(enabled)
             self._emit_execution_state()
+
+    def set_hardware_motion_active(self, active: bool) -> None:
+            self._hardware_motion_active = bool(active)
+
+    def apply_runtime_snapshot(self, snapshot: object) -> None:
+            """Apply the controller's 40 ms snapshot without rebuilding the scene."""
+            actual = getattr(snapshot, "actual_pose", None)
+            target = getattr(snapshot, "target_pose", None)
+            self._runtime_pose = None if actual is None else Pose(actual.x_mm, actual.y_mm, actual.yaw_deg)
+            self._execution_target = None if target is None else Pose(target.x_mm, target.y_mm, target.yaw_deg)
+            self._path_runtime = getattr(snapshot, "path_telemetry", None)
+            if getattr(snapshot, "trace_reset", False):
+                self._execution_trace = []
+            self._execution_trace.extend(Pose(point.x_mm, point.y_mm, point.yaw_deg)
+                                         for point in getattr(snapshot, "new_trace_points", ()))
+            self._refresh_runtime_overlay()
 
     def set_execution_target(self, pose: Pose | None) -> None:
             self._execution_target = self._copy_execution_pose(pose)
@@ -628,7 +647,7 @@ class MapEditorWidget(QWidget):
             elif mode == "obstacle": self.obstacle_button.setChecked(True)
 
     def begin_start(self, kind):
-            if self._execution_enabled or self.timer.isActive():
+            if self._hardware_motion_active or self.timer.isActive():
                 raise RuntimeError("执行期间不能修改起点帧")
             self.calibration_pending=True
             if kind in START_PRESETS:
@@ -680,26 +699,32 @@ class MapEditorWidget(QWidget):
             self.redraw(); self.status.setText("起点朝向已顺时针旋转 90 度，可继续右击修改或点击确认朝向。")
 
     def set_start_frame(self, paper_x_mm: float, paper_y_mm: float, heading_deg: float,
-                        *, start_kind: str | None = None) -> None:
+                        *, preserve_paper_geometry: bool = True, start_kind: str | None = None) -> None:
             """修改起点帧并对固定世界目标执行一次性重基准。"""
-            if self._execution_enabled or self.timer.isActive():
+            if self._hardware_motion_active or self.timer.isActive():
                 raise RuntimeError("执行期间不能修改起点帧")
             old = StartFrame(self.plan.start_paper_x_mm, self.plan.start_paper_y_mm,
                              self.plan.start_heading_deg)
             new = StartFrame(float(paper_x_mm), float(paper_y_mm), float(heading_deg))
             self.push_undo()
-            self.plan = rebase_plan_world_frame(self.plan, old, new)
+            if preserve_paper_geometry and self.plan.steps:
+                self.plan = rebase_plan_world_frame(self.plan, old, new)
+            else:
+                self.plan.start_paper_x_mm = new.paper_x_mm
+                self.plan.start_paper_y_mm = new.paper_y_mm
+                self.plan.start_heading_deg = new.heading_deg
             if start_kind is not None:
                 self.plan.start_kind = start_kind
             self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw()
             self.rebuild_timeline_after_edit(); self.plan_changed.emit(copy.deepcopy(self.plan))
+            self.start_frame_changed.emit(new)
 
     def confirm_start_heading(self):
             if not (self.calibration_pending and self.calibration_stage == "heading"): return
             if not self.is_valid_start_pose():
                 self.status.setText("起点车体进入黄色禁行区或超出场地边界，无法确认。")
                 return
-            self.calibration_pending=False; self.calibration_stage="complete"; self.set_mode("select"); self.update_calibration_ui(); self.redraw(); self.status.setText("起点标定完成。")
+            self.calibration_pending=False; self.calibration_stage="complete"; self.set_mode("select"); self.update_calibration_ui(); self.redraw(); self.status.setText("起点标定完成。"); self.calibration_state_changed.emit(True)
 
     def select_box(self,rect,append):
             if not append: self.scene.clearSelection()

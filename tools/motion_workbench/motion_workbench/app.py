@@ -22,7 +22,7 @@ from .control_panel import (
     protected_number,
 )
 from .controller import MotionWorkbenchController
-from .models import TargetPose
+from .models import CoordinateSyncState, PathUploadSnapshot, TargetPose
 
 
 class PathControlPanel(QWidget):
@@ -141,13 +141,17 @@ class MotionWorkbenchWindow(QMainWindow):
         self.motion_status = QLabel("运动: NO_TARGET")
         self.upload_status = QLabel("路径: 未上传")
         self.heading_status = QLabel("航向控制: WIT")
+        self.map_start_status = QLabel("地图起点: 未标定")
+        self.board_origin_status = QLabel("板端原点: 未知")
+        self.coordinate_sync_status = QLabel("坐标同步: 未就绪")
         self.reset_origin_button = QPushButton("重置零点")
         self.return_origin_button = QPushButton("返回零点")
         self.reset_origin_button.setEnabled(False)
         self.return_origin_button.setEnabled(False)
         self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton")
         for widget in (self.connection, self.pose_status, self.motion_status,
-                       self.upload_status, self.heading_status):
+                       self.upload_status, self.heading_status, self.map_start_status,
+                       self.board_origin_status, self.coordinate_sync_status):
             status_row.addWidget(widget)
         status_row.addStretch()
         status_row.addWidget(self.reset_origin_button)
@@ -189,10 +193,9 @@ class MotionWorkbenchWindow(QMainWindow):
         self.point_panel.stop_requested.connect(self.controller.stop)
         self.point_panel.clear_requested.connect(self.controller.clear_candidate)
         self.controller.candidate_changed.connect(self.point_panel.set_candidate)
-        self.controller.actual_pose_changed.connect(self._set_actual_pose)
         self.controller.execution_changed.connect(self._set_execution_target)
-        self.controller.trace_changed.connect(self._set_execution_trace)
-        self.controller.path_telemetry_changed.connect(self.map_editor.set_path_runtime)
+        self.controller.upload_changed.connect(self._set_upload_status)
+        self.controller.coordinate_sync_changed.connect(self._set_coordinate_sync_status)
         self.controller.plan_execution_changed.connect(self._set_plan_execution_status)
         self.controller.plan_finished.connect(self._set_plan_execution_status)
         self.controller.motion_state_changed.connect(lambda value: self.motion_status.setText(f"运动: {value}"))
@@ -201,24 +204,34 @@ class MotionWorkbenchWindow(QMainWindow):
         self.pid_panel.read_requested.connect(self.controller.session.read_pid)
         self.pid_panel.apply_requested.connect(self.controller.session.apply_pid)
         self.pid_panel.restore_requested.connect(self.controller.session.restore_pid)
-        self.controller.session.pid_read.connect(lambda _revision, pid: self.pid_panel.set_pid(pid))
-        self.controller.session.pid_applied.connect(lambda _revision, pid: self.pid_panel.set_pid(pid))
+        self.controller.session.pid_read.connect(lambda state: self.pid_panel.set_pid(state.config))
+        self.controller.session.pid_applied.connect(lambda state: self.pid_panel.set_pid(state.config))
+        self.pid_panel.goto_strategy_changed.connect(self.controller.session.set_goto_strategy)
+        self.controller.session.goto_strategy_read.connect(
+            lambda strategy: self.pid_panel.set_goto_strategy(strategy.large_yaw_align_enabled))
+        self.controller.session.goto_strategy_changed.connect(
+            lambda strategy: self.pid_panel.set_goto_strategy(strategy.large_yaw_align_enabled))
         self.controller.session.yaw_source_changed.connect(self._on_yaw_source_changed)
         self.controller.session.motion_changed.connect(self.point_panel.set_motion_active)
+        self.controller.session.motion_changed.connect(self.pid_panel.set_motion_active)
+        self.controller.session.motion_changed.connect(self.map_editor.set_hardware_motion_active)
         self.controller.session.motion_changed.connect(
             lambda _active: self._refresh_origin_controls())
         self.controller.session.origin_reset.connect(self._on_origin_reset)
         self.controller.session.telemetry.connect(self._sync_heading_source)
-        self.controller.session.path_upload_changed.connect(self.path_panel.status.setText)
         self.path_panel.upload_requested.connect(self._upload_selected_path)
         self.path_panel.start_requested.connect(lambda: self.controller.start_path(self._uploaded_path_id))
         self.path_panel.abort_requested.connect(self.controller.abort_path)
         self.path_panel.read_config_requested.connect(self.controller.session.read_path_config)
         self.path_panel.apply_config_requested.connect(self.controller.session.apply_path_config)
         self.path_panel.restore_config_requested.connect(self.controller.session.restore_path_config)
-        self.controller.session.path_config_read.connect(self.path_panel.set_config)
-        self.controller.session.path_config_applied.connect(self.path_panel.set_config)
+        self.controller.session.path_config_read.connect(
+            lambda state: self.path_panel.set_config(state.revision, state.config))
+        self.controller.session.path_config_applied.connect(
+            lambda state: self.path_panel.set_config(state.revision, state.config))
         self.map_editor.plan_changed.connect(self.controller.set_plan)
+        self.map_editor.start_frame_changed.connect(lambda _frame: self.controller.invalidate_coordinate_sync())
+        self.map_editor.calibration_state_changed.connect(self.controller.set_map_calibrated)
         self.map_editor.candidate_selected.connect(self.controller.set_plan_cursor)
         self.map_editor.hardware_enabled_changed.connect(self._set_hardware_execution)
         self.map_editor.single_step_requested.connect(self.controller.start_single)
@@ -228,6 +241,7 @@ class MotionWorkbenchWindow(QMainWindow):
         self._uploaded_path_id = 0
         self._next_path_id = 1
         self.controller.set_plan(self.map_editor.get_plan())
+        self.controller.set_map_calibrated(not self.map_editor.calibration_pending)
 
     def _refresh_ports(self) -> None:
         from serial.tools import list_ports
@@ -261,22 +275,17 @@ class MotionWorkbenchWindow(QMainWindow):
     def _refresh_origin_controls(self) -> None:
         available = (self.controller.session.connected
                      and not self.controller.session.motion_active
-                     and not self._origin_reset_pending)
+                     and self.controller.coordinate_sync_state != CoordinateSyncState.RESET_PENDING)
         self.reset_origin_button.setEnabled(available)
         self.return_origin_button.setEnabled(available)
 
     def _request_origin_reset(self) -> None:
-        if (not self.controller.session.connected
-                or self.controller.session.motion_active
-                or self._origin_reset_pending):
-            return
-        self._origin_reset_pending = True
+        self.controller.start_origin_reset()
         self._refresh_origin_controls()
-        self.controller.session.reset_origin()
 
     def _on_origin_reset(self) -> None:
         self._origin_reset_pending = False
-        self.controller.new_experiment()
+        self.controller.confirm_origin_reset()
         self.controller.select_candidate(TargetPose(0.0, 0.0, 0.0))
         self.pose_status.setText("位姿: 零点已重置，等待遥测")
         self._refresh_origin_controls()
@@ -335,22 +344,9 @@ class MotionWorkbenchWindow(QMainWindow):
         else:
             self.heading_status.setText(f"航向控制: {self._active_heading_mode}")
 
-    def _set_actual_pose(self, target: TargetPose, valid: bool) -> None:
-        self.pose_status.setText("位姿: 有效" if valid else "位姿: 无效")
-        actual = Pose(target.x_mm, target.y_mm, target.yaw_deg) if valid else None
-        self.map_editor.set_runtime_pose(actual)
-        self.map_editor.set_execution_actual_pose(actual)
-        execution = self.controller.execution
-        if actual is not None and execution is not None:
-            self.map_editor.set_execution_error(execution.x_mm - actual.x_mm, execution.y_mm - actual.y_mm,
-                                                ((execution.yaw_deg - actual.yaw_deg + 180.0) % 360.0) - 180.0)
-
     def _set_execution_target(self, target: TargetPose | None) -> None:
         pose = None if target is None else Pose(target.x_mm, target.y_mm, target.yaw_deg)
         self.map_editor.set_execution_target(pose)
-
-    def _set_execution_trace(self, trace: tuple[TargetPose, ...]) -> None:
-        self.map_editor.set_execution_trace([Pose(item.x_mm, item.y_mm, item.yaw_deg) for item in trace])
 
     def _set_hardware_execution(self, enabled: bool) -> None:
         if enabled and not self.controller.session.connected:
@@ -369,8 +365,10 @@ class MotionWorkbenchWindow(QMainWindow):
         self.view_switch.setText("切换至图表" if next_index else "切换至地图")
 
     def _refresh(self) -> None:
+        snapshot = self.controller.consume_runtime_ui_snapshot()
         self.plots.refresh(self.controller.buffer)
-        self.map_editor.update()
+        self.map_editor.apply_runtime_snapshot(snapshot)
+        self.pose_status.setText("位姿: 有效" if snapshot.pose_valid else "位姿: 无效")
 
     def _upload_selected_path(self) -> None:
         step = self.map_editor.selected_step()
@@ -392,8 +390,28 @@ class MotionWorkbenchWindow(QMainWindow):
         self._next_path_id += 1
         self._uploaded_path_id = path_id
         self.controller.upload_path(path_id, points)
-        self.path_panel.start.setEnabled(True)
-        self.path_panel.status.setText(f"上传路径 {path_id}")
+        self.path_panel.start.setEnabled(False)
+        self.path_panel.status.setText(f"正在上传路径 {path_id}")
+
+    def _set_upload_status(self, snapshot: PathUploadSnapshot) -> None:
+        self.upload_status.setText(f"路径: {snapshot.state.value}")
+        self.path_panel.status.setText(snapshot.message or snapshot.state.value)
+        self.path_panel.start.setEnabled(snapshot.state.value == "COMMITTED")
+
+    def _set_coordinate_sync_status(self, state: CoordinateSyncState) -> None:
+        mapping = {
+            CoordinateSyncState.MAP_UNCALIBRATED: ("地图起点: 未标定", "板端原点: 未知", "坐标同步: 未就绪"),
+            CoordinateSyncState.BOARD_ORIGIN_UNKNOWN: ("地图起点: 已标定", "板端原点: 未知", "坐标同步: 等待重置"),
+            CoordinateSyncState.RESET_PENDING: ("地图起点: 已标定", "板端原点: 重置中", "坐标同步: 等待重置"),
+            CoordinateSyncState.WAITING_ZERO_TELEMETRY: ("地图起点: 已标定", "板端原点: 等待零点遥测", "坐标同步: 等待遥测"),
+            CoordinateSyncState.SYNCED: ("地图起点: 已标定", "板端原点: 已建立", "坐标同步: 正常"),
+            CoordinateSyncState.MISMATCH: ("地图起点: 已标定", "板端原点: 异常", "坐标同步: 不一致"),
+        }
+        map_text, board_text, sync_text = mapping[state]
+        self.map_start_status.setText(map_text)
+        self.board_origin_status.setText(board_text)
+        self.coordinate_sync_status.setText(sync_text)
+        self._refresh_origin_controls()
 
     def closeEvent(self, event: object) -> None:
         self.refresh_timer.stop()
