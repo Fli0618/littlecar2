@@ -1,7 +1,8 @@
 import math
 import pytest
 from map_planner.codegen_c import CodeGenerationError, CodeGenerationMode, format_c_float, generate_task_function, validate_plan_for_blocking_codegen
-from map_planner.models import ContinuousPathSegment, Plan, RotateInPlace, Waypoint, PathPosePoint
+from map_planner.models import (ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace,
+                                StepTurnNode, StepTurnPathSegment, Waypoint)
 
 def test_mixed_steps_generate_in_declared_order():
     plan = Plan(steps=[
@@ -47,6 +48,17 @@ def test_segment_requires_previous_endpoint_as_entry_point():
 def test_first_segment_uses_world_origin_entry_point():
     plan = Plan(steps=[ContinuousPathSegment([PathPosePoint(0, 0), PathPosePoint(10, 0)])])
     assert "path_1" in generate_task_function(plan, "Task_Path")
+
+
+def test_step_turn_generates_one_blocking_follow_path_call():
+    plan = Plan(steps=[StepTurnPathSegment(
+        [StepTurnNode(200, 0), StepTurnNode(200, 200)], step_distance_mm=50,
+    )])
+
+    code = generate_task_function(plan, "Task_StepTurn")
+
+    assert "/* 1. FOLLOW PATH */" in code
+    assert code.count("AdvanceMotion_FollowPathBlocking(") == 1
 
 @pytest.mark.parametrize("points", [[], [PathPosePoint(0, 0)], [PathPosePoint(0, 0), PathPosePoint(0.5, 0)]])
 def test_segment_rejects_short_or_degenerate_sequences(points):
