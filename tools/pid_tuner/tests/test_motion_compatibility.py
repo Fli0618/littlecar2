@@ -11,6 +11,48 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class MotionCompatibilityTests(unittest.TestCase):
+    CONFIG_MACROS = (
+        "ADVANCE_MOTION_DEFAULT_KP_POS", "ADVANCE_MOTION_DEFAULT_KI_POS",
+        "ADVANCE_MOTION_DEFAULT_KD_POS", "ADVANCE_MOTION_DEFAULT_KP_YAW",
+        "ADVANCE_MOTION_DEFAULT_KI_YAW", "ADVANCE_MOTION_DEFAULT_KD_YAW",
+        "ADVANCE_MOTION_PATH_KP_POS", "ADVANCE_MOTION_PATH_KD_VEL",
+        "ADVANCE_MOTION_PATH_KP_YAW", "ADVANCE_MOTION_PATH_KD_YAW",
+        "ADVANCE_MOTION_PATH_CRUISE_SPEED_MM_S", "ADVANCE_MOTION_PATH_MAX_WZ_DEG_S",
+        "ADVANCE_MOTION_PATH_ACCEL_MM_S2", "ADVANCE_MOTION_PATH_DECEL_MM_S2",
+        "ADVANCE_MOTION_PATH_MAX_LATERAL_ACC_MM_S2",
+        "ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM", "ADVANCE_MOTION_PATH_CURVATURE_FF_TIME_S",
+        "ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM", "ADVANCE_MOTION_PATH_LOOKAHEAD_BASE_MM",
+        "ADVANCE_MOTION_PATH_LOOKAHEAD_SPEED_GAIN_S", "ADVANCE_MOTION_PATH_LOOKAHEAD_CURVE_GAIN_MM",
+        "ADVANCE_MOTION_PATH_LOOKAHEAD_MAX_MM", "ADVANCE_MOTION_PATH_LOOKAHEAD_RATE_MM_S",
+        "ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM",
+        "ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM",
+        "ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S",
+        "ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE",
+    )
+
+    def test_motion_config_header_owns_all_exportable_defaults(self) -> None:
+        header = (ROOT / "Core" / "Inc" / "advance_motion.h").read_text(encoding="utf-8")
+        config = (ROOT / "Core" / "Inc" / "advance_motion_config.h").read_text(encoding="utf-8")
+        source = (ROOT / "Core" / "Src" / "advance_motion.c").read_text(encoding="utf-8")
+
+        self.assertRegex(config, r"#define ADVANCE_MOTION_CONFIG_SCHEMA_VERSION \(\(uint32_t\)1U\)")
+        for name in self.CONFIG_MACROS:
+            self.assertEqual(len(re.findall(rf"^#define {name}\b", config, re.MULTILINE)), 1)
+            self.assertNotRegex(header, rf"^#define {name}\b")
+        self.assertIn('#include "advance_motion_config.h"', source)
+        self.assertIn("#if ADVANCE_MOTION_CONFIG_SCHEMA_VERSION != ((uint32_t)1U)", source)
+        self.assertRegex(source, r"g_pid_default = \{\s*\.kp_pos =", re.DOTALL)
+        self.assertRegex(source, r"g_path_config_default = \{\s*\.kp_cross_track =", re.DOTALL)
+        for field in (
+            "kp_cross_track", "kd_cross_track_velocity", "kp_yaw", "kd_yaw_rate",
+            "cruise_speed_mm_s", "max_yaw_rate_deg_s", "accel_mm_s2", "decel_mm_s2",
+            "max_lateral_accel_mm_s2", "curvature_preview_mm", "curvature_ff_time_s",
+            "lookahead_min_mm", "lookahead_base_mm", "lookahead_speed_gain_s",
+            "lookahead_curve_gain_mm", "lookahead_max_mm", "lookahead_rate_mm_s",
+            "initial_lookahead_mm", "final_capture_distance_mm", "final_capture_speed_mm_s",
+        ):
+            self.assertRegex(source, rf"\.{field} =")
+
     def test_public_motion_api_signatures_are_present(self) -> None:
         header = (ROOT / "Core" / "Inc" / "advance_motion.h").read_text(encoding="utf-8")
         expected = (
