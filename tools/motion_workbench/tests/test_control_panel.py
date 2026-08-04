@@ -69,6 +69,24 @@ class ControlPanelTests(unittest.TestCase):
         finally:
             panel.close()
 
+    def test_pid_limits_defaults_and_goto_strategy_motion_lock(self) -> None:
+        panel = WorkbenchPidControlPanel()
+        changed: list[bool] = []
+        panel.goto_strategy_changed.connect(changed.append)
+        try:
+            self.assertEqual(panel.current_pid(), PidConfig(1.5, 0.10, 0.78, 2.50, 1.0, 0.80))
+            self.assertTrue(all(box.minimum() == 0.0 and box.maximum() == 20.0 for box in panel.pid))
+            panel.set_goto_strategy(True)
+            self.assertTrue(panel.large_yaw_align.isChecked())
+            panel.large_yaw_align.click()
+            self.assertEqual(changed, [False])
+            panel.set_motion_active(True)
+            self.assertFalse(panel.large_yaw_align.isEnabled())
+            panel.set_motion_active(False)
+            self.assertTrue(panel.large_yaw_align.isEnabled())
+        finally:
+            panel.close()
+
     def test_heading_mode_controls_single_point_goal_flags(self) -> None:
         panel = PointControlPanel()
         modes: list[str] = []
