@@ -8,7 +8,8 @@ from pid_tuner.models import MotionGoal, Telemetry
 from map_planner.models import BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace, Waypoint
 
 from motion_workbench.controller import MotionWorkbenchController
-from motion_workbench.models import PlanExecutionState, TargetPose
+from motion_workbench.models import (CoordinateSyncState, PathUploadState, PlanExecutionState,
+                                     TargetPose)
 
 
 class FakeSession(QObject):
@@ -20,11 +21,15 @@ class FakeSession(QObject):
     def __init__(self) -> None:
         super().__init__(); self.started: list[MotionGoal] = []; self.stopped = 0
         self.uploaded = []; self.paths_started = []
+        self.connected = True; self.motion_active = False
 
     def start_motion(self, goal: MotionGoal) -> None: self.started.append(goal)
     def stop(self) -> None: self.stopped += 1
     def upload_path(self, begin, chunks, commit) -> None: self.uploaded.append((begin, chunks, commit))
     def start_path(self, command) -> None: self.paths_started.append(command)
+    def upload_and_start_path(self, begin, chunks, commit, start) -> None:
+        self.upload_path(begin, chunks, commit); self.start_path(start)
+    def reset_origin(self) -> None: pass
 
 
 class ControllerTests(unittest.TestCase):
@@ -116,6 +121,35 @@ class ControllerTests(unittest.TestCase):
 
         self.assertEqual(controller.execution, TargetPose(10, 20, 30))
         self.assertEqual(session.started[-1], MotionGoal(10, 20, 30, 100, 50, 1000))
+
+    def test_path_can_start_only_after_commit_confirmation(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        points = [PathPosePoint(0, 0, 0), PathPosePoint(100, 0, 0)]
+        controller.upload_path(9, points)
+        controller.start_path(9)
+        self.assertEqual(session.paths_started, [])
+        controller.path_committed(9)
+        self.assertEqual(controller.upload.state, PathUploadState.COMMITTED)
+        controller.start_path(9)
+        self.assertEqual([item.path_id for item in session.paths_started], [9])
+
+    def test_runtime_snapshot_consumes_incremental_trace_and_reset_marker(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        session.telemetry.emit(self._telemetry(1))
+        first = controller.consume_runtime_ui_snapshot()
+        second = controller.consume_runtime_ui_snapshot()
+        self.assertEqual(first.new_trace_points, (TargetPose(0, 0, 0),))
+        self.assertTrue(first.trace_reset)
+        self.assertEqual(second.new_trace_points, ())
+        self.assertFalse(second.trace_reset)
+
+    def test_origin_reset_requires_zero_telemetry_before_sync(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        controller.set_map_calibrated(True)
+        self.assertTrue(controller.start_origin_reset())
+        controller.confirm_origin_reset()
+        session.telemetry.emit(self._telemetry(1))
+        self.assertEqual(controller.coordinate_sync_state, CoordinateSyncState.SYNCED)
 
     @staticmethod
     def _telemetry(state: int) -> Telemetry:

@@ -25,6 +25,8 @@ class SessionController(QObject):
     motion_changed = Signal(bool)
     path_telemetry = Signal(object)
     path_upload_changed = Signal(str)
+    path_committed = Signal(int)
+    path_started = Signal(int)
     path_config_read = Signal(object)
     path_config_applied = Signal(object)
 
@@ -234,11 +236,29 @@ class SessionController(QObject):
             client.path_commit(commit)
 
         self.path_upload_changed.emit("正在上传")
-        self._submit(upload, lambda _: self.path_upload_changed.emit("路径已提交"))
+        self._submit(upload, lambda _: (self.path_upload_changed.emit("路径已提交"),
+                                        self.path_committed.emit(commit.path_id)))
 
     def start_path(self, command: PathStartCommand) -> None:
-        self._submit(lambda client: client.path_start(command),
-                     lambda _: self._set_motion_active(True))
+        def started(_: object) -> None:
+            self._set_motion_active(True)
+            self.path_started.emit(command.path_id)
+        self._submit(lambda client: client.path_start(command), started)
+
+    def upload_and_start_path(self, begin: PathBeginCommand, chunks: tuple[PathChunkCommand, ...],
+                              commit: PathCommitCommand, start: PathStartCommand) -> None:
+        def action(client: SerialClient) -> None:
+            client.path_begin(begin)
+            for chunk in chunks:
+                client.path_chunk(chunk)
+            client.path_commit(commit)
+            client.path_start(start)
+        self.path_upload_changed.emit("正在上传")
+        def done(_: object) -> None:
+            self.path_committed.emit(commit.path_id)
+            self.path_started.emit(start.path_id)
+            self._set_motion_active(True)
+        self._submit(action, done)
 
     def abort_path(self) -> None:
         self._motion_generation += 1
