@@ -26,6 +26,7 @@ extern "C"
 #define ADVANCE_MOTION_PATH_CURVATURE_EPSILON_1_MM (0.00001f) /*!< 曲率除数下限，单位为 1/mm。 */
 #define ADVANCE_MOTION_PATH_YAW_GRADIENT_EPSILON_DEG_PER_MM (0.0001f) /*!< 航向梯度除数下限，单位为 deg/mm。 */
 #define ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM (300.0f) /*!< 曲率与航向梯度预览距离，单位为 mm。 */
+#define ADVANCE_MOTION_PATH_CURVATURE_FF_TIME_S (0.05f) /*!< 曲率法向前馈等效响应时间，单位为秒；设为 0.0f 可关闭。 */
 #define ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM (60.0f) /*!< 前视下限，单位为 mm。 */
 #define ADVANCE_MOTION_PATH_LOOKAHEAD_BASE_MM (60.0f) /*!< 前视基础距离，单位为 mm。 */
 #define ADVANCE_MOTION_PATH_LOOKAHEAD_SPEED_GAIN_S (0.15f) /*!< 前视速度增益，单位为 s。 */
