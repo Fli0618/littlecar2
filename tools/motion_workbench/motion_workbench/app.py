@@ -22,7 +22,7 @@ from .control_panel import (
     protected_number,
 )
 from .controller import MotionWorkbenchController
-from .models import TargetPose, transform_target_pose
+from .models import TargetPose
 
 
 class PathControlPanel(QWidget):
@@ -126,9 +126,6 @@ class MotionWorkbenchWindow(QMainWindow):
         self.setWindowTitle("底盘运动调试工作台")
         self.resize(1500, 920)
         self.controller = MotionWorkbenchController()
-        self._runtime_swap_xy = False
-        self._runtime_flip_x = False
-        self._runtime_flip_y = False
         self._active_heading_mode = "WIT"
         self._origin_reset_pending = False
         self._build()
@@ -226,11 +223,6 @@ class MotionWorkbenchWindow(QMainWindow):
         self.map_editor.single_step_requested.connect(self.controller.start_single)
         self.map_editor.continuous_requested.connect(self.controller.start_continuous)
         self.map_editor.execution_stop_requested.connect(self.controller.stop)
-        self.map_editor.runtime_axis_transform_changed.connect(self._set_runtime_axis_transform)
-        self._set_runtime_axis_transform(
-            self.map_editor.execution_swap_xy.isChecked(),
-            self.map_editor.execution_flip_x.isChecked(),
-            self.map_editor.execution_flip_y.isChecked())
         self.view_switch.clicked.connect(self._switch_workspace)
         self._path_id = 1
         self.controller.set_plan(self.map_editor.get_plan())
@@ -343,9 +335,7 @@ class MotionWorkbenchWindow(QMainWindow):
 
     def _set_actual_pose(self, target: TargetPose, valid: bool) -> None:
         self.pose_status.setText("位姿: 有效" if valid else "位姿: 无效")
-        displayed = transform_target_pose(
-            target, self._runtime_swap_xy, self._runtime_flip_x, self._runtime_flip_y)
-        actual = Pose(displayed.x_mm, displayed.y_mm, displayed.yaw_deg) if valid else None
+        actual = Pose(target.x_mm, target.y_mm, target.yaw_deg) if valid else None
         self.map_editor.set_runtime_pose(actual)
         self.map_editor.set_execution_actual_pose(actual)
         execution = self.controller.execution
@@ -358,26 +348,7 @@ class MotionWorkbenchWindow(QMainWindow):
         self.map_editor.set_execution_target(pose)
 
     def _set_execution_trace(self, trace: tuple[TargetPose, ...]) -> None:
-        displayed = [
-            transform_target_pose(
-                item, self._runtime_swap_xy, self._runtime_flip_x, self._runtime_flip_y)
-            for item in trace
-        ]
-        self.map_editor.set_execution_trace([Pose(item.x_mm, item.y_mm, item.yaw_deg) for item in displayed])
-
-    def _set_runtime_axis_transform(
-        self, swap_xy: bool, flip_x: bool, flip_y: bool
-    ) -> None:
-        self._runtime_swap_xy = swap_xy
-        self._runtime_flip_x = flip_x
-        self._runtime_flip_y = flip_y
-        self.controller.set_command_axis_transform(swap_xy, flip_x, flip_y)
-        if self.controller.actual is not None:
-            self._set_actual_pose(self.controller.actual, True)
-        else:
-            self.map_editor.set_runtime_pose(None)
-            self.map_editor.set_execution_actual_pose(None)
-        self._set_execution_trace(self.controller.trace)
+        self.map_editor.set_execution_trace([Pose(item.x_mm, item.y_mm, item.yaw_deg) for item in trace])
 
     def _set_hardware_execution(self, enabled: bool) -> None:
         if enabled and not self.controller.session.connected:
@@ -396,8 +367,8 @@ class MotionWorkbenchWindow(QMainWindow):
         self.view_switch.setText("切换至图表" if next_index else "切换至地图")
 
     def _refresh(self) -> None:
-        if self.workspace.currentIndex() == 0:
-            self.plots.refresh(self.controller.buffer)
+        self.plots.refresh(self.controller.buffer)
+        self.map_editor.update()
 
     def _upload_selected_path(self) -> None:
         plan = self.map_editor.get_plan()
