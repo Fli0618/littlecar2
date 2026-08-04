@@ -21,35 +21,9 @@ extern "C"
 #define ADVANCE_MOTION_PATH_MIN_SEGMENT_MM (1.0f) /*!< 最小有效线段长度，单位为 mm。 */
 #define ADVANCE_MOTION_PATH_SEARCH_SEGMENTS ((uint16_t)12U) /*!< 每周期前向搜索上限，单位为段。 */
 
-/* 参考速度与运动约束。 */
-#define ADVANCE_MOTION_PATH_CRUISE_SPEED_MM_S (820.0f) /*!< 巡航速度，单位为 mm/s。 */
-#define ADVANCE_MOTION_PATH_MAX_WZ_DEG_S (100.0f) /*!< 路径最大角速度，单位为 deg/s。 */
-#define ADVANCE_MOTION_PATH_ACCEL_MM_S2 (800.0f) /*!< 参考速度加速度，单位为 mm/s^2。 */
-#define ADVANCE_MOTION_PATH_DECEL_MM_S2 (1000.0f) /*!< 参考速度减速度，单位为 mm/s^2。 */
-#define ADVANCE_MOTION_PATH_MAX_LATERAL_ACC_MM_S2 (600.0f) /*!< 横向加速度限值，单位为 mm/s^2。 */
-
 /* 曲率预览与法向前馈。 */
 #define ADVANCE_MOTION_PATH_CURVATURE_EPSILON_1_MM (0.00001f) /*!< 曲率除数下限，单位为 1/mm。 */
 #define ADVANCE_MOTION_PATH_YAW_GRADIENT_EPSILON_DEG_PER_MM (0.0001f) /*!< 航向梯度除数下限，单位为 deg/mm。 */
-#define ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM (300.0f) /*!< 曲率与航向梯度预览距离，单位为 mm。 */
-#define ADVANCE_MOTION_PATH_CURVATURE_FF_TIME_S (0.05f) /*!< 曲率法向前馈等效响应时间，单位为秒；设为 0.0f 可关闭。 */
-
-/* 前视与末段捕获。 */
-#define ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM (60.0f) /*!< 前视下限，单位为 mm。 */
-#define ADVANCE_MOTION_PATH_LOOKAHEAD_BASE_MM (60.0f) /*!< 前视基础距离，单位为 mm。 */
-#define ADVANCE_MOTION_PATH_LOOKAHEAD_SPEED_GAIN_S (0.15f) /*!< 前视速度增益，单位为 s。 */
-#define ADVANCE_MOTION_PATH_LOOKAHEAD_CURVE_GAIN_MM (120.0f) /*!< 前视曲率增益，单位为 mm。 */
-#define ADVANCE_MOTION_PATH_LOOKAHEAD_MAX_MM (180.0f) /*!< 前视上限，单位为 mm。 */
-#define ADVANCE_MOTION_PATH_LOOKAHEAD_RATE_MM_S (400.0f) /*!< 前视变化率，单位为 mm/s。 */
-#define ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM (80.0f) /*!< 初始前视距离，单位为 mm。 */
-#define ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM (60.0f) /*!< 进入末段捕获距离，单位为 mm。 */
-#define ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S (150.0f) /*!< 进入末段捕获速度，单位为 mm/s。 */
-
-/* 路径横向与航向 PD 默认参数。 */
-#define ADVANCE_MOTION_PATH_KP_POS (0.98f) /*!< 路径位置 PD 比例增益，需要单独实机标定。 */
-#define ADVANCE_MOTION_PATH_KD_VEL (0.620f) /*!< 路径位置 PD 速度增益，需要单独实机标定。 */
-#define ADVANCE_MOTION_PATH_KP_YAW (1.42f) /*!< 路径航向 PD 比例增益，需要单独实机标定。 */
-#define ADVANCE_MOTION_PATH_KD_YAW (0.427f) /*!< 路径航向 PD 速度增益，需要单独实机标定。 */
 
 /* 路径超时与底盘驱动。 */
 #define ADVANCE_MOTION_PATH_TIMEOUT_BASE_MS ((uint32_t)3000U) /*!< 路径超时基础值，单位为 ms。 */
@@ -67,25 +41,18 @@ extern "C"
 /* PID 公共限制。 */
 #define ADVANCE_MOTION_PID_MAX_DT_MS ((uint32_t)100U) /*!< PID 历史允许的最大间隔，单位为 ms。 */
 
-/* 组合 GOTO 航向策略：复位后恢复本编译期默认值。 */
-#define ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE ((uint8_t)0U) /*!< 复位后的默认策略：0 为始终并行，1 为大角度先对准。 */
+/* 组合 GOTO 航向策略约束。 */
 #define ADVANCE_MOTION_LARGE_YAW_ALIGN_ENTER_DEG (30.0f) /*!< 航向绝对误差达到该值时暂停平移并进入对准阶段，单位为度。 */
 #define ADVANCE_MOTION_LARGE_YAW_ALIGN_EXIT_DEG (20.0f) /*!< 对准阶段航向绝对误差降至该值后恢复组合平移，单位为度。 */
 #define ADVANCE_MOTION_LARGE_YAW_ALIGN_LINEAR_MIN_SCALE (0.35f) /*!< 组合运行时、大航向误差下允许的最小线速度比例。 */
 
-/* 位置 PID 默认参数与在线调参上限。 */
-#define ADVANCE_MOTION_DEFAULT_KP_POS (1.5f) /*!< 位置误差比例默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KI_POS (0.10f) /*!< 位置误差积分默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KD_POS (0.78f) /*!< 基于实测速度的位置微分默认增益。 */
+/* 位置 PID 在线调参上限。 */
 #define ADVANCE_MOTION_MAX_KP_POS (20.0f) /*!< 位置误差比例增益上限。 */
 #define ADVANCE_MOTION_MAX_KI_POS (20.0f) /*!< 位置误差积分增益上限。 */
 #define ADVANCE_MOTION_MAX_KD_POS (20.0f) /*!< 基于实测速度的位置微分增益上限。 */
 #define ADVANCE_MOTION_PID_POS_INTEGRAL_LIMIT_MM_S (1000.0f) /*!< 位置误差积分限幅，单位为 mm*s。 */
 
-/* 航向 PID 默认参数与在线调参上限。 */
-#define ADVANCE_MOTION_DEFAULT_KP_YAW (2.50f) /*!< 航向角误差比例默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KI_YAW (1.0f) /*!< 航向角误差积分默认增益。 */
-#define ADVANCE_MOTION_DEFAULT_KD_YAW (0.80f) /*!< 基于实测角速度的航向微分默认增益。 */
+/* 航向 PID 在线调参上限。 */
 #define ADVANCE_MOTION_MAX_KP_YAW (20.0f) /*!< 航向角误差比例增益上限。 */
 #define ADVANCE_MOTION_MAX_KI_YAW (20.0f) /*!< 航向角误差积分增益上限。 */
 #define ADVANCE_MOTION_MAX_KD_YAW (20.0f) /*!< 基于实测角速度的航向微分增益上限。 */

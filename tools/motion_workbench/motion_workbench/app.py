@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import (QApplication, QComboBox, QFormLayout, QHBoxLayout, QLabel, QMainWindow, QPushButton,
-                               QDoubleSpinBox, QGroupBox, QScrollArea, QSplitter,
-                               QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
+from PySide6.QtGui import QFontDatabase
+from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+                               QMainWindow, QPlainTextEdit, QPushButton, QDoubleSpinBox, QGroupBox, QScrollArea,
+                               QSplitter, QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from map_planner.gui import MapEditorWidget
 from map_planner.models import BezierPathSegment, ContinuousPathSegment, Pose
 from pid_tuner.gui.plots import TelemetryPlots
 from pid_tuner.gui.widgets import ConnectionPanel
-from pid_tuner.models import MotionGoal, PathControlConfig, Telemetry
+from pid_tuner.models import (GotoStrategySnapshot, MotionGoal, PathConfigState, PathControlConfig,
+                               PidConfigState, Telemetry)
+from pid_tuner.storage import export_motion_config_header
 
 from .control_panel import (
     HEADING_MODE_NONE,
@@ -122,6 +126,56 @@ class PathControlPanel(QWidget):
         self.config_status.setText("路径参数：等待下位机应用")
 
 
+class MotionConfigExportDialog(QDialog):
+    """Preview and save one immutable motion configuration header export."""
+
+    def __init__(self, header_text: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._header_text = header_text
+        self.setWindowTitle("导出固化参数")
+        self.resize(840, 680)
+        layout = QVBoxLayout(self)
+        self.editor = QPlainTextEdit()
+        self.editor.setReadOnly(True)
+        self.editor.setPlainText(header_text)
+        self.editor.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        layout.addWidget(self.editor)
+        self.status = QLabel()
+        layout.addWidget(self.status)
+        buttons = QHBoxLayout()
+        self.copy_all = QPushButton("复制全部")
+        self.save_file = QPushButton("保存文件")
+        self.close_button = QPushButton("关闭")
+        for button in (self.copy_all, self.save_file):
+            buttons.addWidget(button)
+        buttons.addStretch()
+        buttons.addWidget(self.close_button)
+        layout.addLayout(buttons)
+        self.copy_all.clicked.connect(self._copy_all)
+        self.save_file.clicked.connect(self._choose_save_path)
+        self.close_button.clicked.connect(self.accept)
+
+    def _copy_all(self) -> None:
+        QApplication.clipboard().setText(self._header_text)
+        self.status.setText("已复制 advance_motion_config.h")
+
+    def _choose_save_path(self) -> None:
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "保存固化参数", "advance_motion_config.h", "C Header Files (*.h);;All Files (*)")
+        if filename:
+            self._save_to_path(Path(filename))
+
+    def _save_to_path(self, path: Path) -> bool:
+        try:
+            with path.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(self._header_text)
+        except OSError as error:
+            self.status.setText(f"保存失败：{error}")
+            return False
+        self.status.setText(f"已保存 {path.name}")
+        return True
+
+
 class MotionWorkbenchWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -129,6 +183,9 @@ class MotionWorkbenchWindow(QMainWindow):
         self.resize(1500, 920)
         self.controller = MotionWorkbenchController()
         self._active_heading_mode = "WIT"
+        self._active_pid_state: PidConfigState | None = None
+        self._active_path_state: PathConfigState | None = None
+        self._active_goto_strategy: GotoStrategySnapshot | None = None
         self._build()
         self._wire()
         self.refresh_timer = QTimer(self); self.refresh_timer.setInterval(MOTION_WORKBENCH_REFRESH_MS); self.refresh_timer.timeout.connect(self._refresh); self.refresh_timer.start()
@@ -150,6 +207,9 @@ class MotionWorkbenchWindow(QMainWindow):
         self.reset_origin_button.setEnabled(False)
         self.return_origin_button.setEnabled(False)
         self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton")
+        self.export_motion_config = QPushButton("导出固化参数")
+        self.export_motion_config.setToolTip("导出 STM32 当前已生效的 PID、路径控制参数和 GOTO 默认策略")
+        self.export_motion_config.setEnabled(False)
         for widget in (self.connection, self.pose_status, self.motion_status,
                        self.upload_status, self.heading_status, self.map_start_status,
                        self.board_origin_status, self.coordinate_sync_status):
@@ -157,6 +217,7 @@ class MotionWorkbenchWindow(QMainWindow):
         status_row.addStretch()
         status_row.addWidget(self.reset_origin_button)
         status_row.addWidget(self.return_origin_button)
+        status_row.addWidget(self.export_motion_config)
         status_row.addWidget(self.stop)
         root.addLayout(status_row)
 
@@ -183,6 +244,7 @@ class MotionWorkbenchWindow(QMainWindow):
 
     def _wire(self) -> None:
         self.stop.clicked.connect(self.controller.stop)
+        self.export_motion_config.clicked.connect(self._export_motion_config)
         self.reset_origin_button.clicked.connect(self._request_origin_reset)
         self.return_origin_button.clicked.connect(self._return_to_origin)
         self.connection_panel.refresh_ports_requested.connect(self._refresh_ports)
@@ -206,13 +268,17 @@ class MotionWorkbenchWindow(QMainWindow):
         self.pid_panel.apply_requested.connect(self.controller.session.apply_pid)
         self.pid_panel.restore_requested.connect(self.controller.session.restore_pid)
         self.controller.session.pid_read.connect(self.pid_panel.set_pid_state)
+        self.controller.session.pid_read.connect(self._cache_pid_state)
         self.controller.session.pid_applied.connect(self.pid_panel.set_pid_state)
+        self.controller.session.pid_applied.connect(self._cache_pid_state)
         self.controller.session.connection_changed.connect(self.pid_panel.set_connected)
         self.pid_panel.goto_strategy_changed.connect(self.controller.session.set_goto_strategy)
         self.controller.session.goto_strategy_read.connect(
             lambda strategy: self.pid_panel.set_goto_strategy(strategy.large_yaw_align_enabled))
+        self.controller.session.goto_strategy_read.connect(self._cache_goto_strategy)
         self.controller.session.goto_strategy_changed.connect(
             lambda strategy: self.pid_panel.set_goto_strategy(strategy.large_yaw_align_enabled))
+        self.controller.session.goto_strategy_changed.connect(self._cache_goto_strategy)
         self.controller.session.yaw_source_changed.connect(self._on_yaw_source_changed)
         self.controller.session.motion_changed.connect(self.point_panel.set_motion_active)
         self.controller.session.motion_changed.connect(self.pid_panel.set_motion_active)
@@ -229,8 +295,10 @@ class MotionWorkbenchWindow(QMainWindow):
         self.path_panel.restore_config_requested.connect(self.controller.session.restore_path_config)
         self.controller.session.path_config_read.connect(
             lambda state: self.path_panel.set_config(state.revision, state.config))
+        self.controller.session.path_config_read.connect(self._cache_path_state)
         self.controller.session.path_config_applied.connect(
             lambda state: self.path_panel.set_config(state.revision, state.config))
+        self.controller.session.path_config_applied.connect(self._cache_path_state)
         self.map_editor.plan_changed.connect(self.controller.set_plan)
         self.map_editor.start_frame_changed.connect(lambda _frame: self.controller.invalidate_coordinate_sync())
         self.map_editor.calibration_state_changed.connect(self.controller.set_map_calibrated)
@@ -251,6 +319,7 @@ class MotionWorkbenchWindow(QMainWindow):
             self.connection_panel.set_connected(False, "未发现可用 COM 口")
 
     def _connect_port(self, port: str, baud: int) -> None:
+        self._clear_motion_config_sync()
         self.connection_panel.set_connecting(True)
         self.controller.session.connect_port(port, baud)
 
@@ -258,6 +327,8 @@ class MotionWorkbenchWindow(QMainWindow):
         self.controller.session.disconnect()
 
     def _on_connection_changed(self, connected: bool) -> None:
+        if not connected:
+            self._clear_motion_config_sync()
         self.connection_panel.set_connected(
             connected, "已连接，参数已同步" if connected else "已断开")
         self._refresh_origin_controls()
@@ -268,8 +339,51 @@ class MotionWorkbenchWindow(QMainWindow):
         self._refresh_origin_controls()
 
     def _on_connection_failure(self, message: str) -> None:
+        self._clear_motion_config_sync()
         self._refresh_origin_controls()
         self.connection_panel.set_connected(False, f"连接失败: {message}")
+
+    def _clear_motion_config_sync(self) -> None:
+        self._active_pid_state = None
+        self._active_path_state = None
+        self._active_goto_strategy = None
+        self._refresh_motion_config_export()
+
+    def _cache_pid_state(self, state: PidConfigState) -> None:
+        if self.controller.session.connected:
+            self._active_pid_state = state
+            self._refresh_motion_config_export()
+
+    def _cache_path_state(self, state: PathConfigState) -> None:
+        if self.controller.session.connected:
+            self._active_path_state = state
+            self._refresh_motion_config_export()
+
+    def _cache_goto_strategy(self, strategy: GotoStrategySnapshot) -> None:
+        if self.controller.session.connected:
+            self._active_goto_strategy = strategy
+            self._refresh_motion_config_export()
+
+    def _refresh_motion_config_export(self) -> None:
+        self.export_motion_config.setEnabled(
+            self.controller.session.connected
+            and self._active_pid_state is not None
+            and self._active_path_state is not None
+            and self._active_goto_strategy is not None)
+
+    def _export_motion_config(self) -> None:
+        if not self.export_motion_config.isEnabled():
+            return
+        assert self._active_pid_state is not None
+        assert self._active_path_state is not None
+        assert self._active_goto_strategy is not None
+        try:
+            header = export_motion_config_header(
+                self._active_pid_state, self._active_path_state, self._active_goto_strategy)
+        except ValueError as error:
+            self.connection.setText(f"导出失败：{error}")
+            return
+        MotionConfigExportDialog(header, self).exec()
 
     def _refresh_origin_controls(self) -> None:
         available = (self.controller.session.connected
