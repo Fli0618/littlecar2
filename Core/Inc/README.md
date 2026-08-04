@@ -9,6 +9,7 @@
 所有周期接口统一使用 `*_Update()` 命名并仅由 TIM6 调用。通信模块不控制底盘；二维码 Blocking 接口等待期间只检查状态并执行 `__WFI()`。
 `advance_motion.h` 提供 `AdvanceMotion_FollowPathEx()` 异步连续路径接口；调用方必须在任务结束前保持路径数组有效且不修改，中间采样点不会触发停车。
 `AdvanceMotion_FollowPathEx()` 强制关闭单点 Goto 的大航向先对准策略。路径中段使用动态前视切向前馈、投影横向 PD、插值航向 PD 和航向变化率前馈；接近终点且参考/实测速度均降到捕获阈值后，才切换到完整 Goto PID 精确停车。
+到达位置和航向容差后先保持 `ADVANCE_MOTION_ARRIVE_HOLD_MS`，再发送一次 `Chassis_Stop()` 硬停止，以清除平滑减速后的残余漂移；硬停止命令入队失败时由后续控制周期重试。
 连续路径的 14 项控制与速度规划参数由 `AdvanceMotion_PathControlConfig_t` 成组保存，可读取、提交或恢复默认；待应用组只在 20 ms 控制周期边界切换，活动路径仅约束当前前视范围，不重置路径进度。
 调试快照中的 `nearest_segment_index` 是投影点所在段，`target_segment_index` 是前视点所在段；路径进度与剩余量均为累计弧长，单位为 mm。
 
