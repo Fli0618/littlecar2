@@ -47,6 +47,7 @@ typedef struct
   float projection_y_mm;
   float cross_track_mm;
   float lookahead_mm;
+  float signed_curvature_1_mm;
   float curvature_preview_1_mm;
   float yaw_gradient_deg_per_mm;
   float yaw_gradient_preview_deg_per_mm;
@@ -590,6 +591,53 @@ static float AdvanceMotion_GetPathSegmentLength(uint16_t index)
   return sqrtf((dx * dx) + (dy * dy));
 }
 
+/* 返回当前顶点的带符号曲率，正值表示左弯，单位为 1/mm。 */
+static float AdvanceMotion_GetPathSignedVertexCurvature(uint16_t index)
+{
+  const AdvanceMotion_PathPoint_t *a;
+  const AdvanceMotion_PathPoint_t *b;
+  const AdvanceMotion_PathPoint_t *c;
+  float abx;
+  float aby;
+  float bcx;
+  float bcy;
+  float acx;
+  float acy;
+  float ab;
+  float bc;
+  float ac;
+  float cross;
+
+  if ((g_path.points == NULL) || (g_path.point_count < 3U) ||
+      (index == 0U) || (index >= (uint16_t)(g_path.point_count - 1U)))
+  {
+    return 0.0f;
+  }
+
+  a = &g_path.points[index - 1U];
+  b = &g_path.points[index];
+  c = &g_path.points[index + 1U];
+  abx = b->x_mm - a->x_mm;
+  aby = b->y_mm - a->y_mm;
+  bcx = c->x_mm - b->x_mm;
+  bcy = c->y_mm - b->y_mm;
+  acx = c->x_mm - a->x_mm;
+  acy = c->y_mm - a->y_mm;
+  ab = sqrtf((abx * abx) + (aby * aby));
+  bc = sqrtf((bcx * bcx) + (bcy * bcy));
+  ac = sqrtf((acx * acx) + (acy * acy));
+  cross = (abx * bcy) - (aby * bcx);
+
+  if ((ab < ADVANCE_MOTION_PATH_MIN_SEGMENT_MM) ||
+      (bc < ADVANCE_MOTION_PATH_MIN_SEGMENT_MM) ||
+      (ac < ADVANCE_MOTION_PATH_MIN_SEGMENT_MM))
+  {
+    return 0.0f;
+  }
+
+  return (2.0f * cross) / (ab * bc * ac);
+}
+
 /* 三点外接圆曲率；共线点返回零，折返退化点返回保守的大曲率。 */
 static float AdvanceMotion_GetPathVertexCurvature(uint16_t index)
 {
@@ -823,6 +871,19 @@ static void AdvanceMotion_UpdatePathReference(uint32_t now_tick)
         AdvanceWorld_WrapAngleDeg(b->yaw_deg - a->yaw_deg) / length;
     g_motion.goal.yaw_deg = AdvanceWorld_WrapAngleDeg(
         a->yaw_deg + (best_t * AdvanceWorld_WrapAngleDeg(b->yaw_deg - a->yaw_deg)));
+  }
+
+  g_path.signed_curvature_1_mm = 0.0f;
+  if (g_path.point_count >= 3U)
+  {
+    uint16_t vertex_index = (uint16_t)(g_path.nearest_index + 1U);
+
+    if (vertex_index >= (uint16_t)(g_path.point_count - 1U))
+    {
+      vertex_index = (uint16_t)(g_path.point_count - 2U);
+    }
+    g_path.signed_curvature_1_mm =
+        AdvanceMotion_GetPathSignedVertexCurvature(vertex_index);
   }
 
   AdvanceMotion_UpdatePathPreview();
@@ -1450,14 +1511,28 @@ void AdvanceMotion_Update(void)
       float ty = b->y_mm - a->y_mm;
       float length = sqrtf((tx * tx) + (ty * ty));
       float normal_velocity;
+      float normal_accel_ff_mm_s2;
+      float normal_velocity_ff_mm_s;
       float correction;
 
       tx /= length;
       ty /= length;
       normal_velocity = (-ty * g_motion_control.measured_vx_world_mm_s) +
                         (tx * g_motion_control.measured_vy_world_mm_s);
+      normal_accel_ff_mm_s2 =
+          (g_path.reference_speed_mm_s * g_path.reference_speed_mm_s) *
+          g_path.signed_curvature_1_mm;
+      normal_accel_ff_mm_s2 = AdvanceWorld_LimitFloat(
+          normal_accel_ff_mm_s2,
+          -g_path_config_active.max_lateral_accel_mm_s2,
+          g_path_config_active.max_lateral_accel_mm_s2);
+      normal_velocity_ff_mm_s =
+          ADVANCE_MOTION_PATH_CURVATURE_FF_TIME_S * normal_accel_ff_mm_s2;
+      /* cross_track 与 normal_velocity 正值表示左侧，correction 正值施加右法向；
+       * 左弯的正曲率内侧在左方，因此曲率前馈使用负号。 */
       correction = (g_path_config_active.kp_cross_track * g_path.cross_track_mm) +
-                   (g_path_config_active.kd_cross_track_velocity * normal_velocity);
+                   (g_path_config_active.kd_cross_track_velocity * normal_velocity) -
+                   normal_velocity_ff_mm_s;
       vx_world_mm_s = g_path.feedforward_vx_mm_s + (ty * correction);
       vy_world_mm_s = g_path.feedforward_vy_mm_s - (tx * correction);
       vmax_mm_s = g_path.reference_speed_mm_s;
