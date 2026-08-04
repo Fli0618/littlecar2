@@ -259,6 +259,8 @@ class MapEditorWidget(QWidget):
             self._execution_target: Pose | None = None
             self._execution_error: tuple[float, float, float] | None = None
             self._execution_trace: list[Pose] = []
+            self._runtime_trace_path = QPainterPath()
+            self._runtime_trace_path_point_count = 0
             self._path_runtime = None
             self._execution_enabled = False
             self._hardware_motion_active = False
@@ -354,9 +356,11 @@ class MapEditorWidget(QWidget):
             self._path_runtime = snapshot.path_telemetry
             self._hardware_motion_active = snapshot.motion_active
             if snapshot.trace_reset:
-                self._execution_trace = []
-            self._execution_trace.extend(Pose(point.x_mm, point.y_mm, point.yaw_deg)
-                                         for point in snapshot.new_trace_points)
+                self._clear_runtime_trace()
+            new_trace_points = [Pose(point.x_mm, point.y_mm, point.yaw_deg)
+                                for point in snapshot.new_trace_points]
+            self._execution_trace.extend(new_trace_points)
+            self._append_runtime_trace_points(new_trace_points)
             self._refresh_runtime_overlay()
 
     def set_execution_status(self, status: str) -> None:
@@ -643,6 +647,7 @@ class MapEditorWidget(QWidget):
                 self.plan.start_heading_deg = new.heading_deg
             if start_kind is not None:
                 self.plan.start_kind = start_kind
+            self._clear_runtime_trace()
             self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw()
             self.rebuild_timeline_after_edit(); self.plan_changed.emit(copy.deepcopy(self.plan))
             self.start_frame_changed.emit(new)
@@ -745,6 +750,7 @@ class MapEditorWidget(QWidget):
             self._runtime_car_item = None; self._runtime_direction_item = None
             self._runtime_target_item = None; self._runtime_target_direction_item = None
             self._runtime_trace_item = None
+            self._runtime_trace_path_point_count = 0
             self._runtime_projection_item = None
             self._runtime_lookahead_item = None
             self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_start(); self.draw_route(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None); self.draw_runtime_overlay(); self.position_layout_sliders()
@@ -1526,6 +1532,33 @@ class MapEditorWidget(QWidget):
             car = CarOutlineItem(self.rotate_car_clockwise); car.setPos(x, y); car.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, p.yaw_deg)); car.setPen(QPen(color, 5)); car.setBrush(QColor(120, 144, 156, 105)); car.setZValue(15); self.scene.addItem(car)
             self._draw_direction_arrow(x, y, p.yaw_deg, QColor("#1565c0"), "car_direction")
 
+    def _clear_runtime_trace(self) -> None:
+            self._execution_trace.clear()
+            self._runtime_trace_path = QPainterPath()
+            self._runtime_trace_path_point_count = 0
+            if self._runtime_trace_item is not None:
+                self._runtime_trace_item.setPath(self._runtime_trace_path)
+
+    def _append_runtime_trace_points(self, points: list[Pose]) -> None:
+            if not points:
+                return
+            if self._runtime_trace_path_point_count != len(self._execution_trace) - len(points):
+                self._rebuild_runtime_trace_path()
+                return
+            for pose in points:
+                point = world_to_paper(pose, self.plan.start_paper_x_mm,
+                                       self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                if self._runtime_trace_path_point_count == 0:
+                    self._runtime_trace_path.moveTo(*point)
+                else:
+                    self._runtime_trace_path.lineTo(*point)
+                self._runtime_trace_path_point_count += 1
+
+    def _rebuild_runtime_trace_path(self) -> None:
+            self._runtime_trace_path = QPainterPath()
+            self._runtime_trace_path_point_count = 0
+            self._append_runtime_trace_points(list(self._execution_trace))
+
     def _ensure_runtime_overlay_items(self) -> None:
             if self._runtime_car_item is not None and self._runtime_car_item.scene() is self.scene:
                 return
@@ -1564,15 +1597,11 @@ class MapEditorWidget(QWidget):
                          self._runtime_trace_item, self._runtime_projection_item,
                          self._runtime_lookahead_item):
                 item.setVisible(False)
+            if self._runtime_trace_path_point_count != len(self._execution_trace):
+                self._rebuild_runtime_trace_path()
             if len(self._execution_trace) >= 2:
-                path = QPainterPath()
-                points = [world_to_paper(pose, self.plan.start_paper_x_mm,
-                                         self.plan.start_paper_y_mm, self.plan.start_heading_deg)
-                          for pose in self._execution_trace]
-                path.moveTo(*points[0])
-                for point in points[1:]:
-                    path.lineTo(*point)
-                self._runtime_trace_item.setPath(path); self._runtime_trace_item.setVisible(True)
+                self._runtime_trace_item.setPath(self._runtime_trace_path)
+                self._runtime_trace_item.setVisible(True)
             if self._execution_target is not None:
                 x, y = world_to_paper(self._execution_target, self.plan.start_paper_x_mm,
                                       self.plan.start_paper_y_mm, self.plan.start_heading_deg)

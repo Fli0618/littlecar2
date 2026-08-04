@@ -17,7 +17,7 @@ from motion_workbench.control_panel import (
     ProtectedDoubleSpinBox,
     WorkbenchPidControlPanel,
 )
-from pid_tuner.models import PidConfig
+from pid_tuner.models import PidConfig, PidConfigState
 
 
 class ControlPanelTests(unittest.TestCase):
@@ -61,11 +61,13 @@ class ControlPanelTests(unittest.TestCase):
         applied: list[PidConfig] = []
         panel.apply_requested.connect(applied.append)
         try:
-            panel.set_pid(expected)
+            panel.set_connected(True)
+            panel.set_pid_state(PidConfigState(12, expected))
             panel.apply_pid.click()
             self.assertEqual(panel.current_pid(), expected)
             self.assertEqual(applied, [expected])
             self.assertTrue(all(box.lineEdit().isReadOnly() for box in panel.pid))
+            self.assertIn("r12", panel.status.text())
         finally:
             panel.close()
 
@@ -74,6 +76,9 @@ class ControlPanelTests(unittest.TestCase):
         changed: list[bool] = []
         panel.goto_strategy_changed.connect(changed.append)
         try:
+            self.assertFalse(panel.apply_pid.isEnabled())
+            self.assertFalse(panel.restore_pid.isEnabled())
+            panel.set_connected(True)
             self.assertEqual(panel.current_pid(), PidConfig(1.5, 0.10, 0.78, 2.50, 1.0, 0.80))
             self.assertTrue(all(box.minimum() == 0.0 and box.maximum() == 20.0 for box in panel.pid))
             panel.set_goto_strategy(True)
@@ -84,6 +89,9 @@ class ControlPanelTests(unittest.TestCase):
             self.assertFalse(panel.large_yaw_align.isEnabled())
             panel.set_motion_active(False)
             self.assertTrue(panel.large_yaw_align.isEnabled())
+            panel.set_connected(False)
+            self.assertFalse(panel.apply_pid.isEnabled())
+            self.assertEqual(panel.status.text(), "PID 未同步")
         finally:
             panel.close()
 

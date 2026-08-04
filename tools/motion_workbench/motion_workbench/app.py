@@ -200,12 +200,14 @@ class MotionWorkbenchWindow(QMainWindow):
         self.controller.plan_finished.connect(self._set_plan_execution_status)
         self.controller.motion_state_changed.connect(lambda value: self.motion_status.setText(f"运动: {value}"))
         self.controller.status_changed.connect(self._on_session_status)
-        self.controller.session.failure.connect(self._on_connection_failure)
+        self.controller.session.connection_failed.connect(self._on_connection_failure)
+        self.controller.session.connection_changed.connect(self._on_connection_changed)
         self.pid_panel.read_requested.connect(self.controller.session.read_pid)
         self.pid_panel.apply_requested.connect(self.controller.session.apply_pid)
         self.pid_panel.restore_requested.connect(self.controller.session.restore_pid)
-        self.controller.session.pid_read.connect(lambda state: self.pid_panel.set_pid(state.config))
-        self.controller.session.pid_applied.connect(lambda state: self.pid_panel.set_pid(state.config))
+        self.controller.session.pid_read.connect(self.pid_panel.set_pid_state)
+        self.controller.session.pid_applied.connect(self.pid_panel.set_pid_state)
+        self.controller.session.connection_changed.connect(self.pid_panel.set_connected)
         self.pid_panel.goto_strategy_changed.connect(self.controller.session.set_goto_strategy)
         self.controller.session.goto_strategy_read.connect(
             lambda strategy: self.pid_panel.set_goto_strategy(strategy.large_yaw_align_enabled))
@@ -254,7 +256,11 @@ class MotionWorkbenchWindow(QMainWindow):
 
     def _disconnect_port(self) -> None:
         self.controller.session.disconnect()
-        self.connection_panel.set_connected(False, "已断开")
+
+    def _on_connection_changed(self, connected: bool) -> None:
+        self.connection_panel.set_connected(
+            connected, "已连接，参数已同步" if connected else "已断开")
+        self._refresh_origin_controls()
 
     def _on_session_status(self, status: str) -> None:
         self.connection.setText(status)

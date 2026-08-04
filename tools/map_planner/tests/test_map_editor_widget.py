@@ -95,6 +95,27 @@ class MapEditorWidgetTests(unittest.TestCase):
         finally:
             widget.close()
 
+    def test_runtime_trace_appends_and_clears_on_reset_or_start_change(self):
+        widget = MapEditorWidget()
+        try:
+            snapshot = lambda points, reset=False: SimpleNamespace(
+                actual_pose=None, target_pose=None, error=None, path_telemetry=None,
+                new_trace_points=points, trace_reset=reset, pose_valid=True, motion_active=False,
+            )
+            widget.apply_runtime_snapshot(snapshot((Pose(0, 0, 0), Pose(100, 0, 0)), True))
+            path = widget._runtime_trace_path
+            widget.apply_runtime_snapshot(snapshot((Pose(200, 0, 0),)))
+            self.assertIs(widget._runtime_trace_path, path)
+            self.assertEqual(widget._runtime_trace_path.elementCount(), 3)
+
+            widget.apply_runtime_snapshot(snapshot((Pose(0, 100, 0),), True))
+            self.assertEqual(widget._runtime_trace_path.elementCount(), 1)
+            widget.set_start_frame(2250, 2250, 180)
+            self.assertEqual(widget._execution_trace, [])
+            self.assertEqual(widget._runtime_trace_path.elementCount(), 0)
+        finally:
+            widget.close()
+
     def test_start_preset_uses_start_frame_rebase(self):
         widget = MapEditorWidget()
         try:

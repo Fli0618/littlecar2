@@ -193,7 +193,9 @@ class MainWindow(QMainWindow):
         self.window.valueChanged.connect(lambda value: self.plots.set_window(float(value)))
         self.session.telemetry.connect(self.on_telemetry)
         self.session.status.connect(self.status.setText)
-        self.session.failure.connect(self.on_failure)
+        self.session.operation_failed.connect(self.on_failure)
+        self.session.connection_failed.connect(self.on_connection_failure)
+        self.session.connection_changed.connect(self.on_connection_changed)
         self.session.pid_read.connect(self.on_pid)
         self.session.pid_applied.connect(self.on_pid_applied)
         self.session.yaw_source_changed.connect(self.on_yaw_source_changed)
@@ -207,13 +209,19 @@ class MainWindow(QMainWindow):
         self.connection_motion.set_available_ports([item.device for item in list_ports.comports()])
 
     def connect_port(self, port: str, baud: int) -> None:
+        self.connection_motion.set_connecting(True)
         self.session.connect_port(port, baud)
-        self.connection_motion.set_connected(True)
 
     def disconnect_port(self) -> None:
         self.session.disconnect()
-        self.large_yaw_align.setEnabled(False)
+
+    def on_connection_changed(self, connected: bool) -> None:
+        self.connection_motion.set_connected(connected)
+
+    def on_connection_failure(self, message: str) -> None:
         self.connection_motion.set_connected(False)
+        self.status.setText(f"连接失败: {message}")
+        QMessageBox.warning(self, "连接失败", message)
 
     def toggle_connection(self) -> None:
         if self.session.connected:
@@ -369,7 +377,7 @@ class MainWindow(QMainWindow):
         self.status.setText(f"错误: {message}")
         if self.session.connected and self.session.motion_active:
             self.session.stop()
-        QMessageBox.warning(self, "通信错误", message)
+        QMessageBox.warning(self, "操作失败", message)
 
     def closeEvent(self, event: object) -> None:
         self.timer.stop()
