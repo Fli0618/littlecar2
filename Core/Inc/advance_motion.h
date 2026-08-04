@@ -249,7 +249,7 @@ extern "C"
     float path_cross_track_mm; /*!< 当前横向误差，单位为 mm。 */
     float path_measured_normal_velocity_mm_s; /*!< 实测左法向速度，单位为 mm/s。 */
     float path_normal_velocity_ff_mm_s; /*!< 曲率法向速度前馈，单位为 mm/s。 */
-    float path_normal_feedback_mm_s; /*!< 横向 PD 合成修正量，单位为 mm/s。 */
+    float path_normal_feedback_mm_s; /*!< 横向 PD 反馈量，单位为 mm/s。 */
     float path_command_wz_deg_s; /*!< 路径分支最终角速度指令，单位为 deg/s。 */
     uint8_t path_final_stage; /*!< 非零表示已进入最终 Goto PID 捕获阶段。 */
   } AdvanceMotion_DebugSnapshot_t;

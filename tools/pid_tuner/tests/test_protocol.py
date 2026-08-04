@@ -90,6 +90,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(len(payload), 94)
         item = decode_path_telemetry(Frame(0x85, 0, payload))
         self.assertEqual((item.path_id, item.path_config_revision), (2, 3))
+        self.assertEqual(item.normal_feedback_mm_s, 17.0)
+        self.assertEqual(item.normal_velocity_ff_mm_s, 16.0)
+        self.assertEqual(item.normal_command_mm_s, 1.0)
         self.assertEqual(item.command_wz_deg_s, 18.0)
 
     def test_decoder_rejects_legacy_protocol_version(self) -> None:

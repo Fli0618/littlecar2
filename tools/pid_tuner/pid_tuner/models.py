@@ -186,6 +186,11 @@ class PathTelemetry:
     normal_feedback_mm_s: float
     command_wz_deg_s: float
 
+    @property
+    def normal_command_mm_s(self) -> float:
+        """Return the final normal command while preserving the V3 frame layout."""
+        return self.normal_feedback_mm_s - self.normal_velocity_ff_mm_s
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
