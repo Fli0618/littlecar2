@@ -20,6 +20,14 @@ class PidConfigSnapshot:
 
 
 @dataclass(frozen=True)
+class PidConfigState:
+    """One PID configuration revision reported by the controller."""
+
+    revision: int
+    config: PidConfigSnapshot
+
+
+@dataclass(frozen=True)
 class PathConfigSnapshot:
     """Runtime-tunable continuous-path controller and speed-planner values."""
 
@@ -46,6 +54,14 @@ class PathConfigSnapshot:
 
     def to_dict(self) -> dict[str, float]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class PathConfigState:
+    """One path-controller configuration revision reported by the controller."""
+
+    revision: int
+    config: PathConfigSnapshot
 
 
 @dataclass(frozen=True)
@@ -110,8 +126,7 @@ class GotoStrategySnapshot:
 class AckResponse:
     command: int
     sequence: int
-    revision: int = 0
-    applied: bool = False
+    revision: int | None = None
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication, QAbstractSpinBox
 
 from pid_tuner.gui.app import GOTO_YAW_LABEL, MainWindow, format_pid_apply_log, format_telemetry_status, validate_motion_goal
 from pid_tuner.gui.session import SessionController
-from pid_tuner.models import MotionGoal, PidConfig, Telemetry
+from pid_tuner.models import GotoStrategySnapshot, MotionGoal, PidConfig, Telemetry
 
 
 class GuiMotionGoalTests(unittest.TestCase):
@@ -114,7 +114,7 @@ class GuiMotionGoalTests(unittest.TestCase):
         window = MainWindow()
         try:
             window.session.connected = True
-            window.on_goto_strategy_changed(True)
+            window.on_goto_strategy_changed(GotoStrategySnapshot(True))
             self.assertTrue(window.large_yaw_align.isEnabled())
             window.on_motion_changed(True)
             self.assertFalse(window.large_yaw_align.isEnabled())

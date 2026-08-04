@@ -9,6 +9,7 @@ from typing import Iterable
 from .models import (
     AckResponse,
     GotoStrategySnapshot,
+    PathConfigState,
     PathConfigSnapshot,
     PathControlConfig,
     PathStatus,
@@ -19,6 +20,7 @@ from .models import (
     PathPointSnapshot,
     PathStartCommand,
     PidConfig,
+    PidConfigState,
     Telemetry,
 )
 
@@ -207,25 +209,26 @@ def encode_goto_strategy(large_yaw_align_enabled: bool) -> bytes:
     return bytes([1 if large_yaw_align_enabled else 0])
 
 
-def decode_goto_strategy(payload: bytes) -> bool:
-    if len(payload) != 1 or payload[0] not in (0, 1):
-        raise ProtocolError("GOTO strategy payload must be one boolean byte")
-    return bool(payload[0])
+def decode_goto_strategy(frame: Frame) -> GotoStrategySnapshot:
+    if (frame.version != VERSION or frame.command != CMD_GOTO_STRATEGY or
+            len(frame.payload) != 1 or frame.payload[0] not in (0, 1)):
+        raise ProtocolError("invalid GOTO strategy frame")
+    return GotoStrategySnapshot(bool(frame.payload[0]))
 
 
-def decode_pid(payload: bytes) -> tuple[int, PidConfig]:
-    if len(payload) != 28:
-        raise ProtocolError("PID payload must be 28 bytes")
-    revision, *values = struct.unpack("<I6f", payload)
-    return revision, PidConfig(*values)
+def decode_pid(frame: Frame) -> PidConfigState:
+    if frame.version != VERSION or frame.command != CMD_PID or len(frame.payload) != 28:
+        raise ProtocolError("invalid PID frame")
+    revision, *values = struct.unpack("<I6f", frame.payload)
+    return PidConfigState(revision, PidConfig(*values))
 
 
-def decode_path_config(payload: bytes) -> tuple[int, PathControlConfig]:
+def decode_path_config(frame: Frame) -> PathConfigState:
     """Decode a revision followed by the complete path-control group."""
-    if len(payload) != 84:
-        raise ProtocolError("path config payload must be 84 bytes")
-    revision, *values = struct.unpack("<I20f", payload)
-    return revision, PathConfigSnapshot(*values)
+    if frame.version != VERSION or frame.command != CMD_PATH_CONFIG or len(frame.payload) != 84:
+        raise ProtocolError("invalid path config frame")
+    revision, *values = struct.unpack("<I20f", frame.payload)
+    return PathConfigState(revision, PathConfigSnapshot(*values))
 
 
 def decode_telemetry(frame: Frame) -> Telemetry:
@@ -288,11 +291,13 @@ def decode_path_status(frame: Frame) -> PathStatus:
                       staging_count, received_count, active_id, staging_id)
 
 
-def decode_ack(frame: Frame) -> AckResponse:
+def decode_ack(frame: Frame, expected_command: int) -> AckResponse:
     if frame.version != VERSION or frame.command != CMD_ACK or len(frame.payload) not in (1, 5):
         raise ProtocolError("invalid ACK frame")
-    revision = struct.unpack("<I", frame.payload[1:5])[0] if len(frame.payload) == 5 else 0
-    return AckResponse(frame.payload[0], frame.sequence, revision, False)
+    if frame.payload[0] != expected_command:
+        raise ProtocolError(f"ACK command 0x{frame.payload[0]:02X} does not match request 0x{expected_command:02X}")
+    revision = struct.unpack("<I", frame.payload[1:5])[0] if len(frame.payload) == 5 else None
+    return AckResponse(frame.payload[0], frame.sequence, revision)
 
 
 class StreamDecoder:
