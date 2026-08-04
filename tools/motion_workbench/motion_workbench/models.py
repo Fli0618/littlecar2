@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-import math
+
+from pid_tuner.models import PathTelemetry
 
 
 @dataclass(frozen=True)
@@ -12,59 +13,6 @@ class TargetPose:
     x_mm: float
     y_mm: float
     yaw_deg: float
-
-
-def transform_target_pose(
-    pose: TargetPose,
-    swap_xy: bool = False,
-    flip_x: bool = False,
-    flip_y: bool = False,
-) -> TargetPose:
-    """Transform a displayed runtime pose without changing source telemetry."""
-    if not swap_xy and not flip_x and not flip_y:
-        return pose
-    direction_x = math.sin(math.radians(pose.yaw_deg))
-    direction_y = math.cos(math.radians(pose.yaw_deg))
-    x_mm, y_mm = pose.x_mm, pose.y_mm
-    if swap_xy:
-        x_mm, y_mm = y_mm, x_mm
-        direction_x, direction_y = direction_y, direction_x
-    if flip_x:
-        x_mm = -x_mm
-        direction_x = -direction_x
-    if flip_y:
-        y_mm = -y_mm
-        direction_y = -direction_y
-    yaw_deg = (math.degrees(math.atan2(direction_x, direction_y)) + 180.0) % 360.0 - 180.0
-    return TargetPose(x_mm, y_mm, yaw_deg)
-
-
-def reflect_target_pose(pose: TargetPose, flip_x: bool, flip_y: bool) -> TargetPose:
-    """Compatibility wrapper for the original reflection-only display API."""
-    return transform_target_pose(pose, False, flip_x, flip_y)
-
-
-def inverse_transform_target_pose(
-    pose: TargetPose,
-    swap_xy: bool = False,
-    flip_x: bool = False,
-    flip_y: bool = False,
-) -> TargetPose:
-    """Convert a displayed target back into the board coordinate frame."""
-    direction_x = math.sin(math.radians(pose.yaw_deg))
-    direction_y = math.cos(math.radians(pose.yaw_deg))
-    x_mm, y_mm = pose.x_mm, pose.y_mm
-    if flip_x:
-        x_mm = -x_mm
-        direction_x = -direction_x
-    if flip_y:
-        y_mm = -y_mm
-        direction_y = -direction_y
-    if swap_xy:
-        x_mm, y_mm = y_mm, x_mm
-        direction_x, direction_y = direction_y, direction_x
-    yaw_deg = (math.degrees(math.atan2(direction_x, direction_y)) + 180.0) % 360.0 - 180.0
-    return TargetPose(x_mm, y_mm, yaw_deg)
 
 
 class SinglePointState(str, Enum):
@@ -86,6 +34,49 @@ class PlanExecutionState(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELED = "CANCELED"
+
+
+class PathUploadState(str, Enum):
+    """Lifecycle of one uploaded board path."""
+
+    IDLE = "IDLE"
+    UPLOADING = "UPLOADING"
+    COMMITTED = "COMMITTED"
+    STARTING = "STARTING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    ABORTED = "ABORTED"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True)
+class PathUploadSnapshot:
+    state: PathUploadState
+    path_id: int | None
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeUiSnapshot:
+    """The one 40 ms UI update consumes this immutable runtime view."""
+
+    actual_pose: TargetPose | None
+    target_pose: TargetPose | None
+    error: tuple[float, float, float] | None
+    path_telemetry: PathTelemetry | None
+    new_trace_points: tuple[TargetPose, ...]
+    trace_reset: bool
+    pose_valid: bool
+    motion_active: bool
+
+
+class CoordinateSyncState(str, Enum):
+    MAP_UNCALIBRATED = "MAP_UNCALIBRATED"
+    BOARD_ORIGIN_UNKNOWN = "BOARD_ORIGIN_UNKNOWN"
+    RESET_PENDING = "RESET_PENDING"
+    WAITING_ZERO_TELEMETRY = "WAITING_ZERO_TELEMETRY"
+    SYNCED = "SYNCED"
+    MISMATCH = "MISMATCH"
 
 
 @dataclass(frozen=True)
@@ -112,22 +103,3 @@ class ExperimentResult:
     reason: str
     pid_revision: int
     yaw_source: str
-
-
-@dataclass(frozen=True)
-class PathTelemetry:
-    path_id: int
-    state: int
-    nearest_segment_index: int
-    target_segment_index: int
-    progress_mm: float
-    remaining_mm: float
-    projection_x_mm: float
-    projection_y_mm: float
-    lookahead_x_mm: float
-    lookahead_y_mm: float
-    lookahead_mm: float
-    reference_speed_mm_s: float
-    curvature_1_mm: float
-    yaw_gradient_deg_per_mm: float
-    final_stage: bool

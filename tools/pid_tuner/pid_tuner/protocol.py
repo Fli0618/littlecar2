@@ -6,10 +6,26 @@ import struct
 import math
 from typing import Iterable
 
-from .models import PathControlConfig, PidConfig, Telemetry
+from .models import (
+    AckResponse,
+    GotoStrategySnapshot,
+    PathConfigState,
+    PathConfigSnapshot,
+    PathControlConfig,
+    PathStatus,
+    PathTelemetry,
+    PathBeginCommand,
+    PathChunkCommand,
+    PathCommitCommand,
+    PathPointSnapshot,
+    PathStartCommand,
+    PidConfig,
+    PidConfigState,
+    Telemetry,
+)
 
 SYNC = b"\xA5\x5A"
-VERSION = 2
+VERSION = 3
 MAX_PAYLOAD = 96
 FRAME_OVERHEAD = 9
 
@@ -42,7 +58,17 @@ CMD_PATH_CONFIG = 0x86
 CMD_ERROR = 0xE0
 
 TELEMETRY_PAYLOAD_SIZE = 96
-PATH_TELEMETRY_PAYLOAD_SIZE = 50
+PATH_TELEMETRY_PAYLOAD_SIZE = 94
+PATH_CONFIG_FIELDS = (
+    "kp_cross_track", "kd_cross_track_velocity", "kp_yaw", "kd_yaw_rate",
+    "cruise_speed_mm_s", "max_yaw_rate_deg_s", "accel_mm_s2", "decel_mm_s2",
+    "max_lateral_accel_mm_s2", "curvature_preview_mm", "curvature_ff_time_s",
+    "lookahead_min_mm", "lookahead_base_mm", "lookahead_speed_gain_s",
+    "lookahead_curve_gain_mm", "lookahead_max_mm", "lookahead_rate_mm_s",
+    "initial_lookahead_mm", "final_capture_distance_mm", "final_capture_speed_mm_s",
+)
+PATH_MAX_POINTS = 256
+PATH_CHUNK_MAX_POINTS = 7
 
 
 class ProtocolError(ValueError):
@@ -85,27 +111,34 @@ def encode_pid(config: PidConfig) -> bytes:
 
 def encode_path_config(config: PathControlConfig) -> bytes:
     """Encode all path-control values as one atomic little-endian group."""
-    values = config.to_dict()
-    if not all(math.isfinite(value) for value in values.values()):
+    values = tuple(getattr(config, field) for field in PATH_CONFIG_FIELDS)
+    if not all(math.isfinite(value) for value in values):
         raise ProtocolError("path config values must be finite")
     nonnegative = (
         ("kp_cross_track", 20.0), ("kd_cross_track_velocity", 20.0),
         ("kp_yaw", 20.0), ("kd_yaw_rate", 20.0),
         ("lookahead_speed_gain_s", 2.0), ("lookahead_curve_gain_mm", 1000.0),
+        ("curvature_ff_time_s", 2.0),
     )
     positive = (
         ("cruise_speed_mm_s", 1500.0), ("max_yaw_rate_deg_s", 180.0),
         ("accel_mm_s2", 5000.0), ("decel_mm_s2", 5000.0),
-        ("max_lateral_accel_mm_s2", 5000.0), ("lookahead_min_mm", 1000.0),
+        ("max_lateral_accel_mm_s2", 5000.0), ("curvature_preview_mm", 2000.0),
+        ("lookahead_min_mm", 1000.0),
         ("lookahead_base_mm", 1000.0), ("lookahead_max_mm", 1000.0),
+        ("lookahead_rate_mm_s", 2000.0), ("initial_lookahead_mm", 1000.0),
+        ("final_capture_distance_mm", 2000.0), ("final_capture_speed_mm_s", 1500.0),
     )
-    if (any(not 0.0 <= values[name] <= high for name, high in nonnegative) or
-            any(not 0.0 < values[name] <= high for name, high in positive)):
+    mapping = dict(zip(PATH_CONFIG_FIELDS, values))
+    if (any(not 0.0 <= mapping[name] <= high for name, high in nonnegative) or
+            any(not 0.0 < mapping[name] <= high for name, high in positive)):
         raise ProtocolError("path config value is outside its supported range")
-    if not (values["lookahead_min_mm"] <= values["lookahead_base_mm"] <=
-            values["lookahead_max_mm"]):
+    if not (mapping["lookahead_min_mm"] <= mapping["lookahead_base_mm"] <=
+            mapping["lookahead_max_mm"] and
+            mapping["initial_lookahead_mm"] >= mapping["lookahead_min_mm"] and
+            mapping["initial_lookahead_mm"] <= mapping["lookahead_max_mm"]):
         raise ProtocolError("path lookahead must satisfy min <= base <= max")
-    return struct.pack("<14f", *values.values())
+    return struct.pack("<20f", *values)
 
 
 def encode_goal(goal: "MotionGoal") -> bytes:
@@ -116,6 +149,52 @@ def encode_goal(goal: "MotionGoal") -> bytes:
     return struct.pack("<5fIB", goal.x_mm, goal.y_mm, goal.yaw_deg,
                        goal.vmax_mm_s, goal.wmax_deg_s, goal.timeout_ms,
                        (0x01 if goal.use_yaw else 0x00) | (0x02 if goal.use_position else 0x00))
+
+
+def _path_point_bytes(points: Iterable[object]) -> tuple[PathPointSnapshot, bytes]:
+    snapshots = tuple(PathPointSnapshot(float(point.x_mm), float(point.y_mm), float(point.yaw_deg))
+                      for point in points)
+    if not 2 <= len(snapshots) <= PATH_MAX_POINTS:
+        raise ProtocolError(f"path point count must be between 2 and {PATH_MAX_POINTS}")
+    if not all(math.isfinite(value) for point in snapshots for value in
+               (point.x_mm, point.y_mm, point.yaw_deg)):
+        raise ProtocolError("path point values must be finite")
+    raw = b"".join(struct.pack("<fff", point.x_mm, point.y_mm, point.yaw_deg)
+                   for point in snapshots)
+    return snapshots, raw
+
+
+def build_path_upload(path_id: int, points: Iterable[object]) -> tuple[
+        PathBeginCommand, tuple[PathChunkCommand, ...], PathCommitCommand]:
+    snapshots, raw = _path_point_bytes(points)
+    if not 0 <= path_id <= 0xFFFFFFFF:
+        raise ProtocolError("path id is out of range")
+    chunks: list[PathChunkCommand] = []
+    for offset in range(0, len(snapshots), PATH_CHUNK_MAX_POINTS):
+        chunks.append(PathChunkCommand(path_id, offset,
+                                       snapshots[offset:offset + PATH_CHUNK_MAX_POINTS]))
+    return (PathBeginCommand(path_id, len(snapshots), crc16_ccitt_false(raw)),
+            tuple(chunks), PathCommitCommand(path_id))
+
+
+def encode_path_begin(command: PathBeginCommand) -> bytes:
+    return struct.pack("<IHH", command.path_id, command.point_count, command.crc16)
+
+
+def encode_path_chunk(command: PathChunkCommand) -> bytes:
+    if not 1 <= len(command.points) <= PATH_CHUNK_MAX_POINTS:
+        raise ProtocolError("path chunk point count is out of range")
+    return (struct.pack("<IHB", command.path_id, command.first_index, len(command.points)) +
+            b"".join(struct.pack("<fff", point.x_mm, point.y_mm, point.yaw_deg)
+                     for point in command.points))
+
+
+def encode_path_commit(command: PathCommitCommand) -> bytes:
+    return struct.pack("<I", command.path_id)
+
+
+def encode_path_start(command: PathStartCommand) -> bytes:
+    return struct.pack("<I", command.path_id)
 
 
 def encode_yaw_source(source: str) -> bytes:
@@ -130,29 +209,31 @@ def encode_goto_strategy(large_yaw_align_enabled: bool) -> bytes:
     return bytes([1 if large_yaw_align_enabled else 0])
 
 
-def decode_goto_strategy(payload: bytes) -> bool:
-    if len(payload) != 1 or payload[0] not in (0, 1):
-        raise ProtocolError("GOTO strategy payload must be one boolean byte")
-    return bool(payload[0])
+def decode_goto_strategy(frame: Frame) -> GotoStrategySnapshot:
+    if (frame.version != VERSION or frame.command != CMD_GOTO_STRATEGY or
+            len(frame.payload) != 1 or frame.payload[0] not in (0, 1)):
+        raise ProtocolError("invalid GOTO strategy frame")
+    return GotoStrategySnapshot(bool(frame.payload[0]))
 
 
-def decode_pid(payload: bytes) -> tuple[int, PidConfig]:
-    if len(payload) != 28:
-        raise ProtocolError("PID payload must be 28 bytes")
-    revision, *values = struct.unpack("<I6f", payload)
-    return revision, PidConfig(*values)
+def decode_pid(frame: Frame) -> PidConfigState:
+    if frame.version != VERSION or frame.command != CMD_PID or len(frame.payload) != 28:
+        raise ProtocolError("invalid PID frame")
+    revision, *values = struct.unpack("<I6f", frame.payload)
+    return PidConfigState(revision, PidConfig(*values))
 
 
-def decode_path_config(payload: bytes) -> tuple[int, PathControlConfig]:
+def decode_path_config(frame: Frame) -> PathConfigState:
     """Decode a revision followed by the complete path-control group."""
-    if len(payload) != 60:
-        raise ProtocolError("path config payload must be 60 bytes")
-    revision, *values = struct.unpack("<I14f", payload)
-    return revision, PathControlConfig(*values)
+    if frame.version != VERSION or frame.command != CMD_PATH_CONFIG or len(frame.payload) != 84:
+        raise ProtocolError("invalid path config frame")
+    revision, *values = struct.unpack("<I20f", frame.payload)
+    return PathConfigState(revision, PathConfigSnapshot(*values))
 
 
 def decode_telemetry(frame: Frame) -> Telemetry:
-    if frame.command != CMD_TELEMETRY or len(frame.payload) != TELEMETRY_PAYLOAD_SIZE:
+    if (frame.version != VERSION or frame.command != CMD_TELEMETRY or
+            len(frame.payload) != TELEMETRY_PAYLOAD_SIZE):
         raise ProtocolError("invalid telemetry frame")
     values = struct.unpack("<IIIBBH20f", frame.payload)
     return Telemetry(
@@ -173,11 +254,50 @@ def decode_telemetry(frame: Frame) -> Telemetry:
     )
 
 
-def decode_path_telemetry(frame: Frame) -> tuple[int, ... | float]:
-    """Decode the fixed V2 path diagnostics frame without changing normal telemetry."""
-    if frame.command != CMD_PATH_TELEMETRY or len(frame.payload) != PATH_TELEMETRY_PAYLOAD_SIZE:
+def decode_path_telemetry(frame: Frame) -> PathTelemetry:
+    """Decode the fixed V3 path diagnostics frame into a typed snapshot."""
+    if (frame.version != VERSION or frame.command != CMD_PATH_TELEMETRY or
+            len(frame.payload) != PATH_TELEMETRY_PAYLOAD_SIZE):
         raise ProtocolError("invalid path telemetry frame")
-    return struct.unpack("<IBHH10fB", frame.payload)
+    values = struct.unpack("<IIIBHHB19f", frame.payload)
+    floats = values[7:]
+    return PathTelemetry(
+        tick=values[0], path_id=values[1], path_config_revision=values[2],
+        state=values[3], nearest_segment_index=values[4],
+        target_segment_index=values[5], final_stage=values[6],
+        progress_mm=floats[0], remaining_mm=floats[1],
+        projection_x_mm=floats[2], projection_y_mm=floats[3],
+        lookahead_x_mm=floats[4], lookahead_y_mm=floats[5],
+        signed_curvature_1_mm=floats[6], curvature_preview_1_mm=floats[7],
+        yaw_gradient_deg_per_mm=floats[8], reference_speed_mm_s=floats[9],
+        lookahead_mm=floats[10], feedforward_vx_mm_s=floats[11],
+        feedforward_vy_mm_s=floats[12], feedforward_wz_deg_s=floats[13],
+        cross_track_mm=floats[14], measured_normal_velocity_mm_s=floats[15],
+        normal_velocity_ff_mm_s=floats[16], normal_feedback_mm_s=floats[17],
+        command_wz_deg_s=floats[18],
+    )
+
+
+def decode_path_status(frame: Frame) -> PathStatus:
+    if (frame.version != VERSION or frame.command != CMD_PATH_STATUS_RESPONSE or
+            len(frame.payload) != 17):
+        raise ProtocolError("invalid path status frame")
+    motion_state = frame.payload[0]
+    active_present = bool(frame.payload[1])
+    staging_state = frame.payload[2]
+    active_count, staging_count, received_count = struct.unpack_from("<HHH", frame.payload, 3)
+    active_id, staging_id = struct.unpack_from("<II", frame.payload, 9)
+    return PathStatus(motion_state, active_present, staging_state, active_count,
+                      staging_count, received_count, active_id, staging_id)
+
+
+def decode_ack(frame: Frame, expected_command: int) -> AckResponse:
+    if frame.version != VERSION or frame.command != CMD_ACK or len(frame.payload) not in (1, 5):
+        raise ProtocolError("invalid ACK frame")
+    if frame.payload[0] != expected_command:
+        raise ProtocolError(f"ACK command 0x{frame.payload[0]:02X} does not match request 0x{expected_command:02X}")
+    revision = struct.unpack("<I", frame.payload[1:5])[0] if len(frame.payload) == 5 else None
+    return AckResponse(frame.payload[0], frame.sequence, revision)
 
 
 class StreamDecoder:
@@ -213,6 +333,10 @@ class StreamDecoder:
             if crc16_ccitt_false(raw[2:-2]) != received_crc:
                 self.crc_errors += 1
                 del self._buffer[0]
+                continue
+            if raw[2] != VERSION:
+                self.format_errors += 1
+                del self._buffer[:frame_length]
                 continue
             frames.append(Frame(raw[3], raw[4], raw[7:-2], raw[2]))
             del self._buffer[:frame_length]

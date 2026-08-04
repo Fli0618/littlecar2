@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections import deque
 from dataclasses import replace
 
 from PySide6.QtCore import QObject, Signal
@@ -15,9 +16,11 @@ from map_planner.bezier import generate_bezier_path_points
 from map_planner.models import (BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan, Pose, RotateInPlace,
                                 Waypoint)
 
-from .models import (ExperimentResult, PathTelemetry, PlanExecution, PlanExecutionState, SinglePointState, TargetPose,
-                     inverse_transform_target_pose)
-from .path_transfer import build_path_begin, build_path_chunks, build_path_commit, build_path_start
+from .models import (CoordinateSyncState, ExperimentResult, PathTelemetry, PathUploadSnapshot,
+                     PathUploadState, PlanExecution, PlanExecutionState, RuntimeUiSnapshot,
+                     SinglePointState, TargetPose)
+from pid_tuner.models import PathStartCommand
+from pid_tuner.protocol import build_path_upload
 
 
 class MotionWorkbenchController(QObject):
@@ -25,13 +28,11 @@ class MotionWorkbenchController(QObject):
 
     candidate_changed = Signal(object)
     execution_changed = Signal(object)
-    actual_pose_changed = Signal(object, bool)
-    trace_changed = Signal(object)
     motion_state_changed = Signal(str)
     experiment_finished = Signal(object)
     status_changed = Signal(str)
-    path_telemetry_changed = Signal(object)
-    upload_changed = Signal(str)
+    upload_changed = Signal(object)
+    coordinate_sync_changed = Signal(object)
     plan_changed = Signal(object)
     plan_execution_changed = Signal(object)
     plan_finished = Signal(object)
@@ -40,10 +41,17 @@ class MotionWorkbenchController(QObject):
         super().__init__()
         self.session = session or SessionController()
         self.buffer = TelemetryBuffer()
+        self.telemetry_buffer = self.buffer
+        self.path_telemetry_buffer: deque[PathTelemetry] = deque(maxlen=256)
+        self.latest_telemetry: Telemetry | None = None
+        self.latest_path_telemetry: PathTelemetry | None = None
         self.candidate: TargetPose | None = None
         self.execution: TargetPose | None = None
         self.actual: TargetPose | None = None
         self._trace: list[TargetPose] = []
+        self._new_trace_points: list[TargetPose] = []
+        self._trace_reset = True
+        self._pose_valid = False
         self._started_at: float | None = None
         self._pid_revision = 0
         self._last_state = SinglePointState.NO_TARGET
@@ -57,16 +65,24 @@ class MotionWorkbenchController(QObject):
         self._plan_waiting = False
         self._plan_active_step_name = ""
         self._plan_reason = ""
-        self._plan_path_id = 100
-        self._command_swap_xy = False
-        self._command_flip_x = False
-        self._command_flip_y = False
+        self._next_path_id = 1
+        self._upload = PathUploadSnapshot(PathUploadState.IDLE, None)
+        self._coordinate_sync_state = CoordinateSyncState.MAP_UNCALIBRATED
+        self._map_calibration_known = False
+        self._coordinate_sync_started_at: float | None = None
         self.session.telemetry.connect(self.on_telemetry)
         self.session.motion_changed.connect(self._on_motion_changed)
         self.session.status.connect(self.status_changed)
-        self.session.failure.connect(self._on_failure)
+        if hasattr(self.session, "operation_failed"):
+            self.session.operation_failed.connect(self._on_failure)
+        else:
+            self.session.failure.connect(self._on_failure)
         if hasattr(self.session, "path_telemetry"):
             self.session.path_telemetry.connect(self.on_path_telemetry)
+        if hasattr(self.session, "path_committed"):
+            self.session.path_committed.connect(self.path_committed)
+        if hasattr(self.session, "path_started"):
+            self.session.path_started.connect(self.path_started)
 
     @property
     def state(self) -> SinglePointState:
@@ -83,6 +99,67 @@ class MotionWorkbenchController(QObject):
     @property
     def plan_execution(self) -> PlanExecution:
         return self._plan_snapshot()
+
+    @property
+    def upload(self) -> PathUploadSnapshot:
+        return self._upload
+
+    @property
+    def coordinate_sync_state(self) -> CoordinateSyncState:
+        return self._coordinate_sync_state
+
+    def consume_runtime_ui_snapshot(self) -> RuntimeUiSnapshot:
+        """Return only trace samples accumulated since the preceding UI tick."""
+        snapshot = RuntimeUiSnapshot(
+            self.actual,
+            self.execution,
+            (tuple(self.latest_telemetry.error) if self.latest_telemetry is not None else None),
+            self.latest_path_telemetry,
+            tuple(self._new_trace_points),
+            self._trace_reset,
+            self._pose_valid,
+            self.session.motion_active,
+        )
+        self._new_trace_points.clear()
+        self._trace_reset = False
+        return snapshot
+
+    def set_map_calibrated(self, calibrated: bool) -> None:
+        self._map_calibration_known = True
+        self._set_coordinate_sync_state(
+            CoordinateSyncState.BOARD_ORIGIN_UNKNOWN if calibrated else CoordinateSyncState.MAP_UNCALIBRATED)
+
+    def start_origin_reset(self) -> bool:
+        if not self.session.connected or self.session.motion_active:
+            return False
+        if self._coordinate_sync_state == CoordinateSyncState.RESET_PENDING:
+            return False
+        self._set_coordinate_sync_state(CoordinateSyncState.RESET_PENDING)
+        self.session.reset_origin()
+        return True
+
+    def confirm_origin_reset(self) -> None:
+        """Clear stale overlays only after the board accepted ResetOrigin."""
+        self.new_experiment()
+        self.latest_path_telemetry = None
+        self._last_path = None
+        self._coordinate_sync_started_at = time.monotonic()
+        self._set_coordinate_sync_state(CoordinateSyncState.WAITING_ZERO_TELEMETRY)
+
+    def invalidate_coordinate_sync(self) -> None:
+        if self._coordinate_sync_state != CoordinateSyncState.MAP_UNCALIBRATED:
+            self._set_coordinate_sync_state(CoordinateSyncState.BOARD_ORIGIN_UNKNOWN)
+
+    def can_execute_map(self) -> bool:
+        return (self.session.connected and not self.session.motion_active and
+                self._coordinate_sync_state == CoordinateSyncState.SYNCED and
+                self._upload.state not in (PathUploadState.UPLOADING, PathUploadState.STARTING))
+
+    def _set_coordinate_sync_state(self, state: CoordinateSyncState) -> None:
+        if self._coordinate_sync_state == state:
+            return
+        self._coordinate_sync_state = state
+        self.coordinate_sync_changed.emit(state)
 
     def set_plan(self, plan: Plan | None) -> None:
         """Select a workflow and reset its execution cursor to the world origin."""
@@ -137,37 +214,13 @@ class MotionWorkbenchController(QObject):
         self.execution = replace(self.candidate)
         self.execution_changed.emit(self.execution)
         self._trace.clear()
-        self.trace_changed.emit(self.trace)
+        self._new_trace_points.clear()
+        self._trace_reset = True
         self._started_at = time.monotonic()
         self._last_state = SinglePointState.RUNNING
         self.motion_state_changed.emit(self._last_state.value)
-        self.session.start_motion(self._transform_goal_for_command(goal))
+        self.session.start_motion(goal)
         return True
-
-    def set_command_axis_transform(
-        self, swap_xy: bool, flip_x: bool, flip_y: bool
-    ) -> None:
-        """Use the inverse display transform for every board-bound pose."""
-        self._command_swap_xy = bool(swap_xy)
-        self._command_flip_x = bool(flip_x)
-        self._command_flip_y = bool(flip_y)
-
-    def _transform_goal_for_command(self, goal: MotionGoal) -> MotionGoal:
-        pose = inverse_transform_target_pose(
-            TargetPose(goal.x_mm, goal.y_mm, goal.yaw_deg),
-            self._command_swap_xy, self._command_flip_x, self._command_flip_y)
-        return replace(goal, x_mm=pose.x_mm, y_mm=pose.y_mm, yaw_deg=pose.yaw_deg)
-
-    def _transform_path_for_command(
-        self, points: list[PathPosePoint]
-    ) -> list[PathPosePoint]:
-        transformed: list[PathPosePoint] = []
-        for point in points:
-            pose = inverse_transform_target_pose(
-                TargetPose(point.x_mm, point.y_mm, point.yaw_deg),
-                self._command_swap_xy, self._command_flip_x, self._command_flip_y)
-            transformed.append(PathPosePoint(pose.x_mm, pose.y_mm, pose.yaw_deg))
-        return transformed
 
     def stop(self) -> None:
         if self._plan_state == PlanExecutionState.RUNNING:
@@ -179,23 +232,28 @@ class MotionWorkbenchController(QObject):
     def new_experiment(self) -> None:
         self.execution = None
         self._trace.clear()
+        self._new_trace_points.clear()
+        self._trace_reset = True
+        self.actual = None
+        self._pose_valid = False
         self._started_at = None
         self.buffer.clear()
         self.execution_changed.emit(None)
-        self.trace_changed.emit(self.trace)
 
     def on_telemetry(self, item: Telemetry) -> None:
+        self.latest_telemetry = item
         self.buffer.append(item)
         self._pid_revision = item.pid_revision
         pose = TargetPose(*item.actual)
         valid = bool(item.flags & 0x01) and bool(item.flags & 0x02)
         self.actual = pose if valid else None
-        self.actual_pose_changed.emit(pose, valid)
+        self._pose_valid = valid
         if valid and self._should_append_trace(pose):
             self._trace.append(pose)
+            self._new_trace_points.append(pose)
             if len(self._trace) > 2000:
                 del self._trace[:len(self._trace) - 2000]
-            self.trace_changed.emit(self.trace)
+        self._update_coordinate_sync(item, valid)
         if self._plan_state == PlanExecutionState.RUNNING and self._plan_waiting and item.state not in (0, 1):
             self._handle_plan_terminal(item.state)
         if self.execution is not None and self._last_state == SinglePointState.RUNNING and item.state not in (0, 1):
@@ -206,19 +264,66 @@ class MotionWorkbenchController(QObject):
             self._finish(state, reason)
 
     def on_path_telemetry(self, item: PathTelemetry) -> None:
+        self.latest_path_telemetry = item
+        self.path_telemetry_buffer.append(item)
         self._last_path = item
-        self.path_telemetry_changed.emit(item)
+
+    def _update_coordinate_sync(self, item: Telemetry, valid: bool) -> None:
+        if self._coordinate_sync_state != CoordinateSyncState.WAITING_ZERO_TELEMETRY:
+            return
+        if not valid:
+            return
+        x_mm, y_mm, yaw_deg = item.actual
+        yaw_error = ((yaw_deg + 180.0) % 360.0) - 180.0
+        if abs(x_mm) <= 30.0 and abs(y_mm) <= 30.0 and abs(yaw_error) <= 3.0:
+            self._set_coordinate_sync_state(CoordinateSyncState.SYNCED)
+        elif (self._coordinate_sync_started_at is not None and
+              time.monotonic() - self._coordinate_sync_started_at >= 1.5):
+            self._set_coordinate_sync_state(CoordinateSyncState.MISMATCH)
 
     def upload_path(self, path_id: int, points: list[PathPosePoint]) -> None:
-        command_points = self._transform_path_for_command(points)
-        self.session.upload_path(build_path_begin(path_id, command_points), build_path_chunks(path_id, command_points),
-                                 build_path_commit(path_id))
+        begin, chunks, commit = build_path_upload(path_id, points)
+        self._set_upload(PathUploadState.UPLOADING, path_id, "正在上传路径")
+        self.session.upload_path(begin, chunks, commit)
+
+    def allocate_path_id(self) -> int:
+        """Allocate one uint32 path id for manual and workflow uploads."""
+        active = self._upload.path_id
+        for _ in range(0xFFFFFFFF):
+            path_id = self._next_path_id
+            self._next_path_id = 1 if path_id >= 0xFFFFFFFF else path_id + 1
+            if path_id != active:
+                return path_id
+        raise RuntimeError("没有可用路径 ID")
 
     def start_path(self, path_id: int) -> None:
-        self.session.start_path(build_path_start(path_id))
+        if self._upload.state != PathUploadState.COMMITTED or self._upload.path_id != path_id:
+            self.status_changed.emit("路径尚未提交，不能启动")
+            return
+        self._set_upload(PathUploadState.STARTING, path_id, "正在启动路径")
+        self.session.start_path(PathStartCommand(path_id))
 
     def abort_path(self) -> None:
+        path_id = self._upload.path_id
+        self._set_upload(PathUploadState.ABORTED, path_id, "路径已中止")
         self.session.abort_path()
+
+    def path_committed(self, path_id: int) -> None:
+        """Called by the session only after PATH_COMMIT received an ACK."""
+        if self._upload.state == PathUploadState.UPLOADING and self._upload.path_id == path_id:
+            self._set_upload(PathUploadState.COMMITTED, path_id, "路径已提交")
+
+    def path_started(self, path_id: int) -> None:
+        if self._upload.path_id == path_id:
+            self._set_upload(PathUploadState.RUNNING, path_id, "路径运行中")
+
+    def path_upload_failed(self, message: str) -> None:
+        if self._upload.state in (PathUploadState.UPLOADING, PathUploadState.STARTING):
+            self._set_upload(PathUploadState.FAILED, None, message)
+
+    def _set_upload(self, state: PathUploadState, path_id: int | None, message: str = "") -> None:
+        self._upload = PathUploadSnapshot(state, path_id, message)
+        self.upload_changed.emit(self._upload)
 
     def _on_motion_changed(self, active: bool) -> None:
         if self._plan_state == PlanExecutionState.RUNNING:
@@ -230,6 +335,7 @@ class MotionWorkbenchController(QObject):
             self._finish(SinglePointState.CANCELED, "运动停止")
 
     def _on_failure(self, message: str) -> None:
+        self.path_upload_failed(message)
         if self._plan_state == PlanExecutionState.RUNNING:
             self._plan_waiting = False
             self.session.stop()
@@ -264,6 +370,9 @@ class MotionWorkbenchController(QObject):
             abs(((pose.yaw_deg - last.yaw_deg + 180.0) % 360.0) - 180.0) >= 2.0
 
     def _start_plan(self, continuous: bool, start_index: int) -> bool:
+        if self._map_calibration_known and self._coordinate_sync_state != CoordinateSyncState.SYNCED:
+            self.status_changed.emit("地图坐标尚未同步，请先 ResetOrigin 并等待零点遥测")
+            return False
         if self._plan is None:
             self.status_changed.emit("请先选择流程方案")
             return False
@@ -308,15 +417,15 @@ class MotionWorkbenchController(QObject):
         self._emit_plan_execution()
         try:
             if isinstance(step, Waypoint):
-                self.session.start_motion(self._transform_goal_for_command(MotionGoal(
+                self.session.start_motion(MotionGoal(
                     step.x_mm, step.y_mm, step.yaw_deg, step.vmax_mm_s, step.wmax_deg_s,
                     round(step.timeout_s * 1000), step.use_yaw, True,
-                )))
+                ))
             elif isinstance(step, RotateInPlace):
-                self.session.start_motion(self._transform_goal_for_command(MotionGoal(
+                self.session.start_motion(MotionGoal(
                     self._plan_pose.x_mm, self._plan_pose.y_mm, step.yaw_deg, 0.0, step.wmax_deg_s,
                     round(step.timeout_s * 1000), True, False,
-                )))
+                ))
             elif isinstance(step, ContinuousPathSegment):
                 self._send_plan_path(step.points)
             elif isinstance(step, BezierPathSegment):
@@ -336,12 +445,10 @@ class MotionWorkbenchController(QObject):
             self._finish_plan(PlanExecutionState.FAILED, str(error))
 
     def _send_plan_path(self, points: list[PathPosePoint]) -> None:
-        path_id = self._plan_path_id
-        self._plan_path_id += 1
-        command_points = self._transform_path_for_command(points)
-        self.session.upload_path(build_path_begin(path_id, command_points), build_path_chunks(path_id, command_points),
-                                 build_path_commit(path_id))
-        self.session.start_path(build_path_start(path_id))
+        path_id = self.allocate_path_id()
+        begin, chunks, commit = build_path_upload(path_id, points)
+        self._set_upload(PathUploadState.UPLOADING, path_id, "正在上传流程路径")
+        self.session.upload_and_start_path(begin, chunks, commit, PathStartCommand(path_id))
 
     def _handle_plan_terminal(self, telemetry_state: int) -> None:
         self._plan_waiting = False

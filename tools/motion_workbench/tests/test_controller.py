@@ -8,9 +8,8 @@ from pid_tuner.models import MotionGoal, Telemetry
 from map_planner.models import BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace, Waypoint
 
 from motion_workbench.controller import MotionWorkbenchController
-from motion_workbench.models import (PlanExecutionState, TargetPose,
-                                     inverse_transform_target_pose,
-                                     reflect_target_pose, transform_target_pose)
+from motion_workbench.models import (CoordinateSyncState, PathUploadState, PlanExecutionState,
+                                     TargetPose)
 
 
 class FakeSession(QObject):
@@ -21,12 +20,16 @@ class FakeSession(QObject):
 
     def __init__(self) -> None:
         super().__init__(); self.started: list[MotionGoal] = []; self.stopped = 0
-        self.uploaded: list[tuple[bytes, list[bytes], bytes]] = []; self.paths_started: list[bytes] = []
+        self.uploaded = []; self.paths_started = []
+        self.connected = True; self.motion_active = False
 
     def start_motion(self, goal: MotionGoal) -> None: self.started.append(goal)
     def stop(self) -> None: self.stopped += 1
-    def upload_path(self, begin: bytes, chunks: list[bytes], commit: bytes) -> None: self.uploaded.append((begin, chunks, commit))
-    def start_path(self, payload: bytes) -> None: self.paths_started.append(payload)
+    def upload_path(self, begin, chunks, commit) -> None: self.uploaded.append((begin, chunks, commit))
+    def start_path(self, command) -> None: self.paths_started.append(command)
+    def upload_and_start_path(self, begin, chunks, commit, start) -> None:
+        self.upload_path(begin, chunks, commit); self.start_path(start)
+    def reset_origin(self) -> None: pass
 
 
 class ControllerTests(unittest.TestCase):
@@ -111,61 +114,42 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(len(session.started), 2)
         self.assertEqual(session.started[0], session.started[1])
 
-    def test_runtime_pose_reflection_updates_position_and_heading(self) -> None:
-        pose = TargetPose(10.0, 20.0, 30.0)
-        self.assertEqual(reflect_target_pose(pose, False, False), pose)
-        self.assertEqual(reflect_target_pose(pose, True, False), TargetPose(-10.0, 20.0, -30.0))
-        self.assertEqual(reflect_target_pose(pose, False, True), TargetPose(10.0, -20.0, 150.0))
-        both = reflect_target_pose(pose, True, True)
-        self.assertEqual((both.x_mm, both.y_mm), (-10.0, -20.0))
-        self.assertAlmostEqual(both.yaw_deg, -150.0)
-
-    def test_runtime_pose_transform_covers_all_axis_combinations(self) -> None:
-        pose = TargetPose(10.0, 20.0, 30.0)
-        expected = {
-            (False, False, False): (10.0, 20.0, 30.0),
-            (False, True, False): (-10.0, 20.0, -30.0),
-            (False, False, True): (10.0, -20.0, 150.0),
-            (False, True, True): (-10.0, -20.0, -150.0),
-            (True, False, False): (20.0, 10.0, 60.0),
-            (True, True, False): (-20.0, 10.0, -60.0),
-            (True, False, True): (20.0, -10.0, 120.0),
-            (True, True, True): (-20.0, -10.0, -120.0),
-        }
-        for flags, result in expected.items():
-            with self.subTest(flags=flags):
-                transformed = transform_target_pose(pose, *flags)
-                self.assertEqual((transformed.x_mm, transformed.y_mm), result[:2])
-                self.assertAlmostEqual(transformed.yaw_deg, result[2])
-
-        self.assertEqual(pose, TargetPose(10.0, 20.0, 30.0))
-
-    def test_display_and_command_axis_transforms_are_inverse(self) -> None:
-        pose = TargetPose(10.0, 20.0, 30.0)
-        for swap_xy in (False, True):
-            for flip_x in (False, True):
-                for flip_y in (False, True):
-                    with self.subTest(swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y):
-                        displayed = transform_target_pose(pose, swap_xy, flip_x, flip_y)
-                        restored = inverse_transform_target_pose(
-                            displayed, swap_xy, flip_x, flip_y)
-                        self.assertAlmostEqual(restored.x_mm, pose.x_mm)
-                        self.assertAlmostEqual(restored.y_mm, pose.y_mm)
-                        self.assertAlmostEqual(restored.yaw_deg, pose.yaw_deg)
-
-    def test_command_transform_applies_to_goal_and_path_without_changing_plan(self) -> None:
+    def test_commands_use_fixed_world_coordinates_without_runtime_transform(self) -> None:
         session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
-        controller.set_command_axis_transform(False, True, True)
         controller.select_candidate(TargetPose(10, 20, 30))
         controller.start_goal(MotionGoal(10, 20, 30, 100, 50, 1000))
 
         self.assertEqual(controller.execution, TargetPose(10, 20, 30))
-        self.assertEqual(session.started[-1], MotionGoal(-10, -20, -150, 100, 50, 1000))
+        self.assertEqual(session.started[-1], MotionGoal(10, 20, 30, 100, 50, 1000))
 
-        source = [PathPosePoint(10, 20, 30)]
-        transformed = controller._transform_path_for_command(source)
-        self.assertEqual(source, [PathPosePoint(10, 20, 30)])
-        self.assertEqual(transformed, [PathPosePoint(-10, -20, -150)])
+    def test_path_can_start_only_after_commit_confirmation(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        points = [PathPosePoint(0, 0, 0), PathPosePoint(100, 0, 0)]
+        controller.upload_path(9, points)
+        controller.start_path(9)
+        self.assertEqual(session.paths_started, [])
+        controller.path_committed(9)
+        self.assertEqual(controller.upload.state, PathUploadState.COMMITTED)
+        controller.start_path(9)
+        self.assertEqual([item.path_id for item in session.paths_started], [9])
+
+    def test_runtime_snapshot_consumes_incremental_trace_and_reset_marker(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        session.telemetry.emit(self._telemetry(1))
+        first = controller.consume_runtime_ui_snapshot()
+        second = controller.consume_runtime_ui_snapshot()
+        self.assertEqual(first.new_trace_points, (TargetPose(0, 0, 0),))
+        self.assertTrue(first.trace_reset)
+        self.assertEqual(second.new_trace_points, ())
+        self.assertFalse(second.trace_reset)
+
+    def test_origin_reset_requires_zero_telemetry_before_sync(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        controller.set_map_calibrated(True)
+        self.assertTrue(controller.start_origin_reset())
+        controller.confirm_origin_reset()
+        session.telemetry.emit(self._telemetry(1))
+        self.assertEqual(controller.coordinate_sync_state, CoordinateSyncState.SYNCED)
 
     @staticmethod
     def _telemetry(state: int) -> Telemetry:

@@ -2,12 +2,13 @@ import struct
 import unittest
 
 from pid_tuner.protocol import (
-    CMD_TELEMETRY, decode_goto_strategy, decode_path_config, encode_goal,
+    CMD_ACK, CMD_GOTO_STRATEGY, CMD_PATH_CONFIG, CMD_PID, CMD_TELEMETRY, decode_ack,
+    decode_goto_strategy, decode_path_config, decode_pid, encode_goal,
     encode_goto_strategy, encode_path_config, encode_yaw_source,
     Frame,
     StreamDecoder,
     crc16_ccitt_false,
-    decode_telemetry,
+    decode_path_telemetry, decode_telemetry,
     encode_frame,
 )
 from pid_tuner.models import PathControlConfig
@@ -15,7 +16,8 @@ from pid_tuner.models import PathControlConfig
 
 PATH_CONFIG = PathControlConfig(
     0.98, 0.62, 1.42, 0.427, 820.0, 100.0, 800.0, 1000.0,
-    600.0, 60.0, 60.0, 0.15, 120.0, 180.0,
+    600.0, 300.0, 0.05, 60.0, 60.0, 0.15, 120.0, 180.0,
+    400.0, 80.0, 60.0, 150.0,
 )
 
 
@@ -65,23 +67,50 @@ class ProtocolTests(unittest.TestCase):
     def test_goto_strategy_encoding_requires_one_boolean_byte(self) -> None:
         self.assertEqual(encode_goto_strategy(False), b"\x00")
         self.assertEqual(encode_goto_strategy(True), b"\x01")
-        self.assertFalse(decode_goto_strategy(b"\x00"))
-        self.assertTrue(decode_goto_strategy(b"\x01"))
+        self.assertFalse(decode_goto_strategy(Frame(CMD_GOTO_STRATEGY, 2, b"\x00")).large_yaw_align_enabled)
+        self.assertTrue(decode_goto_strategy(Frame(CMD_GOTO_STRATEGY, 2, b"\x01")).large_yaw_align_enabled)
         with self.assertRaises(ValueError):
-            decode_goto_strategy(b"\x02")
+            decode_goto_strategy(Frame(CMD_GOTO_STRATEGY, 2, b"\x02"))
 
     def test_path_config_round_trip_and_validation(self) -> None:
         encoded = encode_path_config(PATH_CONFIG)
-        self.assertEqual(len(encoded), 56)
-        revision, decoded = decode_path_config(struct.pack("<I", 7) + encoded)
-        self.assertEqual(revision, 7)
-        for actual, expected in zip(decoded.to_dict().values(), PATH_CONFIG.to_dict().values()):
+        self.assertEqual(len(encoded), 80)
+        state = decode_path_config(Frame(CMD_PATH_CONFIG, 3, struct.pack("<I", 7) + encoded))
+        self.assertEqual(state.revision, 7)
+        for actual, expected in zip(state.config.to_dict().values(), PATH_CONFIG.to_dict().values()):
             self.assertAlmostEqual(actual, expected, places=5)
         with self.assertRaises(ValueError):
             encode_path_config(PathControlConfig(
                 **{**PATH_CONFIG.to_dict(), "lookahead_min_mm": 200.0,
                    "lookahead_max_mm": 100.0}
             ))
+
+    def test_response_decoders_require_matching_frame_shapes(self) -> None:
+        pid = decode_pid(Frame(CMD_PID, 5, struct.pack("<I6f", 8, 1, 2, 3, 4, 5, 6)))
+        self.assertEqual((pid.revision, pid.config.kd_yaw), (8, 6.0))
+        ack = decode_ack(Frame(CMD_ACK, 5, bytes([0x02]) + (9).to_bytes(4, "little")), 0x02)
+        self.assertEqual((ack.command, ack.sequence, ack.revision), (0x02, 5, 9))
+        with self.assertRaises(ValueError):
+            decode_ack(Frame(CMD_ACK, 5, b"\x03"), 0x02)
+        with self.assertRaises(ValueError):
+            decode_pid(Frame(CMD_PATH_CONFIG, 5, b""))
+
+    def test_path_telemetry_is_typed_and_within_frame_budget(self) -> None:
+        values = [float(index) for index in range(19)]
+        payload = struct.pack("<IIIBHHB19f", 1, 2, 3, 1, 4, 5, 0, *values)
+        self.assertEqual(len(payload), 94)
+        item = decode_path_telemetry(Frame(0x85, 0, payload))
+        self.assertEqual((item.path_id, item.path_config_revision), (2, 3))
+        self.assertEqual(item.normal_feedback_mm_s, 17.0)
+        self.assertEqual(item.normal_velocity_ff_mm_s, 16.0)
+        self.assertEqual(item.normal_command_mm_s, 1.0)
+        self.assertEqual(item.command_wz_deg_s, 18.0)
+
+    def test_decoder_rejects_legacy_protocol_version(self) -> None:
+        legacy = encode_frame(0x01, 1, version=2)
+        decoder = StreamDecoder()
+        self.assertEqual(decoder.feed(legacy), [])
+        self.assertEqual(decoder.format_errors, 1)
 
 
 if __name__ == "__main__":

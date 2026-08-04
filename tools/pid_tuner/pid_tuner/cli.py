@@ -139,8 +139,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "get-pid":
             with _open(args) as client:
-                revision, pid = client.get_pid()
-            _print({"revision": revision, "pid": pid.to_dict()} if args.json else f"revision={revision}, pid={pid}", args.json)
+                state = client.get_pid()
+            _print({"revision": state.revision, "pid": state.config.to_dict()} if args.json else
+                   f"revision={state.revision}, pid={state.config}", args.json)
             return 0
         if args.command == "set-pid":
             if args.profile and any(getattr(args, field) is not None for field, _ in PID_OPTIONS):
@@ -149,14 +150,16 @@ def main(argv: list[str] | None = None) -> int:
             if not args.apply:
                 _print({"pending": pid.to_dict()} if args.json else f"dry run: {pid}; add --apply to write", args.json)
                 return 0
-            with _open(args) as client: revision = client.set_pid(pid)
-            _print({"revision": revision, "pid": pid.to_dict()} if args.json else f"PID submitted, revision={revision}", args.json)
+            with _open(args) as client: response = client.set_pid(pid)
+            _print({"revision": response.revision, "pid": pid.to_dict()} if args.json else
+                   f"PID submitted, revision={response.revision}", args.json)
             return 0
         if args.command == "restore-pid":
             if not args.apply:
                 _print("dry run: add --apply to restore firmware defaults", args.json); return 0
-            with _open(args) as client: revision = client.restore_pid()
-            _print({"revision": revision} if args.json else f"firmware defaults submitted, revision={revision}", args.json); return 0
+            with _open(args) as client: response = client.restore_pid()
+            _print({"revision": response.revision} if args.json else
+                   f"firmware defaults submitted, revision={response.revision}", args.json); return 0
         if args.command == "goto": return _run_goto(args)
         if args.command == "monitor":
             with _open(args) as client: telemetry = _collect(client, args.duration, False, args.json)
@@ -169,7 +172,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.from_device:
                 if not args.port:
                     raise ValueError("profile save --from-device requires --port")
-                with _open(args) as client: revision, pid = client.get_pid()
+                with _open(args) as client: state = client.get_pid()
+                revision, pid = state.revision, state.config
             else:
                 revision, pid = args.firmware_revision, _pid_from_args(args)
             path = save_profile(args.name, pid, args.note, revision)

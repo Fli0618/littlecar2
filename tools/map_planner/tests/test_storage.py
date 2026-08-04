@@ -4,7 +4,8 @@ import tempfile
 
 import pytest
 
-from map_planner.models import MAP_VERSION, ContinuousPathSegment, PathPosePoint, Plan, Waypoint
+from map_planner.models import (MAP_VERSION, BezierPathSegment, ContinuousPathSegment,
+                                PathPosePoint, Plan, Waypoint)
 from map_planner.storage import load_plan, save_plan
 
 
@@ -19,11 +20,31 @@ def test_v7_round_trip_writes_only_steps():
 
 
 @pytest.mark.parametrize("version", [5, 6])
-def test_legacy_versions_are_rejected(version):
+def test_unsupported_legacy_versions_are_rejected(version):
     value = Plan().to_dict()
     value["map_version"] = version
-    with pytest.raises(ValueError, match="map_version: 7"):
+    with pytest.raises(ValueError, match="map_version 7、8 或 9"):
         Plan.from_dict(value)
+
+
+@pytest.mark.parametrize("version", [7, 8])
+def test_v7_and_v8_plans_are_migrated_to_v9(version):
+    value = Plan(steps=[Waypoint(1, 2)]).to_dict()
+    value["map_version"] = version
+
+    migrated = Plan.from_dict(value)
+
+    assert migrated.steps == [Waypoint(2, 1)]
+    assert migrated.to_dict()["map_version"] == MAP_VERSION
+
+
+def test_v8_bezier_coordinates_are_migrated_to_v9_axes():
+    value = Plan(steps=[BezierPathSegment(1, 2, 3, 4, 5, 6, 30)]).to_dict()
+    value["map_version"] = 8
+
+    migrated = Plan.from_dict(value)
+
+    assert migrated.steps == [BezierPathSegment(2, 1, 4, 3, 6, 5, 30)]
 
 
 @pytest.mark.parametrize("legacy_key", ["nodes", "commands", "path_points"])

@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..models import MotionGoal, PidConfig, Telemetry
+from ..models import GotoStrategySnapshot, MotionGoal, PidConfig, PidConfigState, Telemetry
 from ..storage import (DEFAULT_LOGS_DIR, export_c_defaults, list_profiles,
                        load_profile, save_profile, write_telemetry_csv)
 from .buffer import TelemetryBuffer
@@ -193,7 +193,9 @@ class MainWindow(QMainWindow):
         self.window.valueChanged.connect(lambda value: self.plots.set_window(float(value)))
         self.session.telemetry.connect(self.on_telemetry)
         self.session.status.connect(self.status.setText)
-        self.session.failure.connect(self.on_failure)
+        self.session.operation_failed.connect(self.on_failure)
+        self.session.connection_failed.connect(self.on_connection_failure)
+        self.session.connection_changed.connect(self.on_connection_changed)
         self.session.pid_read.connect(self.on_pid)
         self.session.pid_applied.connect(self.on_pid_applied)
         self.session.yaw_source_changed.connect(self.on_yaw_source_changed)
@@ -207,13 +209,19 @@ class MainWindow(QMainWindow):
         self.connection_motion.set_available_ports([item.device for item in list_ports.comports()])
 
     def connect_port(self, port: str, baud: int) -> None:
+        self.connection_motion.set_connecting(True)
         self.session.connect_port(port, baud)
-        self.connection_motion.set_connected(True)
 
     def disconnect_port(self) -> None:
         self.session.disconnect()
-        self.large_yaw_align.setEnabled(False)
+
+    def on_connection_changed(self, connected: bool) -> None:
+        self.connection_motion.set_connected(connected)
+
+    def on_connection_failure(self, message: str) -> None:
         self.connection_motion.set_connected(False)
+        self.status.setText(f"连接失败: {message}")
+        QMessageBox.warning(self, "连接失败", message)
 
     def toggle_connection(self) -> None:
         if self.session.connected:
@@ -229,7 +237,8 @@ class MainWindow(QMainWindow):
     def apply_current_pid(self) -> None:
         self.session.apply_pid(self.current_pid())
 
-    def on_pid(self, revision: int, pid: PidConfig) -> None:
+    def on_pid(self, state: PidConfigState) -> None:
+        revision, pid = state.revision, state.config
         self.pid_control.set_pid(pid)
         self.status.setText(f"PID 修订号 {revision}")
 
@@ -289,7 +298,8 @@ class MainWindow(QMainWindow):
     def refresh(self) -> None:
         self.plots.refresh(self.buffer)
 
-    def on_pid_applied(self, revision: int, pid: PidConfig) -> None:
+    def on_pid_applied(self, state: PidConfigState) -> None:
+        revision, pid = state.revision, state.config
         print(format_pid_apply_log(revision, pid), flush=True)
         self.buffer.add_event(f"PID r{revision}")
         self.status.setText(f"PID 已应用，修订号 {revision}")
@@ -303,7 +313,8 @@ class MainWindow(QMainWindow):
         self.status.setText(f"航向 PID 数据源已切换为 {source}")
         self.buffer.add_event(f"航向源 {source}")
 
-    def on_goto_strategy_changed(self, enabled: bool) -> None:
+    def on_goto_strategy_changed(self, strategy: GotoStrategySnapshot) -> None:
+        enabled = strategy.large_yaw_align_enabled
         self.large_yaw_align.blockSignals(True)
         self.large_yaw_align.setChecked(enabled)
         self.large_yaw_align.blockSignals(False)
@@ -366,7 +377,7 @@ class MainWindow(QMainWindow):
         self.status.setText(f"错误: {message}")
         if self.session.connected and self.session.motion_active:
             self.session.stop()
-        QMessageBox.warning(self, "通信错误", message)
+        QMessageBox.warning(self, "操作失败", message)
 
     def closeEvent(self, event: object) -> None:
         self.timer.stop()

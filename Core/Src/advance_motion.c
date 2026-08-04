@@ -2,6 +2,24 @@
 
 typedef struct
 {
+  WorldGoalPose2D_t goal;
+  WorldPose2D_t pose;
+  float error_x_mm;
+  float error_y_mm;
+  float position_error_mm;
+  float yaw_error_deg;
+  uint32_t started_tick;
+  uint32_t updated_tick;
+} AdvanceMotion_RuntimeData_t;
+
+typedef struct
+{
+  float signed_curvature_1_mm;
+  float absolute_curvature_1_mm;
+} AdvanceMotion_PathVertexCurvature_t;
+
+typedef struct
+{
   uint32_t arrive_hold_start_tick;
   uint32_t pid_last_tick;
   uint32_t no_progress_start_tick;
@@ -47,6 +65,7 @@ typedef struct
   float projection_y_mm;
   float cross_track_mm;
   float lookahead_mm;
+  float signed_curvature_1_mm;
   float curvature_preview_1_mm;
   float yaw_gradient_deg_per_mm;
   float yaw_gradient_preview_deg_per_mm;
@@ -54,11 +73,15 @@ typedef struct
   float feedforward_vx_mm_s;
   float feedforward_vy_mm_s;
   float feedforward_wz_deg_s;
+  float measured_normal_velocity_mm_s;
+  float normal_velocity_ff_mm_s;
+  float normal_feedback_mm_s;
+  float command_wz_deg_s;
   uint8_t final_stage;
   uint8_t active;
 } AdvanceMotion_PathContext_t;
 
-static AdvanceMotion_RuntimeStatus_t g_motion = {ADVANCE_MOTION_STATE_IDLE};
+static AdvanceMotion_RuntimeData_t g_motion = {0};
 static AdvanceMotion_DebugSnapshot_t g_motion_debug = {0};
 static AdvanceMotion_Control_t g_motion_control = {0};
 static AdvanceMotion_PathContext_t g_path = {0};
@@ -95,11 +118,17 @@ static const AdvanceMotion_PathControlConfig_t g_path_config_default = {
     ADVANCE_MOTION_PATH_ACCEL_MM_S2,
     ADVANCE_MOTION_PATH_DECEL_MM_S2,
     ADVANCE_MOTION_PATH_MAX_LATERAL_ACC_MM_S2,
+    ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM,
+    ADVANCE_MOTION_PATH_CURVATURE_FF_TIME_S,
     ADVANCE_MOTION_PATH_LOOKAHEAD_MIN_MM,
     ADVANCE_MOTION_PATH_LOOKAHEAD_BASE_MM,
     ADVANCE_MOTION_PATH_LOOKAHEAD_SPEED_GAIN_S,
     ADVANCE_MOTION_PATH_LOOKAHEAD_CURVE_GAIN_MM,
-    ADVANCE_MOTION_PATH_LOOKAHEAD_MAX_MM};
+    ADVANCE_MOTION_PATH_LOOKAHEAD_MAX_MM,
+    ADVANCE_MOTION_PATH_LOOKAHEAD_RATE_MM_S,
+    ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM,
+    ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM,
+    ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S};
 
 /* 返回浮点数的绝对值。 */
 static float AdvanceMotion_AbsFloat(float value)
@@ -112,27 +141,44 @@ static void AdvanceMotion_ClearPathContext(void)
   g_path = (AdvanceMotion_PathContext_t){0};
 }
 
-/* 清除一轮位姿或路径任务的 PID、速度估计与进展校验历史。 */
+/* 清除位置 PID 与平面速度估计项。 */
+static void AdvanceMotion_ClearLinearControlTerms(void)
+{
+  g_motion_control.pid_integral_x_mm_s = 0.0f;
+  g_motion_control.pid_integral_y_mm_s = 0.0f;
+  g_motion_control.pid_last_x_mm = 0.0f;
+  g_motion_control.pid_last_y_mm = 0.0f;
+  g_motion_control.measured_vx_world_mm_s = 0.0f;
+  g_motion_control.measured_vy_world_mm_s = 0.0f;
+  g_motion_control.pid_history_valid = 0U;
+}
+
+static void AdvanceMotion_ClearYawControlTerms(void)
+{
+  g_motion_control.last_yaw_updated_tick = 0U;
+  g_motion_control.pid_integral_yaw_deg_s = 0.0f;
+  g_motion_control.pid_last_yaw_deg = 0.0f;
+  g_motion_control.measured_wz_deg_s = 0.0f;
+  g_motion_control.pid_history_valid = 0U;
+}
+
+static void AdvanceMotion_ClearProgressMonitor(void)
+{
+  g_motion_control.no_progress_start_tick = 0U;
+  g_motion_control.no_progress_reference_error_mm = 0.0f;
+}
+
+/* 清除一轮位姿或路径任务的 PID、速度估计与进度校验历史。 */
 static void AdvanceMotion_ResetPidAndProgress(void)
 {
   g_motion_control.pid_last_tick = 0U;
-  g_motion_control.no_progress_start_tick = 0U;
   g_motion_control.last_pose_updated_tick = 0U;
-  g_motion_control.last_yaw_updated_tick = 0U;
-  g_motion_control.pid_integral_x_mm_s = 0.0f;
-  g_motion_control.pid_integral_y_mm_s = 0.0f;
-  g_motion_control.pid_integral_yaw_deg_s = 0.0f;
-  g_motion_control.pid_last_x_mm = 0.0f;
-  g_motion_control.pid_last_y_mm = 0.0f;
-  g_motion_control.pid_last_yaw_deg = 0.0f;
-  g_motion_control.measured_vx_world_mm_s = 0.0f;
-  g_motion_control.measured_vy_world_mm_s = 0.0f;
-  g_motion_control.measured_wz_deg_s = 0.0f;
+  AdvanceMotion_ClearLinearControlTerms();
+  AdvanceMotion_ClearYawControlTerms();
+  AdvanceMotion_ClearProgressMonitor();
   g_motion_control.command_vx_world_mm_s = 0.0f;
   g_motion_control.command_vy_world_mm_s = 0.0f;
   g_motion_control.command_wz_ccw_deg_s = 0.0f;
-  g_motion_control.no_progress_reference_error_mm = 0.0f;
-  g_motion_control.pid_history_valid = 0U;
   g_motion_control.yaw_aligning = 0U;
 }
 
@@ -140,13 +186,7 @@ static void AdvanceMotion_ResetPidAndProgress(void)
 static void AdvanceMotion_ResetLinearPid(void)
 {
   g_motion_control.no_progress_start_tick = 0U;
-  g_motion_control.pid_integral_x_mm_s = 0.0f;
-  g_motion_control.pid_integral_y_mm_s = 0.0f;
-  g_motion_control.pid_last_x_mm = 0.0f;
-  g_motion_control.pid_last_y_mm = 0.0f;
-  g_motion_control.measured_vx_world_mm_s = 0.0f;
-  g_motion_control.measured_vy_world_mm_s = 0.0f;
-  g_motion_control.pid_history_valid = 0U;
+  AdvanceMotion_ClearLinearControlTerms();
 }
 
 static float AdvanceMotion_GetLargeYawAlignLinearScale(float yaw_error_deg)
@@ -234,6 +274,7 @@ static void AdvanceMotion_UpdateDebugSnapshot(uint32_t now_tick, uint8_t flags)
   }
   g_motion_debug.tick = now_tick;
   g_motion_debug.pid_revision = g_pid_active_revision;
+  g_motion_debug.path_config_revision = g_path_config_active_revision;
   g_motion_debug.state = g_motion_state;
   g_motion_debug.flags = flags;
   g_motion_debug.goal = g_motion.goal;
@@ -256,6 +297,9 @@ static void AdvanceMotion_UpdateDebugSnapshot(uint32_t now_tick, uint8_t flags)
   g_motion_debug.path_remaining_mm = g_path.remaining_mm;
   g_motion_debug.path_projection_x_mm = g_path.projection_x_mm;
   g_motion_debug.path_projection_y_mm = g_path.projection_y_mm;
+  g_motion_debug.path_lookahead_x_mm = g_motion.goal.x_mm;
+  g_motion_debug.path_lookahead_y_mm = g_motion.goal.y_mm;
+  g_motion_debug.path_signed_curvature_1_mm = g_path.signed_curvature_1_mm;
   g_motion_debug.path_curvature_preview_1_mm = g_path.curvature_preview_1_mm;
   g_motion_debug.path_yaw_gradient_deg_per_mm = g_path.yaw_gradient_deg_per_mm;
   g_motion_debug.path_reference_speed_mm_s = g_path.reference_speed_mm_s;
@@ -263,6 +307,11 @@ static void AdvanceMotion_UpdateDebugSnapshot(uint32_t now_tick, uint8_t flags)
   g_motion_debug.path_feedforward_vx_mm_s = g_path.feedforward_vx_mm_s;
   g_motion_debug.path_feedforward_vy_mm_s = g_path.feedforward_vy_mm_s;
   g_motion_debug.path_feedforward_wz_deg_s = g_path.feedforward_wz_deg_s;
+  g_motion_debug.path_cross_track_mm = g_path.cross_track_mm;
+  g_motion_debug.path_measured_normal_velocity_mm_s = g_path.measured_normal_velocity_mm_s;
+  g_motion_debug.path_normal_velocity_ff_mm_s = g_path.normal_velocity_ff_mm_s;
+  g_motion_debug.path_normal_feedback_mm_s = g_path.normal_feedback_mm_s;
+  g_motion_debug.path_command_wz_deg_s = g_path.command_wz_deg_s;
   g_motion_debug.path_final_stage = g_path.final_stage;
 }
 
@@ -328,11 +377,17 @@ static uint8_t AdvanceMotion_IsPathControlConfigValid(
       (isfinite(config->accel_mm_s2) == 0) ||
       (isfinite(config->decel_mm_s2) == 0) ||
       (isfinite(config->max_lateral_accel_mm_s2) == 0) ||
+      (isfinite(config->curvature_preview_mm) == 0) ||
+      (isfinite(config->curvature_ff_time_s) == 0) ||
       (isfinite(config->lookahead_min_mm) == 0) ||
       (isfinite(config->lookahead_base_mm) == 0) ||
       (isfinite(config->lookahead_speed_gain_s) == 0) ||
       (isfinite(config->lookahead_curve_gain_mm) == 0) ||
-      (isfinite(config->lookahead_max_mm) == 0))
+      (isfinite(config->lookahead_max_mm) == 0) ||
+      (isfinite(config->lookahead_rate_mm_s) == 0) ||
+      (isfinite(config->initial_lookahead_mm) == 0) ||
+      (isfinite(config->final_capture_distance_mm) == 0) ||
+      (isfinite(config->final_capture_speed_mm_s) == 0))
   {
     return 0U;
   }
@@ -346,12 +401,21 @@ static uint8_t AdvanceMotion_IsPathControlConfigValid(
           (config->accel_mm_s2 > 0.0f) && (config->accel_mm_s2 <= 5000.0f) &&
           (config->decel_mm_s2 > 0.0f) && (config->decel_mm_s2 <= 5000.0f) &&
           (config->max_lateral_accel_mm_s2 > 0.0f) && (config->max_lateral_accel_mm_s2 <= 5000.0f) &&
+          (config->curvature_preview_mm > 0.0f) && (config->curvature_preview_mm <= 2000.0f) &&
+          (config->curvature_ff_time_s >= 0.0f) && (config->curvature_ff_time_s <= 2.0f) &&
           (config->lookahead_min_mm > 0.0f) &&
           (config->lookahead_min_mm <= config->lookahead_base_mm) &&
           (config->lookahead_base_mm <= config->lookahead_max_mm) &&
           (config->lookahead_max_mm <= 1000.0f) &&
           (config->lookahead_speed_gain_s >= 0.0f) && (config->lookahead_speed_gain_s <= 2.0f) &&
-          (config->lookahead_curve_gain_mm >= 0.0f) && (config->lookahead_curve_gain_mm <= 1000.0f))
+          (config->lookahead_curve_gain_mm >= 0.0f) && (config->lookahead_curve_gain_mm <= 1000.0f) &&
+          (config->lookahead_rate_mm_s > 0.0f) && (config->lookahead_rate_mm_s <= 2000.0f) &&
+          (config->initial_lookahead_mm >= config->lookahead_min_mm) &&
+          (config->initial_lookahead_mm <= config->lookahead_max_mm) &&
+          (config->final_capture_distance_mm >= 0.0f) &&
+          (config->final_capture_distance_mm <= 2000.0f) &&
+          (config->final_capture_speed_mm_s >= 0.0f) &&
+          (config->final_capture_speed_mm_s <= ADVANCE_MOTION_MAX_VMAX_MM_S))
              ? 1U
              : 0U;
 }
@@ -590,28 +654,58 @@ static float AdvanceMotion_GetPathSegmentLength(uint16_t index)
   return sqrtf((dx * dx) + (dy * dy));
 }
 
-/* 三点外接圆曲率；共线点返回零，折返退化点返回保守的大曲率。 */
-static float AdvanceMotion_GetPathVertexCurvature(uint16_t index)
+/* 一次评估路径顶点的带符号和绝对曲率，单位均为 1/mm。 */
+static AdvanceMotion_PathVertexCurvature_t AdvanceMotion_EvaluatePathVertexCurvature(uint16_t index)
 {
-  const AdvanceMotion_PathPoint_t *a = &g_path.points[index - 1U];
-  const AdvanceMotion_PathPoint_t *b = &g_path.points[index];
-  const AdvanceMotion_PathPoint_t *c = &g_path.points[index + 1U];
-  float abx = b->x_mm - a->x_mm;
-  float aby = b->y_mm - a->y_mm;
-  float bcx = c->x_mm - b->x_mm;
-  float bcy = c->y_mm - b->y_mm;
-  float acx = c->x_mm - a->x_mm;
-  float acy = c->y_mm - a->y_mm;
-  float ab = sqrtf((abx * abx) + (aby * aby));
-  float bc = sqrtf((bcx * bcx) + (bcy * bcy));
-  float ac = sqrtf((acx * acx) + (acy * acy));
-  float cross = (abx * bcy) - (aby * bcx);
+  AdvanceMotion_PathVertexCurvature_t curvature = {0.0f, 0.0f};
+  const AdvanceMotion_PathPoint_t *a;
+  const AdvanceMotion_PathPoint_t *b;
+  const AdvanceMotion_PathPoint_t *c;
+  float abx;
+  float aby;
+  float bcx;
+  float bcy;
+  float acx;
+  float acy;
+  float ab;
+  float bc;
+  float ac;
+  float cross;
+
+  if ((g_path.points == NULL) || (g_path.point_count < 3U) ||
+      (index == 0U) || (index >= (uint16_t)(g_path.point_count - 1U)))
+  {
+    return curvature;
+  }
+
+  a = &g_path.points[index - 1U];
+  b = &g_path.points[index];
+  c = &g_path.points[index + 1U];
+  abx = b->x_mm - a->x_mm;
+  aby = b->y_mm - a->y_mm;
+  bcx = c->x_mm - b->x_mm;
+  bcy = c->y_mm - b->y_mm;
+  acx = c->x_mm - a->x_mm;
+  acy = c->y_mm - a->y_mm;
+  ab = sqrtf((abx * abx) + (aby * aby));
+  bc = sqrtf((bcx * bcx) + (bcy * bcy));
+  ac = sqrtf((acx * acx) + (acy * acy));
+  cross = (abx * bcy) - (aby * bcx);
+
+  if ((ab < ADVANCE_MOTION_PATH_MIN_SEGMENT_MM) ||
+      (bc < ADVANCE_MOTION_PATH_MIN_SEGMENT_MM))
+  {
+    return curvature;
+  }
 
   if (ac < ADVANCE_MOTION_PATH_MIN_SEGMENT_MM)
   {
-    return 1.0f / ADVANCE_MOTION_PATH_MIN_SEGMENT_MM;
+    curvature.absolute_curvature_1_mm = 1.0f / ADVANCE_MOTION_PATH_MIN_SEGMENT_MM;
+    return curvature;
   }
-  return AdvanceMotion_AbsFloat((2.0f * cross) / (ab * bc * ac));
+  curvature.signed_curvature_1_mm = (2.0f * cross) / (ab * bc * ac);
+  curvature.absolute_curvature_1_mm = AdvanceMotion_AbsFloat(curvature.signed_curvature_1_mm);
+  return curvature;
 }
 
 static void AdvanceMotion_UpdatePathPreview(void)
@@ -634,7 +728,7 @@ static void AdvanceMotion_UpdatePathPreview(void)
                          g_path.points[segment_index].yaw_deg)) /
                      length;
 
-    if (distance_to_segment_start_mm > ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM)
+    if (distance_to_segment_start_mm > g_path_config_active.curvature_preview_mm)
     {
       break;
     }
@@ -650,13 +744,13 @@ static void AdvanceMotion_UpdatePathPreview(void)
        vertex_index < (uint16_t)(g_path.point_count - 1U);
        ++vertex_index)
   {
-    if (distance_to_vertex_mm > ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM)
+    if (distance_to_vertex_mm > g_path_config_active.curvature_preview_mm)
     {
       break;
     }
     g_path.curvature_preview_1_mm = fmaxf(
         g_path.curvature_preview_1_mm,
-        AdvanceMotion_GetPathVertexCurvature(vertex_index));
+        AdvanceMotion_EvaluatePathVertexCurvature(vertex_index).absolute_curvature_1_mm);
     distance_to_vertex_mm += AdvanceMotion_GetPathSegmentLength(vertex_index);
   }
 }
@@ -671,10 +765,10 @@ static float AdvanceMotion_GetPathSpeedLimit(void)
                     fmaxf(g_path.yaw_gradient_preview_deg_per_mm,
                           ADVANCE_MOTION_PATH_YAW_GRADIENT_EPSILON_DEG_PER_MM);
   float braking_distance = fmaxf(
-      g_path.remaining_mm - ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM, 0.0f);
+      g_path.remaining_mm - g_path_config_active.final_capture_distance_mm, 0.0f);
   float final_speed = sqrtf(
-      (ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S *
-       ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S) +
+      (g_path_config_active.final_capture_speed_mm_s *
+       g_path_config_active.final_capture_speed_mm_s) +
       (2.0f * g_path_config_active.decel_mm_s2 * braking_distance));
 
   return fminf(g_path_config_active.cruise_speed_mm_s,
@@ -684,13 +778,13 @@ static float AdvanceMotion_GetPathSpeedLimit(void)
 static void AdvanceMotion_UpdatePathLookahead(float dt_s)
 {
   float curvature_ratio = AdvanceWorld_LimitFloat(
-      g_path.curvature_preview_1_mm * ADVANCE_MOTION_PATH_CURVATURE_PREVIEW_MM,
+      g_path.curvature_preview_1_mm * g_path_config_active.curvature_preview_mm,
       0.0f, 1.0f);
   float target = g_path_config_active.lookahead_base_mm +
                  (g_path_config_active.lookahead_speed_gain_s *
                   g_path.reference_speed_mm_s) -
                  (g_path_config_active.lookahead_curve_gain_mm * curvature_ratio);
-  float max_delta = ADVANCE_MOTION_PATH_LOOKAHEAD_RATE_MM_S * dt_s;
+  float max_delta = g_path_config_active.lookahead_rate_mm_s * dt_s;
 
   target = AdvanceWorld_LimitFloat(target,
                                    g_path_config_active.lookahead_min_mm,
@@ -825,6 +919,19 @@ static void AdvanceMotion_UpdatePathReference(uint32_t now_tick)
         a->yaw_deg + (best_t * AdvanceWorld_WrapAngleDeg(b->yaw_deg - a->yaw_deg)));
   }
 
+  g_path.signed_curvature_1_mm = 0.0f;
+  if (g_path.point_count >= 3U)
+  {
+    uint16_t vertex_index = (uint16_t)(g_path.nearest_index + 1U);
+
+    if (vertex_index >= (uint16_t)(g_path.point_count - 1U))
+    {
+      vertex_index = (uint16_t)(g_path.point_count - 2U);
+    }
+    g_path.signed_curvature_1_mm =
+        AdvanceMotion_EvaluatePathVertexCurvature(vertex_index).signed_curvature_1_mm;
+  }
+
   AdvanceMotion_UpdatePathPreview();
   target_speed = AdvanceMotion_GetPathSpeedLimit();
   speed_delta = ((target_speed >= g_path.reference_speed_mm_s)
@@ -845,16 +952,11 @@ static void AdvanceMotion_UpdatePathReference(uint32_t now_tick)
       (g_motion_control.measured_vx_world_mm_s * g_motion_control.measured_vx_world_mm_s) +
       (g_motion_control.measured_vy_world_mm_s * g_motion_control.measured_vy_world_mm_s));
   if ((g_path.final_stage == 0U) &&
-      (g_path.remaining_mm <= ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM) &&
-      (g_path.reference_speed_mm_s <= ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S) &&
-      (measured_speed <= ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S))
+      (g_path.remaining_mm <= g_path_config_active.final_capture_distance_mm) &&
+      (g_path.reference_speed_mm_s <= g_path_config_active.final_capture_speed_mm_s) &&
+      (measured_speed <= g_path_config_active.final_capture_speed_mm_s))
   {
-    const AdvanceMotion_PathPoint_t *final_point = &g_path.points[g_path.point_count - 1U];
-
     g_path.final_stage = 1U;
-    g_motion.goal.x_mm = final_point->x_mm;
-    g_motion.goal.y_mm = final_point->y_mm;
-    g_motion.goal.yaw_deg = final_point->yaw_deg;
     g_motion_control.pid_integral_x_mm_s = 0.0f;
     g_motion_control.pid_integral_y_mm_s = 0.0f;
     g_motion_control.pid_integral_yaw_deg_s = 0.0f;
@@ -871,10 +973,6 @@ static void AdvanceMotion_UpdatePathReference(uint32_t now_tick)
     g_path.feedforward_vy_mm_s = 0.0f;
     g_path.feedforward_wz_deg_s = 0.0f;
   }
-  g_motion.goal.vmax_mm_s = g_path_config_active.cruise_speed_mm_s;
-  g_motion.goal.wmax_deg_s = g_path_config_active.max_yaw_rate_deg_s;
-  g_motion.goal.timeout_ms = g_path.timeout_ms;
-  g_motion.goal.goal_flags = ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW;
 }
 
 static AdvanceMotion_Status_t AdvanceMotion_GetFreshYaw(WorldPose2D_t *pose)
@@ -1028,7 +1126,7 @@ static AdvanceMotion_Status_t AdvanceMotion_ApplyWorldVelocityEx(float vx_world_
 /* 初始化世界坐标运动控制器。 */
 void AdvanceMotion_Init(void)
 {
-  g_motion = (AdvanceMotion_RuntimeStatus_t){ADVANCE_MOTION_STATE_IDLE};
+  g_motion = (AdvanceMotion_RuntimeData_t){0};
   g_motion_control = (AdvanceMotion_Control_t){0};
   AdvanceMotion_ClearPathContext();
   g_motion_state = ADVANCE_MOTION_STATE_IDLE;
@@ -1051,6 +1149,10 @@ void AdvanceMotion_Init(void)
 /* 设置世界坐标系速度，并取消正在执行的位姿或路径任务。 */
 AdvanceMotion_Status_t AdvanceMotion_SetWorldVelocityEx(float vx_world_mm_s, float vy_world_mm_s, float wz_ccw_deg_s, uint8_t acc)
 {
+  if (AdvanceControl_GetMode() == ADVANCE_CONTROL_VISUAL)
+  {
+    return ADVANCE_MOTION_STATUS_BUSY;
+  }
   if (g_motion_state == ADVANCE_MOTION_STATE_RUNNING)
   {
     g_motion_state = ADVANCE_MOTION_STATE_CANCELED;
@@ -1176,7 +1278,7 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_
   g_path.remaining_mm = total_length_mm;
   g_path.progress_reference_mm = 0.0f;
   g_path.lookahead_mm = AdvanceWorld_LimitFloat(
-      ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM,
+      g_path_config_active.initial_lookahead_mm,
       g_path_config_active.lookahead_min_mm,
       g_path_config_active.lookahead_max_mm);
   {
@@ -1190,6 +1292,10 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_
   }
   g_path.active = 1U;
   g_motion.goal = (WorldGoalPose2D_t){0};
+  g_motion.goal.vmax_mm_s = g_path_config_active.cruise_speed_mm_s;
+  g_motion.goal.wmax_deg_s = g_path_config_active.max_yaw_rate_deg_s;
+  g_motion.goal.timeout_ms = g_path.timeout_ms;
+  g_motion.goal.goal_flags = ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW;
   g_motion.pose = pose;
   g_motion.started_tick = g_path.progress_tick;
   g_motion.updated_tick = g_motion.started_tick;
@@ -1450,16 +1556,35 @@ void AdvanceMotion_Update(void)
       float ty = b->y_mm - a->y_mm;
       float length = sqrtf((tx * tx) + (ty * ty));
       float normal_velocity;
-      float correction;
+      float normal_accel_ff_mm_s2;
+      float normal_velocity_ff_mm_s;
+      float normal_feedback_mm_s;
+      float normal_command_mm_s;
 
       tx /= length;
       ty /= length;
       normal_velocity = (-ty * g_motion_control.measured_vx_world_mm_s) +
                         (tx * g_motion_control.measured_vy_world_mm_s);
-      correction = (g_path_config_active.kp_cross_track * g_path.cross_track_mm) +
-                   (g_path_config_active.kd_cross_track_velocity * normal_velocity);
-      vx_world_mm_s = g_path.feedforward_vx_mm_s + (ty * correction);
-      vy_world_mm_s = g_path.feedforward_vy_mm_s - (tx * correction);
+      normal_accel_ff_mm_s2 =
+          (g_path.reference_speed_mm_s * g_path.reference_speed_mm_s) *
+          g_path.signed_curvature_1_mm;
+      normal_accel_ff_mm_s2 = AdvanceWorld_LimitFloat(
+          normal_accel_ff_mm_s2,
+          -g_path_config_active.max_lateral_accel_mm_s2,
+          g_path_config_active.max_lateral_accel_mm_s2);
+      normal_velocity_ff_mm_s =
+          g_path_config_active.curvature_ff_time_s * normal_accel_ff_mm_s2;
+      /* cross_track 与 normal_velocity 正值表示左侧，normal_command 正值施加右法向；
+       * 左弯的正曲率内侧在左方，因此曲率前馈使用负号。 */
+      normal_feedback_mm_s =
+          (g_path_config_active.kp_cross_track * g_path.cross_track_mm) +
+          (g_path_config_active.kd_cross_track_velocity * normal_velocity);
+      normal_command_mm_s = normal_feedback_mm_s - normal_velocity_ff_mm_s;
+      g_path.measured_normal_velocity_mm_s = normal_velocity;
+      g_path.normal_velocity_ff_mm_s = normal_velocity_ff_mm_s;
+      g_path.normal_feedback_mm_s = normal_feedback_mm_s;
+      vx_world_mm_s = g_path.feedforward_vx_mm_s + (ty * normal_command_mm_s);
+      vy_world_mm_s = g_path.feedforward_vy_mm_s - (tx * normal_command_mm_s);
       vmax_mm_s = g_path.reference_speed_mm_s;
       raw_linear_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +
                                     (vy_world_mm_s * vy_world_mm_s));
@@ -1515,6 +1640,7 @@ void AdvanceMotion_Update(void)
         wmax_deg_s);
     yaw_saturated = (AdvanceMotion_AbsFloat(raw_wz_ccw_deg_s) > wmax_deg_s) ? 1U : 0U;
   }
+  g_path.command_wz_deg_s = wz_ccw_deg_s;
 
   AdvanceMotion_UpdatePidIntegral(vx_world_mm_s, vy_world_mm_s, wz_ccw_deg_s, dt_s,
                                     linear_saturated, yaw_saturated,
@@ -1552,12 +1678,8 @@ void AdvanceMotion_Update(void)
 
 void AdvanceMotion_ResetYawControl(void)
 {
-  g_motion_control.pid_integral_yaw_deg_s = 0.0f;
-  g_motion_control.last_yaw_updated_tick = 0U;
-  g_motion_control.pid_last_yaw_deg = 0.0f;
-  g_motion_control.measured_wz_deg_s = 0.0f;
+  AdvanceMotion_ClearYawControlTerms();
   g_motion_control.arrive_hold_start_tick = 0U;
-  g_motion_control.pid_history_valid = 0U;
 }
 
 /* 取消当前运动任务、释放控制权并停止底盘。 */
@@ -1587,8 +1709,16 @@ AdvanceMotion_Status_t AdvanceMotion_GetStatus(AdvanceMotion_RuntimeStatus_t *st
 
   primask = __get_PRIMASK();
   __disable_irq();
-  *status = g_motion;
-  status->state = g_motion_state;
+  *status = (AdvanceMotion_RuntimeStatus_t){
+      g_motion_state,
+      g_motion.goal,
+      g_motion.pose,
+      g_motion.error_x_mm,
+      g_motion.error_y_mm,
+      g_motion.position_error_mm,
+      g_motion.yaw_error_deg,
+      g_motion.started_tick,
+      g_motion.updated_tick};
   if (primask == 0U)
   {
     __enable_irq();
