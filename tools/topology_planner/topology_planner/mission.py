@@ -32,6 +32,22 @@ class MissionLeg:
     goal_stop: MissionStop
     path: PathResult
 
+    @property
+    def start_node_id(self) -> str:
+        return self.start_stop.node_id
+
+    @property
+    def goal_node_id(self) -> str:
+        return self.goal_stop.node_id
+
+    @property
+    def distance(self) -> float:
+        return self.path.distance
+
+    @property
+    def total_cost(self) -> float:
+        return self.path.total_cost
+
 
 @dataclass(frozen=True)
 class MissionPlan:

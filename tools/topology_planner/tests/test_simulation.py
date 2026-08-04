@@ -1,7 +1,7 @@
 import unittest
 
 from topology_planner.mission import build_fixed_mission_plan
-from topology_planner.simulation import MissionSimulator, SimulationPhase
+from topology_planner.simulation import MissionSimulator, SimulationPhase, TraversalEdge
 
 
 class MissionSimulatorTests(unittest.TestCase):
@@ -13,8 +13,14 @@ class MissionSimulatorTests(unittest.TestCase):
         initial = simulator.snapshot()
         self.assertEqual(initial.phase, SimulationPhase.IDLE)
         self.assertEqual(initial.current_node, "START1")
+        self.assertTrue(simulator.traversal_edges)
+        self.assertTrue(all(isinstance(edge, TraversalEdge) for edge in simulator.traversal_edges))
+        self.assertAlmostEqual(
+            sum(edge.length for edge in simulator.traversal_edges), self.plan.total_distance
+        )
 
         simulator.start()
+        self.assertEqual(simulator.snapshot().current_action_label, self.plan.stops[1].action_label)
         frame = simulator.tick(0.75)
         self.assertEqual(frame.phase, SimulationPhase.TRAVEL)
         self.assertEqual((frame.from_node, frame.to_node), ("NE", "E"))
@@ -65,6 +71,15 @@ class MissionSimulatorTests(unittest.TestCase):
         self.assertEqual(replay.current_stop_index, 0)
         self.assertEqual(replay.current_node, "START1")
         self.assertEqual(replay.leg_index, 0)
+
+    def test_start2_can_complete_and_returns_to_its_start_zone(self):
+        plan = build_fixed_mission_plan("START2")
+        simulator = MissionSimulator(plan)
+        simulator.start()
+        finished = simulator.tick(100.0)
+        self.assertEqual(finished.phase, SimulationPhase.FINISHED)
+        self.assertEqual(finished.current_node, "START2")
+        self.assertEqual(finished.total_progress, 1.0)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ from .mission import (
     plan_fixed_mission,
 )
 from .planner import Edge, Node, PathResult, edge_key, find_best_paths, nodes, edges
-from .simulation import MissionSimulator, SimulationPhase, SimulationSnapshot
+from .simulation import MissionSimulator, SimulationPhase, SimulationSnapshot, TraversalEdge
 
 __all__ = [
     "Edge",
@@ -24,6 +24,7 @@ __all__ = [
     "PathResult",
     "SimulationPhase",
     "SimulationSnapshot",
+    "TraversalEdge",
     "TASK_DWELL_S",
     "build_fixed_mission_plan",
     "build_mission_plan",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from math import isfinite
 
 from .mission import MissionPlan, MissionStop
 from .planner import edge_length
@@ -15,6 +16,16 @@ class SimulationPhase(str, Enum):
     DWELL = "DWELL"
     PAUSED = "PAUSED"
     FINISHED = "FINISHED"
+
+
+@dataclass(frozen=True)
+class TraversalEdge:
+    """MissionPlan 展开后的有序拓扑边。"""
+
+    leg_index: int
+    from_node: str
+    to_node: str
+    length: float
 
 
 @dataclass(frozen=True)
@@ -44,12 +55,25 @@ class MissionSimulator:
     """
 
     def __init__(self, plan: MissionPlan, base_speed: float = 1.0) -> None:
-        if base_speed <= 0.0:
+        if not isfinite(float(base_speed)) or float(base_speed) <= 0.0:
             raise ValueError("base_speed 必须大于 0")
+        if not plan.legs or plan.total_distance <= 0.0:
+            raise ValueError("MissionPlan 必须包含可行驶的任务链")
         self.plan = plan
-        self.base_speed = base_speed
+        self.base_speed = float(base_speed)
+        self._traversal_edges = tuple(
+            TraversalEdge(leg.index, first, second, edge_length(first, second))
+            for leg in plan.legs
+            for first, second in zip(leg.path.nodes, leg.path.nodes[1:])
+        )
         self._speed_multiplier = 1.0
         self.reset()
+
+    @property
+    def traversal_edges(self) -> tuple[TraversalEdge, ...]:
+        """返回按任务顺序展开的只读拓扑边。"""
+
+        return self._traversal_edges
 
     def start(self) -> SimulationSnapshot:
         """开始播放；已结束的仿真会从任务链起点重新播放。"""
@@ -91,16 +115,17 @@ class MissionSimulator:
         return self.snapshot()
 
     def set_speed_multiplier(self, multiplier: float) -> SimulationSnapshot:
-        if multiplier <= 0.0:
+        if not isfinite(float(multiplier)) or float(multiplier) <= 0.0:
             raise ValueError("multiplier 必须大于 0")
-        self._speed_multiplier = multiplier
+        self._speed_multiplier = float(multiplier)
         return self.snapshot()
 
     def tick(self, dt_s: float) -> SimulationSnapshot:
         """推进仿真，支持单个大时间步跨越多条边和任务停留。"""
 
-        if dt_s < 0.0:
+        if not isfinite(float(dt_s)) or float(dt_s) < 0.0:
             raise ValueError("dt_s 不能为负数")
+        dt_s = float(dt_s)
         if self._phase not in {SimulationPhase.TRAVEL, SimulationPhase.DWELL}:
             return self.snapshot()
 
@@ -137,19 +162,22 @@ class MissionSimulator:
             else float(self._phase is SimulationPhase.FINISHED)
         )
         stop = self._current_stop()
+        effective_phase = self._paused_phase if self._phase is SimulationPhase.PAUSED else self._phase
+        if effective_phase is SimulationPhase.TRAVEL and self._leg_index < len(self.plan.legs):
+            stop = self.plan.legs[self._leg_index].goal_stop
         return SimulationSnapshot(
             phase=self._phase,
             running=self._phase in {SimulationPhase.TRAVEL, SimulationPhase.DWELL},
             paused=self._phase is SimulationPhase.PAUSED,
             finished=self._phase is SimulationPhase.FINISHED,
-            leg_index=self._leg_index,
+            leg_index=min(self._leg_index, len(self.plan.legs) - 1),
             leg_count=len(self.plan.legs),
             from_node=from_node,
             to_node=to_node,
-            edge_progress=edge_progress,
+            edge_progress=min(max(edge_progress, 0.0), 1.0),
             traveled_distance=self._traveled_distance,
             total_distance=self.plan.total_distance,
-            total_progress=total_progress,
+            total_progress=min(max(total_progress, 0.0), 1.0),
             current_stop_index=self._current_stop_index,
             current_node=self._current_node,
             current_action_label=stop.action_label if stop else "",
@@ -209,4 +237,4 @@ class MissionSimulator:
         return self._current_node, self._current_node, 1.0 if self._current_node else 0.0
 
 
-__all__ = ["MissionSimulator", "SimulationPhase", "SimulationSnapshot"]
+__all__ = ["MissionSimulator", "SimulationPhase", "SimulationSnapshot", "TraversalEdge"]
