@@ -52,11 +52,24 @@ class PathPosePoint:
 
 
 @dataclass
+class AutoSegmentSettings:
+    """Parameters owned by one generated navigation segment."""
+
+    corner_radius_mm: float = 120.0
+    sample_spacing_mm: float = 20.0
+    terminal_straight_mm: float = 300.0
+    yaw_mode: str = "fixed"
+    goal_yaw_deg: float = 0.0
+    strategy: str = "auto"
+
+
+@dataclass
 class ContinuousPathSegment:
     """一次连续跟踪的路径；第一个点必须是该段的入口点。"""
 
     points: list[PathPosePoint] = field(default_factory=list)
     name: str = ""
+    auto_settings: AutoSegmentSettings | None = None
 
 
 BezierYawMode = Literal["interpolate", "tangent", "fixed"]
@@ -76,7 +89,25 @@ class BezierPathSegment:
     name: str = ""
 
 
-MotionStep = Union[Waypoint, RotateInPlace, ContinuousPathSegment, BezierPathSegment]
+@dataclass
+class StepTurnNode:
+    """User control point for a step-turn path."""
+
+    x_mm: float
+    y_mm: float
+    name: str = ""
+
+
+@dataclass
+class StepTurnPathSegment:
+    """Polyline expanded into an executable continuous path by the compiler."""
+
+    route_points: list[StepTurnNode] = field(default_factory=list)
+    step_distance_mm: float = 60.0
+    name: str = ""
+
+
+MotionStep = Union[Waypoint, RotateInPlace, ContinuousPathSegment, BezierPathSegment, StepTurnPathSegment]
 
 
 @dataclass
@@ -134,9 +165,21 @@ class Plan:
             elif isinstance(step, RotateInPlace):
                 serialized_steps.append({"type": "rotate_in_place", **asdict(step)})
             elif isinstance(step, ContinuousPathSegment):
-                serialized_steps.append({"type": "continuous_path", "name": step.name, "points": [asdict(point) for point in step.points]})
+                serialized_steps.append({
+                    "type": "continuous_path", "name": step.name,
+                    "points": [asdict(point) for point in step.points],
+                    "auto_settings": (None if step.auto_settings is None
+                                      else asdict(step.auto_settings)),
+                })
             elif isinstance(step, BezierPathSegment):
                 serialized_steps.append({"type": "bezier_path", **asdict(step)})
+            elif isinstance(step, StepTurnPathSegment):
+                serialized_steps.append({
+                    "type": "step_turn_path",
+                    "name": step.name,
+                    "step_distance_mm": step.step_distance_mm,
+                    "route_points": [asdict(point) for point in step.route_points],
+                })
             else:
                 raise ValueError("方案包含不支持的步骤类型")
         return {
@@ -181,10 +224,17 @@ class Plan:
                 elif step_type == "continuous_path":
                     points = fields.pop("points", [])
                     if not isinstance(points, list) or not all(isinstance(point, dict) for point in points): raise ValueError
+                    auto_settings_value = fields.pop("auto_settings", None)
+                    if auto_settings_value is not None and not isinstance(auto_settings_value, dict):
+                        raise ValueError
                     path_points = [PathPosePoint(**point) for point in points]
                     if version in (7, 8):
                         for point in path_points: point.x_mm, point.y_mm = point.y_mm, point.x_mm
-                    steps.append(ContinuousPathSegment(points=path_points, **fields))
+                    steps.append(ContinuousPathSegment(
+                        points=path_points,
+                        auto_settings=(None if auto_settings_value is None
+                                       else AutoSegmentSettings(**auto_settings_value)),
+                        **fields))
                 elif step_type == "bezier_path" and version in (8, 9, MAP_VERSION):
                     step = BezierPathSegment(**fields)
                     if version == 8:
@@ -192,6 +242,12 @@ class Plan:
                         step.control_2_x_mm, step.control_2_y_mm = step.control_2_y_mm, step.control_2_x_mm
                         step.end_x_mm, step.end_y_mm = step.end_y_mm, step.end_x_mm
                     steps.append(step)
+                elif step_type == "step_turn_path" and version == MAP_VERSION:
+                    route_points = fields.pop("route_points", [])
+                    if not isinstance(route_points, list) or not all(isinstance(point, dict) for point in route_points):
+                        raise ValueError
+                    steps.append(StepTurnPathSegment(
+                        route_points=[StepTurnNode(**point) for point in route_points], **fields))
                 else: raise ValueError
             obstacles = layout.get("obstacles", [])
             if not isinstance(obstacles, list) or not all(isinstance(item, dict) for item in obstacles): raise ValueError

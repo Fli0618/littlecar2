@@ -102,7 +102,7 @@ class MapEditorWidgetTests(unittest.TestCase):
         finally:
             widget.close()
 
-    def test_rviz_style_press_drag_draws_guide_and_auto_plans(self):
+    def test_rviz_style_two_click_goal_draws_guide_and_auto_plans(self):
         widget = MapEditorWidget()
         try:
             widget.set_plan(Plan(), calibrated=True)
@@ -114,7 +114,14 @@ class MapEditorWidgetTests(unittest.TestCase):
             self.assertIn("nav_goal_arrow", markers)
             self.assertIn("nav_goal_current_heading", markers)
             self.assertIn("nav_goal_angle_label", markers)
-            widget.on_map_release(1900, 300)
+            self.assertIn("nav_goal_heading_ring", markers)
+            self.assertIn("nav_goal_heading_cross", markers)
+            widget.on_map_click(1900, 300)
+
+            self.assertFalse(widget.plan.steps)
+            self.assertTrue(any(item.data(0) == "pending_navigation_goal_arrow"
+                                for item in widget.scene.items()))
+            widget.generate_segment_button.click()
 
             path = widget.plan.steps[-2]
             rotation = widget.plan.steps[-1]
@@ -144,6 +151,23 @@ class MapEditorWidgetTests(unittest.TestCase):
         finally:
             widget.close()
 
+    def test_clicking_obstacle_keeps_selection_until_delete(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget.add_obstacle(QPointF(400, 400))
+            widget.resize(1400, 900); widget.show(); widget.fit_map()
+            QTest.mouseClick(widget.select_obstacle_button, Qt.MouseButton.LeftButton)
+            target = widget.view.mapFromScene(QPointF(400, 400))
+            QTest.mouseClick(widget.view.viewport(), Qt.MouseButton.LeftButton,
+                             pos=target)
+
+            self.assertEqual(len(widget.scene.selectedItems()), 1)
+            widget.remove_selected_obstacles()
+            self.assertEqual(widget.plan.layout.obstacles, [])
+        finally:
+            widget.close()
+
     def test_obstacle_button_places_on_real_mouse_press(self):
         widget = MapEditorWidget()
         try:
@@ -159,7 +183,7 @@ class MapEditorWidgetTests(unittest.TestCase):
         finally:
             widget.close()
 
-    def test_navigation_goal_real_mouse_drag_plans_on_release(self):
+    def test_navigation_goal_real_mouse_two_click_plans_on_second_click(self):
         widget = MapEditorWidget()
         try:
             widget.set_plan(Plan(), calibrated=True)
@@ -168,17 +192,80 @@ class MapEditorWidgetTests(unittest.TestCase):
             start = widget.view.mapFromScene(QPointF(1800, 300))
             direction = widget.view.mapFromScene(QPointF(1900, 300))
 
-            QTest.mousePress(widget.view.viewport(), Qt.MouseButton.LeftButton,
+            QTest.mouseClick(widget.view.viewport(), Qt.MouseButton.LeftButton,
                              pos=start)
             QTest.mouseMove(widget.view.viewport(), direction)
             self.assertTrue(any(item.data(0) == "nav_goal_arrow"
                                 for item in widget.scene.items()))
-            QTest.mouseRelease(widget.view.viewport(), Qt.MouseButton.LeftButton,
-                               pos=direction)
+            self.assertFalse(widget.plan.steps)
+            QTest.mouseClick(widget.view.viewport(), Qt.MouseButton.LeftButton,
+                             pos=direction)
 
+            self.assertFalse(widget.plan.steps)
+            self.assertIn("目标位姿已确定", widget.status.text())
+            QTest.mouseClick(widget.generate_segment_button,
+                             Qt.MouseButton.LeftButton)
             self.assertTrue(any(isinstance(step, ContinuousPathSegment)
                                 for step in widget.plan.steps))
             self.assertIn("自动规划完成", widget.status.text())
+            self.assertTrue(any(item.data(0) == "navigation_goal_pose"
+                                for item in widget.scene.items()))
+        finally:
+            widget.close()
+
+    def test_yellow_generate_button_updates_only_selected_auto_segment(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget.create_auto_path(QPointF(1800, 150), yaw_mode="fixed")
+            sentinel = Waypoint(999, 888, 12)
+            widget.plan.steps.append(sentinel)
+            widget.active_index = 0
+
+            widget.auto_corner_radius.setValue(80)
+            self.assertFalse(widget._auto_paths_stale)
+            self.assertIn("应用参数", widget.generate_segment_button.text())
+            widget.generate_segment_button.click()
+
+            self.assertEqual(widget.plan.steps[-1], sentinel)
+            self.assertEqual(sum(isinstance(step, ContinuousPathSegment)
+                                 for step in widget.plan.steps), 1)
+            self.assertIn("自动规划完成", widget.status.text())
+        finally:
+            widget.close()
+
+    def test_navigation_goal_snaps_centerline_and_near_right_angle(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget.set_mode("mark_pose")
+            widget.on_map_click(1225, 300)
+
+            self.assertEqual(widget._rviz_pose_anchor.x(), 1200)
+            widget.update_preview(1300, 310)
+            self.assertAlmostEqual(widget._rviz_drag_point.y(), 300, places=5)
+            widget.on_map_click(1300, 310)
+            self.assertEqual(widget.auto_goal_x.value(), 1200)
+            self.assertEqual(widget.auto_goal_y.value(), 300)
+        finally:
+            widget.close()
+
+    def test_screenshot_tangent_goal_exits_boundary_before_turning(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget._pending_navigation_goal_paper = QPointF(1200, 268.8)
+            widget._pending_navigation_goal_yaw = -77.91
+            widget._set_goal_controls(1200, 268.8, -77.91)
+            widget.navigation_strategy.setCurrentIndex(
+                widget.navigation_strategy.findData("tangent"))
+
+            widget.generate_segment_button.click()
+
+            self.assertIn("自动规划完成", widget.status.text())
+            self.assertTrue(any(isinstance(step, ContinuousPathSegment)
+                                for step in widget.plan.steps))
+            self.assertIsNone(widget.auto_yaw_mode.parent())
         finally:
             widget.close()
 

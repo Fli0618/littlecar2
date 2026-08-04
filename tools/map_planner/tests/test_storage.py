@@ -4,7 +4,7 @@ import tempfile
 
 import pytest
 
-from map_planner.models import (MAP_VERSION, BezierPathSegment, ContinuousPathSegment,
+from map_planner.models import (MAP_VERSION, AutoSegmentSettings, BezierPathSegment, ContinuousPathSegment,
                                 CostmapSettings, PathPosePoint, Plan, Waypoint)
 from map_planner.storage import load_plan, save_plan
 
@@ -33,6 +33,20 @@ def test_costmap_settings_round_trip():
         loaded = load_plan("costmap", Path(directory))
 
     assert loaded.layout.costmap == plan.layout.costmap
+
+
+def test_each_auto_segment_keeps_its_own_generation_settings():
+    settings = AutoSegmentSettings(
+        corner_radius_mm=85, sample_spacing_mm=15,
+        terminal_straight_mm=260, yaw_mode="interpolate",
+        goal_yaw_deg=-90, strategy="interpolate")
+    plan = Plan(name="segment-settings", steps=[ContinuousPathSegment(
+        [PathPosePoint(0, 0), PathPosePoint(100, 0)],
+        "自动规划 1", settings)])
+
+    restored = Plan.from_dict(plan.to_dict())
+
+    assert restored.steps[0].auto_settings == settings
 
 
 @pytest.mark.parametrize("version", [5, 6])

@@ -763,7 +763,8 @@ void AdvanceTest_VerifyYawSourceFreshness(void)
        (motion_status.state != ADVANCE_MOTION_STATE_CANCELED) &&
        (motion_status.state != ADVANCE_MOTION_STATE_TIMEOUT) &&
        (motion_status.state != ADVANCE_MOTION_STATE_NO_POSE) &&
-       (motion_status.state != ADVANCE_MOTION_STATE_NO_ORIGIN)))
+       (motion_status.state != ADVANCE_MOTION_STATE_NO_ORIGIN) &&
+       (motion_status.state != ADVANCE_MOTION_STATE_OFF_PATH)))
   {
     printf("[TEST][YAW] motion active, skip source switch\r\n");
     return;

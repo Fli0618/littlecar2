@@ -24,7 +24,7 @@ from .codegen_dialog import CodeGenerationDialog
 from .bezier import bezier_tangent_yaw, generate_bezier_path_points
 from .auto_path import (AutoPathError, AutoPathSettings,
                         build_inflated_obstacles, plan_auto_path)
-from .models import (BezierPathSegment, FIELD_SIZE_MM,
+from .models import (AutoSegmentSettings, BezierPathSegment, FIELD_SIZE_MM,
                      ContinuousPathSegment, CostmapSettings, Obstacle,
                      PathPosePoint, Plan, Pose, RotateInPlace, Waypoint)
 from .sim import SimulationFrame, build_plan_timeline
@@ -41,6 +41,21 @@ RAW_CENTER_Y_MM = -70.0
 RAW_CENTER_X_RANGE = (1100.0, 1300.0)
 QR_CENTER_X_MM = 2396.0
 QR_CENTER_Y_RANGE = (1100.0, 1300.0)
+CENTERLINE_SNAP_MM = 35.0
+RIGHT_ANGLE_SNAP_DEG = 8.0
+
+
+def snap_to_field_centerlines(point: QPointF) -> QPointF:
+    """Snap near-center clicks to the official X/Y centerlines."""
+    x = 1200.0 if abs(point.x() - 1200.0) <= CENTERLINE_SNAP_MM else point.x()
+    y = 1200.0 if abs(point.y() - 1200.0) <= CENTERLINE_SNAP_MM else point.y()
+    return QPointF(x, y)
+
+
+def snap_paper_heading_to_right_angle(heading_deg: float) -> float:
+    nearest = round(heading_deg / 90.0) * 90.0
+    delta = (heading_deg - nearest + 180.0) % 360.0 - 180.0
+    return nearest if abs(delta) <= RIGHT_ANGLE_SNAP_DEG else heading_deg
 
 
 class NumericSpinBox(QDoubleSpinBox):
@@ -75,6 +90,7 @@ class MapView(QGraphicsView):
     preview_rotated = Signal()
     box_selected = Signal(QRectF, bool)
     view_changed = Signal()
+    cancel_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__(); self.mode = "select"; self._rubber = None; self._origin = None; self._panning = False
@@ -92,8 +108,12 @@ class MapView(QGraphicsView):
             self._pan_scroll = QPoint(self.horizontalScrollBar().value(), self.verticalScrollBar().value())
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor); event.accept(); return
         item = self.itemAt(event.position().toPoint())
-        if event.button() == Qt.MouseButton.RightButton and self.mode == "add":
-            self.preview_rotated.emit(); event.accept(); return
+        if event.button() == Qt.MouseButton.RightButton and self.mode in ("add", "mark_pose"):
+            if self.mode == "mark_pose":
+                self.cancel_requested.emit()
+            else:
+                self.preview_rotated.emit()
+            event.accept(); return
         if event.button() == Qt.MouseButton.RightButton and isinstance(item, StartItem):
             item.rotated(); event.accept(); return
         editable = isinstance(item, (WaypointItem, RotationHandleItem, StartItem, DraggableEllipseItem, DraggableRectItem))
@@ -101,11 +121,12 @@ class MapView(QGraphicsView):
             point = self.mapToScene(event.position().toPoint())
             self.clicked.emit(point.x(), point.y(), bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
             event.accept(); return
-        if event.button() == Qt.MouseButton.LeftButton and self.mode in ("add", "mark_pose") and not editable:
+        if event.button() == Qt.MouseButton.LeftButton and self.mode == "mark_pose" and not editable:
+            point = self.mapToScene(event.position().toPoint())
+            self.clicked.emit(point.x(), point.y(), bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+            event.accept(); return
+        if event.button() == Qt.MouseButton.LeftButton and self.mode == "add" and not editable:
             self._add_pressed = True
-            if self.mode == "mark_pose":
-                point = self.mapToScene(event.position().toPoint())
-                self.clicked.emit(point.x(), point.y(), bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
             event.accept(); return
         if event.button() == Qt.MouseButton.LeftButton and self.mode in ("calibrate", "measure", "auto_plan") and not editable:
             point = self.mapToScene(event.position().toPoint()); self.clicked.emit(point.x(), point.y(), bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)); event.accept(); return
@@ -147,8 +168,8 @@ class MapView(QGraphicsView):
         self._add_pressed = False; self.hovered.emit(float("nan"), float("nan"), False); super().leaveEvent(event)
 
     def keyPressEvent(self, event):  # type: ignore[no-untyped-def]
-        if event.key() == Qt.Key.Key_Escape and self.mode == "measure":
-            self.clicked.emit(float("nan"), float("nan"), False); event.accept(); return
+        if event.key() == Qt.Key.Key_Escape and self.mode in ("measure", "mark_pose", "add"):
+            self.cancel_requested.emit(); event.accept(); return
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self._space_pressed = True; self.viewport().setCursor(Qt.CursorShape.OpenHandCursor); event.accept(); return
         super().keyPressEvent(event)
@@ -205,8 +226,14 @@ class DraggableEllipseItem(QGraphicsEllipseItem):
         super().__init__(*rect); self.moved = moved
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable); self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
 
+    def mousePressEvent(self, event):  # type: ignore[no-untyped-def]
+        self._before = QPointF(self.scenePos())
+        super().mousePressEvent(event)
+
     def mouseReleaseEvent(self, event):  # type: ignore[no-untyped-def]
-        super().mouseReleaseEvent(event); self.moved(self.scenePos())
+        super().mouseReleaseEvent(event)
+        if getattr(self, "_before", self.scenePos()) != self.scenePos():
+            self.moved(self.scenePos())
 
 
 class DraggableRectItem(QGraphicsRectItem):
@@ -263,6 +290,9 @@ class MapEditorWidget(QWidget):
             self.preview_paper: QPointF | None = None; self.preview_yaw_deg: float | None = None; self.preview_anchor_index: int | None = None; self.preview_anchor_signature = None; self.preview_shift = False
             self._rviz_pose_anchor: QPointF | None = None
             self._rviz_drag_point: QPointF | None = None
+            self._pending_navigation_goal_paper: QPointF | None = None
+            self._pending_navigation_goal_yaw: float | None = None
+            self._selected_auto_segment_dirty = False
             # 曲线在确认前只保存在此临时对象中，避免半成品进入 Plan.steps。
             self.bezier_draft: BezierPathSegment | None = None
             self.bezier_draft_start_yaw = 0.0
@@ -288,9 +318,14 @@ class MapEditorWidget(QWidget):
             self._runtime_target_direction_item = None
             self._runtime_trace_item = None
             self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
-            self.view.clicked.connect(self.on_map_click); self.view.hovered.connect(self.update_preview); self.view.released.connect(self.on_map_release); self.view.preview_rotated.connect(self.rotate_preview_clockwise); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
-            self._build(); self._build_layout_sliders(); self.view.view_changed.connect(self.position_layout_sliders); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_selected_step); QShortcut(QKeySequence(Qt.Key.Key_Return), self, activated=self.confirm_bezier_draft); QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.cancel_bezier_draft)
-            self.refresh_mode_ui(); self.redraw(); self.refresh_plans(); QTimer.singleShot(0,self.fit_map); QShortcut(QKeySequence(Qt.Key.Key_Home),self,activated=self.fit_map)
+            self.view.clicked.connect(self.on_map_click); self.view.hovered.connect(self.update_preview); self.view.released.connect(self.on_map_release); self.view.preview_rotated.connect(self.rotate_preview_clockwise); self.view.box_selected.connect(self.select_box); self.view.cancel_requested.connect(self.cancel_active_interaction); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
+            self._nav_preview_timer = QTimer(self); self._nav_preview_timer.setSingleShot(True)
+            self._nav_preview_timer.setInterval(50); self._nav_preview_timer.timeout.connect(self._flush_navigation_preview)
+            self._build(); self._build_layout_sliders(); self.view.view_changed.connect(self.position_layout_sliders); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_selected_step); QShortcut(QKeySequence(Qt.Key.Key_Return), self, activated=self.confirm_bezier_draft); QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.cancel_active_interaction)
+            self.refresh_mode_ui(); self.redraw(); self.refresh_plans()
+            self._initial_fit_timer = QTimer(self); self._initial_fit_timer.setSingleShot(True)
+            self._initial_fit_timer.timeout.connect(self.fit_map); self._initial_fit_timer.start(0)
+            QShortcut(QKeySequence(Qt.Key.Key_Home),self,activated=self.fit_map)
 
     @property
     def canvas(self) -> MapView:
@@ -336,11 +371,13 @@ class MapEditorWidget(QWidget):
                 raise TypeError("plan 必须是 Plan 实例")
             self._discard_bezier_draft(); self._invalidate_timeline()
             self.plan = copy.deepcopy(plan); self.active_index = -1; self.active_point_index = -1
+            self._pending_navigation_goal_paper = None; self._pending_navigation_goal_yaw = None
             self.selected_indices.clear(); self.undo_stack.clear(); self.redo_stack.clear()
             self.calibration_pending = not calibrated; self.calibration_stage = "complete" if calibrated else "choose"
             self._auto_paths_stale = False
             self._load_costmap_controls()
             self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
+            self.plan_changed.emit(copy.deepcopy(self.plan))
 
     def select_candidate(self, index: int) -> None:
             """选择工作台当前关注的流程候选项。"""
@@ -498,13 +535,16 @@ class MapEditorWidget(QWidget):
             outer_box.addWidget(self.editor_tabs)
             box = waypoint_box
             toolbar = QHBoxLayout(); self.tool_group = QButtonGroup(self); self.tool_group.setExclusive(True)
-            self.select_button = QPushButton("选择/编辑"); self.add_button = QPushButton("添加节点"); self.measure_button = QPushButton("测距"); self.obstacle_button = QPushButton("放置障碍物"); self.auto_plan_button = QPushButton("自动规划（仅点终点）")
-            self.mark_pose_button = QPushButton("设置导航目标（拖动定朝向）")
+            self.select_button = QPushButton("选择/编辑"); self.add_button = QPushButton("添加节点"); self.measure_button = QPushButton("测距"); self.obstacle_button = QPushButton("放置障碍物"); self.auto_plan_button = QPushButton("设置终点（使用参数航向）")
+            self.mark_pose_button = QPushButton("设置导航目标（点位置 → 点方向）")
+            tool_style = ("QPushButton{padding:7px 10px;}"
+                          "QPushButton:checked{background:#00897b;color:white;"
+                          "border:2px solid #80cbc4;font-weight:700;}")
             for button, value in ((self.select_button, "select"), (self.mark_pose_button, "mark_pose"), (self.measure_button, "measure"), (self.auto_plan_button, "auto_plan")):
-                button.setCheckable(True); self.tool_group.addButton(button)
-                button.toggled.connect(lambda checked=False, mode=value: checked and self.set_mode(mode)); toolbar.addWidget(button)
-            self.obstacle_button.setCheckable(True); self.tool_group.addButton(self.obstacle_button)
-            self.obstacle_button.toggled.connect(lambda checked=False: checked and self.set_mode("obstacle"))
+                button.setCheckable(True); button.setStyleSheet(tool_style); self.tool_group.addButton(button)
+                button.toggled.connect(lambda checked=False, mode=value, source=button: checked and self.set_mode(mode, source)); toolbar.addWidget(button)
+            self.obstacle_button.setCheckable(True); self.obstacle_button.setStyleSheet(tool_style); self.tool_group.addButton(self.obstacle_button)
+            self.obstacle_button.toggled.connect(lambda checked=False: checked and self.set_mode("obstacle", self.obstacle_button))
             self.select_button.setChecked(True); box.addLayout(toolbar)
             self.continuous_goal_selection = QCheckBox("连续选择自动规划航点")
             self.continuous_goal_selection.setChecked(True)
@@ -519,6 +559,16 @@ class MapEditorWidget(QWidget):
             self.selected_pose_label = QLabel("当前航点：未选择")
             for label in (self.cursor_position_label, self.current_position_label, self.selected_pose_label):
                 label.setWordWrap(True); box.addWidget(label)
+            self.navigation_strategy = QComboBox()
+            self.navigation_strategy.addItem("稳定自动（优先保持航向，必要时末端原地转向）", "auto")
+            self.navigation_strategy.addItem("保持当前车身航向", "fixed")
+            self.navigation_strategy.addItem("车头跟随路径切线", "tangent")
+            self.navigation_strategy.addItem("移动中连续转向", "interpolate")
+            self.navigation_strategy.addItem("仅在终点原地转向", "terminal")
+            self.navigation_strategy.setToolTip(
+                "唯一的航向策略：决定移动过程中是否转动车头，以及是否在终点原地对准 Yaw。")
+            strategy_form = QFormLayout(); strategy_form.addRow("运动与航向策略", self.navigation_strategy)
+            box.addLayout(strategy_form)
             # 方案存储、代码生成和执行集中在第三页。
             box = output_box
             box.addWidget(QLabel("方案")); self.plan_list = QListWidget(); self.plan_list.itemDoubleClicked.connect(self.load_selected); self.plan_list.setMinimumHeight(76); box.addWidget(self.plan_list)
@@ -531,8 +581,17 @@ class MapEditorWidget(QWidget):
             self.codegen_button.clicked.connect(self.open_code_generator)
             row.addWidget(self.codegen_button)
             box.addLayout(row)
+            code_note = QLabel(
+                "代码使用：点击“生成业务函数” → 保持“完整 competition_route.c” → “复制代码”；"
+                "把内容保存到 Core/Src/competition_route.c，加入 EIDE/Keil 工程，并在业务状态机中调用生成的 Task_xxx()。")
+            code_note.setWordWrap(True); box.addWidget(code_note)
             box = waypoint_box
-            self.steps_label=QLabel("流程步骤"); box.addWidget(self.steps_label); self.waypoint_list = QListWidget(); self.waypoint_list.currentRowChanged.connect(self.activate_node); self.waypoint_list.setMinimumHeight(105); box.addWidget(self.waypoint_list)
+            self.steps_label=QLabel("导航目标与手动动作"); box.addWidget(self.steps_label)
+            self.show_generated_details = QCheckBox("展开自动生成的路径点与末端转向")
+            self.show_generated_details.setChecked(False)
+            self.show_generated_details.toggled.connect(self.refresh_waypoints)
+            box.addWidget(self.show_generated_details)
+            self.waypoint_list = QListWidget(); self.waypoint_list.currentRowChanged.connect(self.activate_list_row); self.waypoint_list.setMinimumHeight(105); box.addWidget(self.waypoint_list)
             primary_actions = QHBoxLayout()
             self.replan_auto_button = QPushButton("重新规划全部自动航点")
             self.replan_auto_button.clicked.connect(self.replan_all_auto_paths)
@@ -547,7 +606,7 @@ class MapEditorWidget(QWidget):
             advanced_content.setVisible(False); box.addWidget(self.advanced_group)
             box = advanced_box
             self.add_button.setText("手动添加节点")
-            self.add_button.setCheckable(True); self.tool_group.addButton(self.add_button)
+            self.add_button.setCheckable(True); self.add_button.setStyleSheet(tool_style); self.tool_group.addButton(self.add_button)
             self.add_button.toggled.connect(lambda checked=False: checked and self.set_mode("add"))
             box.addWidget(self.add_button)
             action_row=QHBoxLayout(); self.add_goto_button=QPushButton("新增点到点"); self.append_rotation_button=QPushButton("新增原地转向"); self.add_continuous_button=QPushButton("新增连续段"); self.add_bezier_button=QPushButton("新增曲线路径")
@@ -578,8 +637,10 @@ class MapEditorWidget(QWidget):
             obstacle_edit_group = QGroupBox("随机障碍物编辑")
             obstacle_edit_box = QHBoxLayout(obstacle_edit_group)
             self.select_obstacle_button = QPushButton("选择/拖动")
+            self.select_obstacle_button.setCheckable(True); self.select_obstacle_button.setStyleSheet(tool_style); self.tool_group.addButton(self.select_obstacle_button)
             self.delete_obstacle_button = QPushButton("删除选中障碍物")
-            self.select_obstacle_button.clicked.connect(lambda: self.set_mode("select"))
+            self.select_obstacle_button.toggled.connect(
+                lambda checked=False: checked and self.set_mode("select", self.select_obstacle_button))
             self.delete_obstacle_button.clicked.connect(self.remove_selected_obstacles)
             obstacle_edit_box.addWidget(self.obstacle_button); obstacle_edit_box.addWidget(self.select_obstacle_button); obstacle_edit_box.addWidget(self.delete_obstacle_button)
             self.obstacle_count_label = QLabel("障碍物：0 个"); obstacle_edit_box.addWidget(self.obstacle_count_label)
@@ -616,10 +677,22 @@ class MapEditorWidget(QWidget):
             # Compatibility name used by older UI tests and integrations.
             self.auto_safety_margin = self.platform_safety
             self.trajectory_group = QGroupBox("轨迹生成"); auto_form = QFormLayout(self.trajectory_group)
-            self.auto_corner_radius = spin(120.0, 0.0, 400.0, 10.0); self.auto_sample_spacing = spin(20.0, 10.0, 50.0, 5.0); self.auto_terminal_straight = spin(300.0, 0.0, 1000.0, 25.0); self.auto_goal_yaw = spin(0.0, -180.0, 180.0, 5.0)
+            self.auto_corner_radius = spin(120.0, 0.0, 400.0, 10.0); self.auto_sample_spacing = spin(20.0, 10.0, 50.0, 5.0); self.auto_terminal_straight = spin(300.0, 0.0, 1000.0, 25.0)
+            self.auto_goal_x = spin(0.0, 0.0, FIELD_SIZE_MM, 5.0)
+            self.auto_goal_y = spin(0.0, 0.0, FIELD_SIZE_MM, 5.0)
+            self.auto_goal_yaw = spin(0.0, -180.0, 180.0, 5.0)
             self.auto_yaw_mode = QComboBox(); self.auto_yaw_mode.addItem("保持当前车身航向", "fixed"); self.auto_yaw_mode.addItem("起终点航向插值", "interpolate"); self.auto_yaw_mode.addItem("车头跟随轨迹切线", "tangent")
             self.show_inflated_zones = QCheckBox("显示障碍膨胀区和边缘代价带"); self.show_inflated_zones.setChecked(True)
-            auto_form.addRow("五次并线半径 (mm)", self.auto_corner_radius); auto_form.addRow("采样间距 (mm)", self.auto_sample_spacing); auto_form.addRow("末端直线对接长度 (mm)", self.auto_terminal_straight); auto_form.addRow("航向模式", self.auto_yaw_mode); auto_form.addRow("终点航向 (deg)", self.auto_goal_yaw); auto_form.addRow(self.show_inflated_zones)
+            auto_form.addRow("目标 X (mm)", self.auto_goal_x); auto_form.addRow("目标 Y (mm)", self.auto_goal_y); auto_form.addRow("目标 Yaw (deg)", self.auto_goal_yaw)
+            auto_form.addRow("五次并线半径 (mm)", self.auto_corner_radius); auto_form.addRow("采样间距 (mm)", self.auto_sample_spacing); auto_form.addRow("末端直线对接长度 (mm)", self.auto_terminal_straight); auto_form.addRow(self.show_inflated_zones)
+            self.generate_segment_button = QPushButton("生成/更新本小段路径")
+            self.generate_segment_button.setStyleSheet(
+                "QPushButton{background:#f9a825;color:#1b1b1b;padding:10px;"
+                "font-weight:700;border:2px solid #ffd95a;}"
+                "QPushButton:hover{background:#fbc02d;}"
+                "QPushButton:disabled{background:#5f5f5f;color:#bdbdbd;border-color:#777;}")
+            self.generate_segment_button.clicked.connect(self.generate_navigation_segment)
+            auto_form.addRow(self.generate_segment_button)
             waypoint_box.insertWidget(6, self.trajectory_group)
             costmap_note = QLabel("安全距离是车身轮廓之外额外预留的间隙。粉色区 = 车体尺寸基准 + 安全距离；黄色软区允许规划器进入但会增加 A* 代价。最终会按当前车身长宽和实际航向逐段扫掠，车角碰线就拒绝。")
             costmap_note.setWordWrap(True); auto_box.addWidget(costmap_note); cost_box.addWidget(self.auto_plan_panel)
@@ -629,7 +702,7 @@ class MapEditorWidget(QWidget):
             local_note.setWordWrap(True); local_box.addWidget(local_note); cost_box.addWidget(local_group)
             for control in self._costmap_controls:
                 control.valueChanged.connect(self._on_costmap_changed)
-            self.auto_corner_radius.valueChanged.connect(self._mark_auto_paths_stale); self.auto_sample_spacing.valueChanged.connect(self._mark_auto_paths_stale); self.auto_terminal_straight.valueChanged.connect(self._mark_auto_paths_stale); self.auto_yaw_mode.currentIndexChanged.connect(self._mark_auto_paths_stale); self.auto_goal_yaw.valueChanged.connect(self._mark_auto_paths_stale); self.show_inflated_zones.toggled.connect(self.redraw)
+            self.auto_corner_radius.valueChanged.connect(self._mark_selected_segment_dirty); self.auto_sample_spacing.valueChanged.connect(self._mark_selected_segment_dirty); self.auto_terminal_straight.valueChanged.connect(self._mark_selected_segment_dirty); self.auto_goal_x.valueChanged.connect(self._on_goal_control_changed); self.auto_goal_y.valueChanged.connect(self._on_goal_control_changed); self.auto_goal_yaw.valueChanged.connect(self._on_goal_control_changed); self.navigation_strategy.currentIndexChanged.connect(self._mark_selected_segment_dirty); self.show_inflated_zones.toggled.connect(self.redraw)
             self.bezier_panel = QWidget(); bezier_box = QVBoxLayout(self.bezier_panel); bezier_box.setContentsMargins(0, 0, 0, 0)
             bezier_box.addWidget(QLabel("曲线航向")); bezier_form = QFormLayout()
             self.bezier_yaw_mode = QComboBox(); self.bezier_yaw_mode.addItem("起终点航向插值", "interpolate"); self.bezier_yaw_mode.addItem("切线跟随", "tangent")
@@ -684,6 +757,10 @@ class MapEditorWidget(QWidget):
             scroll.setWidgetResizable(True); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded); scroll.setWidget(left); scroll.setMinimumWidth(430)
             map_panel=QWidget(); map_box=QVBoxLayout(map_panel); map_box.setContentsMargins(0,0,0,0); map_box.setSpacing(0)
             map_panel.setMinimumWidth(480)
+            self.current_tool_label = QLabel("当前工具：选择/编辑")
+            self.current_tool_label.setStyleSheet(
+                "padding:7px 12px;background:#103b46;color:#80cbc4;font-weight:700;")
+            map_box.addWidget(self.current_tool_label)
             self.calibration_bar=QWidget(); guide=QHBoxLayout(self.calibration_bar); guide.setContentsMargins(12,8,12,8)
             self.calibration_label=QLabel("1. 选择起点   2. 右击蓝色箭头设置朝向") ; guide.addWidget(self.calibration_label); guide.addStretch()
             for label in ("启停区 1", "启停区 2", "自定义"):
@@ -697,7 +774,7 @@ class MapEditorWidget(QWidget):
             self.update_calibration_ui()
             self._refresh_execution_controls()
 
-    def set_mode(self, mode):
+    def set_mode(self, mode, source_button=None):
             if mode != "add": self._discard_bezier_draft(); self.clear_preview()
             if mode != "mark_pose":
                 self._rviz_pose_anchor = None; self._rviz_drag_point = None
@@ -713,17 +790,28 @@ class MapEditorWidget(QWidget):
             if hasattr(self,"status"):
                 message = "选择：框选、Ctrl 多选；中键或空格+左键平移地图。"
                 if mode == "add": message = "添加节点：点击地图添加，按住 Shift 吸附水平、垂直或 45 度。"
-                elif mode == "mark_pose": message = "设置导航目标：按下确定终点，拖动设置目标航向，松开后立即自动规划。"
+                elif mode == "mark_pose": message = "设置导航目标：第一次点击位置，移动鼠标看航向辅助线，第二次点击确定方向并自动规划；Esc/右键取消。"
                 elif mode == "measure": message = "测距：左键依次选择两点，生成水平和垂直对齐线；Esc 或切换工具清除。"
                 elif mode == "obstacle": message = "障碍物：左键释放添加黑色圆形标记，选择模式可拖拽。"
-                elif mode == "auto_plan": message = "自动规划：点击地图终点，生成膨胀避障、A* 搜索和安全圆角轨迹。"
+                elif mode == "auto_plan": message = "设置终点：点击地图确定位置，调整本小段参数后再按黄色生成按钮。"
                 self.status.setText(message)
-            if mode == "select": self.select_button.setChecked(True)
+            if source_button is not None:
+                source_button.setChecked(True)
+            elif mode == "select": self.select_button.setChecked(True)
             elif mode == "add": self.add_button.setChecked(True)
             elif mode == "mark_pose": self.mark_pose_button.setChecked(True)
             elif mode == "measure": self.measure_button.setChecked(True)
             elif mode == "obstacle": self.obstacle_button.setChecked(True)
             elif mode == "auto_plan": self.auto_plan_button.setChecked(True)
+            if hasattr(self, "current_tool_label"):
+                active = source_button
+                if active is None:
+                    active = {"select": self.select_button, "add": self.add_button,
+                              "mark_pose": self.mark_pose_button, "measure": self.measure_button,
+                              "obstacle": self.obstacle_button,
+                              "auto_plan": self.auto_plan_button}.get(mode)
+                self.current_tool_label.setText(
+                    f"当前工具：{active.text() if active is not None else mode}")
 
     def begin_start(self, kind):
             if self._hardware_motion_active or self.timer.isActive():
@@ -742,20 +830,40 @@ class MapEditorWidget(QWidget):
 
     def on_map_click(self, x, y, shift=False):
             if math.isnan(x):
-                self.clear_measurement(); return
+                self.cancel_active_interaction(); return
             if not (0 <= x <= FIELD_SIZE_MM and 0 <= y <= FIELD_SIZE_MM): return
             if self.mode == "measure":
                 self.add_measurement_point(QPointF(x, y), shift); return
             if self.mode == "mark_pose":
-                self._rviz_pose_anchor = QPointF(x, y)
-                self._rviz_drag_point = QPointF(x, y)
-                self.preview_paper = QPointF(x, y)
-                self.preview_yaw_deg = self._step_end_pose(len(self.plan.steps)).yaw_deg
-                self.redraw(); return
+                if self._rviz_pose_anchor is None:
+                    original = QPointF(x, y)
+                    snapped = snap_to_field_centerlines(original)
+                    x, y = snapped.x(), snapped.y()
+                    self._pending_navigation_goal_paper = None
+                    self._pending_navigation_goal_yaw = None
+                    self._rviz_pose_anchor = QPointF(x, y)
+                    self._rviz_drag_point = QPointF(x, y)
+                    self.preview_paper = QPointF(x, y)
+                    self.preview_yaw_deg = self._step_end_pose(len(self.plan.steps)).yaw_deg
+                    snap_note = ("（已自动吸附场地中线）" if snapped != original else "")
+                    self.status.setText(
+                        f"目标位置已确定{snap_note}：移动鼠标选择车头方向，再点击一次确认。")
+                    self.redraw(); return
+                self.confirm_marked_pose(x, y); return
             if self.mode == "obstacle":
                 self.add_obstacle(QPointF(x, y)); return
             if self.mode == "auto_plan":
-                self.create_auto_path(QPointF(x, y)); return
+                snapped = snap_to_field_centerlines(QPointF(x, y))
+                x, y = snapped.x(), snapped.y()
+                self._pending_navigation_goal_paper = QPointF(x, y)
+                self._pending_navigation_goal_yaw = self.auto_goal_yaw.value()
+                self._set_goal_controls(x, y, self._pending_navigation_goal_yaw)
+                self.selected_pose_label.setText(
+                    f"待生成目标：图纸 X={x:.1f}, Y={y:.1f} mm，"
+                    f"航向={self._pending_navigation_goal_yaw:.1f}°")
+                self.generate_segment_button.setText("生成/更新本小段路径")
+                self.status.setText("终点已确定。请调整本小段参数，然后点击黄色“生成本小段路径”。")
+                self.redraw(); return
             if self.mode == "calibrate":
                 if self.calibration_stage != "position": return
                 self.set_start_frame(x, y, self.plan.start_heading_deg)
@@ -765,7 +873,18 @@ class MapEditorWidget(QWidget):
 
     def on_map_release(self, x, y, shift=False):
             if self.mode == "add": self.confirm_preview(x, y, shift)
-            elif self.mode == "mark_pose": self.confirm_marked_pose(x, y)
+
+    def cancel_active_interaction(self) -> None:
+            """Cancel only the transient tool state; committed plan data is untouched."""
+            if self.mode == "measure":
+                self.clear_measurement(); return
+            if self.mode == "mark_pose" and self._rviz_pose_anchor is not None:
+                self._nav_preview_timer.stop()
+                self._rviz_pose_anchor = None; self._rviz_drag_point = None
+                self.clear_preview(False); self.redraw()
+                self.status.setText("已取消本次导航目标。")
+                return
+            self.cancel_bezier_draft()
 
     def paper_of(self, waypoint):
             x, y = world_to_paper(Pose(waypoint.x_mm, waypoint.y_mm, waypoint.yaw_deg),
@@ -1007,6 +1126,33 @@ class MapEditorWidget(QWidget):
             if hasattr(self, "replan_auto_button"):
                 self.replan_auto_button.setEnabled(self._auto_paths_stale)
 
+    def _mark_selected_segment_dirty(self, *_args) -> None:
+            """Trajectory controls are applied only when the yellow button is pressed."""
+            if not hasattr(self, "generate_segment_button"):
+                return
+            self._selected_auto_segment_dirty = True
+            self.generate_segment_button.setText("应用参数并更新本小段路径")
+            if hasattr(self, "status"):
+                self.status.setText("本小段参数已修改；现有路径未改变，请点击黄色按钮应用。")
+
+    def _set_goal_controls(self, x_mm: float, y_mm: float, yaw_deg: float) -> None:
+            for control, value in ((self.auto_goal_x, x_mm),
+                                   (self.auto_goal_y, y_mm),
+                                   (self.auto_goal_yaw, yaw_deg)):
+                control.blockSignals(True); control.setValue(value); control.blockSignals(False)
+
+    def _on_goal_control_changed(self, *_args) -> None:
+            self._mark_selected_segment_dirty()
+            if self._pending_navigation_goal_paper is None:
+                return
+            self._pending_navigation_goal_paper = QPointF(
+                self.auto_goal_x.value(), self.auto_goal_y.value())
+            self._pending_navigation_goal_yaw = self.auto_goal_yaw.value()
+            self.selected_pose_label.setText(
+                f"待生成目标：图纸 X={self.auto_goal_x.value():.1f}, "
+                f"Y={self.auto_goal_y.value():.1f} mm，航向={self.auto_goal_yaw.value():.1f}°")
+            self.redraw()
+
     def _on_costmap_changed(self, *_args) -> None:
             if self._loading_costmap_controls:
                 return
@@ -1017,12 +1163,15 @@ class MapEditorWidget(QWidget):
     def create_auto_path(self, goal_paper: QPointF, *,
                          goal_yaw_deg: float | None = None,
                          yaw_mode: str | None = None,
-                         terminal_rotation: bool = False) -> None:
+                         terminal_rotation: bool = False,
+                         strategy_name: str = "",
+                         replace_index: int | None = None) -> bool:
             if self.calibration_pending or self._hardware_motion_active or self.timer.isActive():
                 self.status.setText("请先完成标定并停止当前运动。")
-                return
+                return False
             existing_paths_were_stale = self._auto_paths_stale
-            start_world = self._step_end_pose(len(self.plan.steps))
+            insertion_index = len(self.plan.steps) if replace_index is None else replace_index
+            start_world = self._step_end_pose(insertion_index)
             start_paper = self.paper_of(start_world)
             settings = self.auto_path_settings()
             if yaw_mode is not None:
@@ -1041,7 +1190,7 @@ class MapEditorWidget(QWidget):
                 )
             except AutoPathError as error:
                 self.status.setText(f"自动规划失败：{error}")
-                return
+                return False
 
             for first, second in zip(result.world_points, result.world_points[1:]):
                 start = self.paper_of(first); end = self.paper_of(second)
@@ -1050,7 +1199,7 @@ class MapEditorWidget(QWidget):
                         first.yaw_deg, second.yaw_deg):
                     self.status.setText(
                         "自动规划失败：平滑后整车扫掠进入禁区；请保持车身航向或减小圆角半径。")
-                    return
+                    return False
 
             target_yaw = (result.world_points[-1].yaw_deg
                           if goal_yaw_deg is None else goal_yaw_deg)
@@ -1061,17 +1210,41 @@ class MapEditorWidget(QWidget):
                     goal_paper, result.world_points[-1].yaw_deg, target_yaw):
                 self.status.setText(
                     "自动规划失败：终点位置可以到达，但该位置没有足够空间完成目标转向。")
-                return
+                return False
 
             self.push_undo()
             count = sum(isinstance(step, ContinuousPathSegment) and
                         step.name.startswith("自动规划") for step in self.plan.steps) + 1
-            self.plan.steps.append(ContinuousPathSegment(
-                list(result.world_points), f"自动规划 {count}"))
+            suffix = f" [{strategy_name}]" if strategy_name else ""
+            generated_path = ContinuousPathSegment(
+                list(result.world_points), f"自动规划 {count}{suffix}",
+                AutoSegmentSettings(
+                    corner_radius_mm=self.auto_corner_radius.value(),
+                    sample_spacing_mm=self.auto_sample_spacing.value(),
+                    terminal_straight_mm=self.auto_terminal_straight.value(),
+                    yaw_mode=settings.yaw_mode,
+                    goal_yaw_deg=target_yaw,
+                    strategy=str(self.navigation_strategy.currentData()),
+                ))
+            if replace_index is None:
+                self.plan.steps.append(generated_path)
+                path_index = len(self.plan.steps) - 1
+            else:
+                if not (0 <= replace_index < len(self.plan.steps) and
+                        isinstance(self.plan.steps[replace_index], ContinuousPathSegment) and
+                        self.plan.steps[replace_index].name.startswith("自动规划")):
+                    self.status.setText("只能更新选中的自动导航小段。")
+                    return False
+                if (replace_index + 1 < len(self.plan.steps) and
+                        isinstance(self.plan.steps[replace_index + 1], RotateInPlace) and
+                        self.plan.steps[replace_index + 1].name == "导航目标朝向"):
+                    del self.plan.steps[replace_index + 1]
+                self.plan.steps[replace_index] = generated_path
+                path_index = replace_index
             if needs_terminal_rotation:
-                self.plan.steps.append(RotateInPlace(
+                self.plan.steps.insert(path_index + 1, RotateInPlace(
                     target_yaw, name="导航目标朝向"))
-            self.active_index = len(self.plan.steps) - 1
+            self.active_index = path_index
             self.active_point_index = -1
             self._sync_continuous_entries()
             self._invalidate_timeline()
@@ -1087,6 +1260,9 @@ class MapEditorWidget(QWidget):
             self.status.setText(
                 f"自动规划完成：{result.length_mm:.0f} mm，{len(result.world_points)} 点；"
                 "已通过膨胀区和整段几何复验。")
+            self._selected_auto_segment_dirty = False
+            self.generate_segment_button.setText("生成/更新本小段路径")
+            return True
 
     def replan_all_auto_paths(self) -> None:
             if self.calibration_pending or self._hardware_motion_active or self.timer.isActive():
@@ -1104,14 +1280,25 @@ class MapEditorWidget(QWidget):
                     start_world = self._step_end_pose(index)
                     start_paper = self.paper_of(start_world)
                     old_goal = self.paper_of(step.points[-1])
+                    segment_settings = self.auto_path_settings()
+                    goal_yaw = step.points[-1].yaw_deg
+                    if step.auto_settings is not None:
+                        segment_settings = replace(
+                            segment_settings,
+                            corner_radius_mm=step.auto_settings.corner_radius_mm,
+                            sample_spacing_mm=step.auto_settings.sample_spacing_mm,
+                            terminal_straight_mm=step.auto_settings.terminal_straight_mm,
+                            yaw_mode=step.auto_settings.yaw_mode,
+                        )
+                        goal_yaw = step.auto_settings.goal_yaw_deg
                     result = plan_auto_path(
                         (start_paper.x_mm, start_paper.y_mm),
                         (old_goal.x_mm, old_goal.y_mm),
                         Pose(self.plan.start_paper_x_mm,
                              self.plan.start_paper_y_mm,
                              self.plan.start_heading_deg),
-                        start_world.yaw_deg, step.points[-1].yaw_deg,
-                        self.plan.layout.obstacles, self.auto_path_settings())
+                        start_world.yaw_deg, goal_yaw,
+                        self.plan.layout.obstacles, segment_settings)
                     for first, second in zip(result.world_points,
                                              result.world_points[1:]):
                         first_paper, second_paper = self.paper_of(first), self.paper_of(second)
@@ -1259,7 +1446,23 @@ class MapEditorWidget(QWidget):
             self._runtime_trace_path_point_count = 0
             self._runtime_projection_item = None
             self._runtime_lookahead_item = None
-            self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_inflated_forbidden_zones(); self.draw_start(); self.draw_route(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None); self.draw_runtime_overlay(); self.position_layout_sliders()
+            self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_inflated_forbidden_zones(); self.draw_start(); self.draw_route(); self.draw_pending_navigation_goal(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None); self.draw_runtime_overlay(); self.position_layout_sliders()
+
+    def draw_pending_navigation_goal(self) -> None:
+            if (self._pending_navigation_goal_paper is None or
+                    self._pending_navigation_goal_yaw is None):
+                return
+            point = self._pending_navigation_goal_paper
+            color = QColor("#f9a825")
+            ring = self.scene.addEllipse(point.x() - 34, point.y() - 34, 68, 68,
+                                         QPen(color, 5), QColor(249, 168, 37, 65))
+            ring.setData(0, "pending_navigation_goal"); ring.setZValue(25)
+            self._draw_direction_arrow(point.x(), point.y(),
+                                       self._pending_navigation_goal_yaw,
+                                       color, "pending_navigation_goal_arrow")
+            label = self.scene.addText("待生成", QFont("Microsoft YaHei", 15))
+            label.setDefaultTextColor(color); label.setPos(point.x() + 40, point.y() + 25)
+            label.setData(0, "pending_navigation_goal_label"); label.setZValue(27)
             for item in self.scene.items():
                 if isinstance(item,WaypointItem) and item.index in self.selected_indices: item.setSelected(True)
             signature = repr(self.plan)
@@ -1379,7 +1582,14 @@ class MapEditorWidget(QWidget):
 
     def move_obstacle(self, index, position):
             if not 0 <= index < len(self.plan.layout.obstacles): return
-            self.push_layout_undo(); obstacle=self.plan.layout.obstacles[index]; obstacle.paper_x_mm,obstacle.paper_y_mm=self.clamp_obstacle(position); self._mark_auto_paths_stale(); self.redraw()
+            next_x, next_y = self.clamp_obstacle(position)
+            obstacle = self.plan.layout.obstacles[index]
+            if (math.isclose(obstacle.paper_x_mm, next_x, abs_tol=1e-6) and
+                    math.isclose(obstacle.paper_y_mm, next_y, abs_tol=1e-6)):
+                return
+            self.push_layout_undo()
+            obstacle.paper_x_mm, obstacle.paper_y_mm = next_x, next_y
+            self._mark_auto_paths_stale(); self.redraw()
 
     def move_raw_area(self, position):
             self.push_layout_undo(); self.plan.layout.raw_center_x_mm=max(RAW_CENTER_X_RANGE[0],min(RAW_CENTER_X_RANGE[1],position.x())); self.redraw()
@@ -1483,13 +1693,13 @@ class MapEditorWidget(QWidget):
             return self._step_anchor(len(self.plan.steps)) + (self.active_index,)
 
     def new_plan(self):
-            self._discard_bezier_draft(); self._invalidate_timeline(); self.plan=Plan(); self.active_index=-1; self.active_point_index=-1; self.undo_stack=[]; self.redo_stack=[]; self._auto_paths_stale=False; self._load_costmap_controls(); self.calibration_pending=True; self.calibration_stage="choose"; self.set_mode("select"); self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
+            self._discard_bezier_draft(); self._invalidate_timeline(); self.plan=Plan(); self.active_index=-1; self.active_point_index=-1; self._pending_navigation_goal_paper=None; self._pending_navigation_goal_yaw=None; self.undo_stack=[]; self.redo_stack=[]; self._auto_paths_stale=False; self._load_costmap_controls(); self.calibration_pending=True; self.calibration_stage="choose"; self.set_mode("select"); self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
 
     def load_selected(self):
             item=self.plan_list.currentItem()
             if item is None: return
             try:
-                self._discard_bezier_draft(); self._invalidate_timeline(); self.plan=load_plan(item.text()); self.active_index=-1; self.active_point_index=-1; self._auto_paths_stale=False; self._load_costmap_controls(); self.calibration_pending=False; self.calibration_stage="complete"; self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
+                self._discard_bezier_draft(); self._invalidate_timeline(); self.plan=load_plan(item.text()); self.active_index=-1; self.active_point_index=-1; self._pending_navigation_goal_paper=None; self._pending_navigation_goal_yaw=None; self._auto_paths_stale=False; self._load_costmap_controls(); self.calibration_pending=False; self.calibration_stage="complete"; self.update_calibration_ui(); self.refresh_waypoints(); self.redraw()
             except ValueError as error: QMessageBox.warning(self,"加载失败",str(error))
 
     def _selected_step(self):
@@ -1531,13 +1741,20 @@ class MapEditorWidget(QWidget):
                         step.points.append(PathPosePoint(anchor.x_mm, anchor.y_mm, anchor.yaw_deg, "入口点"))
 
     def refresh_mode_ui(self):
-            self.steps_label.setText("流程步骤")
+            self.steps_label.setText("导航目标与手动动作")
             self.continuous_panel.setVisible(isinstance(self._selected_step(), ContinuousPathSegment))
 
     def refresh_waypoints(self):
             self.waypoint_list.blockSignals(True)
             self.waypoint_list.clear()
+            self._waypoint_row_to_step_index = []
             for index, step in enumerate(self.plan.steps):
+                is_internal_rotation = (isinstance(step, RotateInPlace) and
+                                        step.name == "导航目标朝向" and index > 0 and
+                                        isinstance(self.plan.steps[index - 1], ContinuousPathSegment) and
+                                        self.plan.steps[index - 1].name.startswith("自动规划"))
+                if is_internal_rotation and not self.show_generated_details.isChecked():
+                    continue
                 if isinstance(step, Waypoint):
                     text = f"{index + 1}. 到点停靠 ({step.x_mm:.0f}, {step.y_mm:.0f})"
                 elif isinstance(step, RotateInPlace):
@@ -1546,13 +1763,29 @@ class MapEditorWidget(QWidget):
                     text = f"{index + 1}. 连续路径段 {step.name} ({max(0, len(step.points) - 1)} 点)"
                     if step.points and step.name.startswith("自动规划"):
                         endpoint = self.paper_of(step.points[-1])
-                        text += (f"  Δ启1 X={endpoint.x_mm - START_PRESETS['启停区 1'][0]:+.0f}"
-                                 f" Y={endpoint.y_mm - START_PRESETS['启停区 1'][1]:+.0f} mm")
+                        terminal = (self.plan.steps[index + 1]
+                                    if index + 1 < len(self.plan.steps) and
+                                    isinstance(self.plan.steps[index + 1], RotateInPlace) and
+                                    self.plan.steps[index + 1].name == "导航目标朝向" else None)
+                        target_yaw = terminal.yaw_deg if terminal is not None else step.points[-1].yaw_deg
+                        text = (f"{index + 1}. 导航目标  X={endpoint.x_mm:.0f}, Y={endpoint.y_mm:.0f},"
+                                f" 航向={target_yaw:.0f}°  Δ启1 X={endpoint.x_mm - START_PRESETS['启停区 1'][0]:+.0f}"
+                                f" Y={endpoint.y_mm - START_PRESETS['启停区 1'][1]:+.0f} mm")
+                        if self.show_generated_details.isChecked():
+                            text += f"  [内部路径 {max(0, len(step.points) - 1)} 点]"
                 else:
                     text = f"{index + 1}. 曲线路径 {step.name}"
                 self.waypoint_list.addItem(text)
-            if 0 <= self.active_index < self.waypoint_list.count():
-                self.waypoint_list.setCurrentRow(self.active_index)
+                self._waypoint_row_to_step_index.append(index)
+            selected_step_index = self.active_index
+            if (selected_step_index > 0 and
+                    isinstance(self.plan.steps[selected_step_index], RotateInPlace) and
+                    self.plan.steps[selected_step_index].name == "导航目标朝向" and
+                    not self.show_generated_details.isChecked()):
+                selected_step_index -= 1
+            if selected_step_index in self._waypoint_row_to_step_index:
+                self.waypoint_list.setCurrentRow(
+                    self._waypoint_row_to_step_index.index(selected_step_index))
             self.waypoint_list.blockSignals(False)
             has_auto = any(isinstance(step, ContinuousPathSegment) and
                            step.name.startswith("自动规划") for step in self.plan.steps)
@@ -1563,6 +1796,11 @@ class MapEditorWidget(QWidget):
             self.codegen_button.setEnabled(not self.calibration_pending and bool(self.plan.steps)
                                            and not self._auto_paths_stale)
 
+    def activate_list_row(self, row):
+            if not 0 <= row < len(getattr(self, "_waypoint_row_to_step_index", [])):
+                return
+            self.activate_node(self._waypoint_row_to_step_index[row])
+
     def activate_node(self, index):
             if not 0 <= index < len(self.plan.steps):
                 return
@@ -1570,6 +1808,29 @@ class MapEditorWidget(QWidget):
             self.show_node(index)
             self.refresh_mode_ui()
             self.redraw(); self.candidate_selected.emit(index)
+
+    def _load_auto_segment_controls(self, settings: AutoSegmentSettings,
+                                    endpoint: Pose) -> None:
+            controls = (
+                (self.auto_goal_x, endpoint.x_mm),
+                (self.auto_goal_y, endpoint.y_mm),
+                (self.auto_corner_radius, settings.corner_radius_mm),
+                (self.auto_sample_spacing, settings.sample_spacing_mm),
+                (self.auto_terminal_straight, settings.terminal_straight_mm),
+                (self.auto_goal_yaw, settings.goal_yaw_deg),
+            )
+            for control, value in controls:
+                control.blockSignals(True); control.setValue(value); control.blockSignals(False)
+            yaw_index = self.auto_yaw_mode.findData(settings.yaw_mode)
+            strategy_index = self.navigation_strategy.findData(settings.strategy)
+            self.auto_yaw_mode.blockSignals(True)
+            self.auto_yaw_mode.setCurrentIndex(yaw_index if yaw_index >= 0 else 0)
+            self.auto_yaw_mode.blockSignals(False)
+            self.navigation_strategy.blockSignals(True)
+            self.navigation_strategy.setCurrentIndex(
+                strategy_index if strategy_index >= 0 else 0)
+            self.navigation_strategy.blockSignals(False)
+            self._selected_auto_segment_dirty = False
 
     def show_node(self, index):
             step = self._selected_step()
@@ -1599,6 +1860,10 @@ class MapEditorWidget(QWidget):
             for widget in (self.yaw, self.node_wmax, self.timeout, self.update_action_button):
                 widget.setVisible(not continuous)
             if continuous:
+                if step.name.startswith("自动规划") and step.auto_settings is not None:
+                    endpoint = self.paper_of(step.points[-1]) if step.points else Pose()
+                    self._load_auto_segment_controls(step.auto_settings, endpoint)
+                    self.generate_segment_button.setText("生成/更新本小段路径")
                 self.continuous_list.blockSignals(True)
                 self.continuous_list.clear()
                 for point_index, point in enumerate(step.points):
@@ -1865,6 +2130,14 @@ class MapEditorWidget(QWidget):
                         label.setPos(current.x() + 18, current.y() - 34)
                         label.setData(0, "auto_goal_label"); label.setZValue(18)
                         label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                        terminal = (self.plan.steps[index + 1]
+                                    if index + 1 < len(self.plan.steps) and
+                                    isinstance(self.plan.steps[index + 1], RotateInPlace) and
+                                    self.plan.steps[index + 1].name == "导航目标朝向" else None)
+                        final_yaw = terminal.yaw_deg if terminal is not None else point.yaw_deg
+                        self._draw_direction_arrow(
+                            current.x(), current.y(), final_yaw,
+                            QColor("#ad00b5"), "navigation_goal_pose")
                 if step.points:
                     last = step.points[-1]; previous = Pose(last.x_mm, last.y_mm, last.yaw_deg)
 
@@ -2035,6 +2308,30 @@ class MapEditorWidget(QWidget):
             anchor = self._rviz_pose_anchor
             current_yaw = self._step_end_pose(len(self.plan.steps)).yaw_deg
 
+            guide_pen = QPen(QColor(0, 150, 136, 175), 3,
+                             Qt.PenStyle.DashLine)
+            ring_radius = 150.0
+            ring = self.scene.addEllipse(anchor.x() - ring_radius,
+                                         anchor.y() - ring_radius,
+                                         ring_radius * 2.0,
+                                         ring_radius * 2.0, guide_pen)
+            ring.setData(0, "nav_goal_heading_ring"); ring.setZValue(23)
+            for dx, dy in ((ring_radius, 0.0), (0.0, ring_radius)):
+                cross = self.scene.addLine(anchor.x() - dx, anchor.y() - dy,
+                                           anchor.x() + dx, anchor.y() + dy,
+                                           QPen(QColor(0, 150, 136, 100), 2,
+                                                Qt.PenStyle.DotLine))
+                cross.setData(0, "nav_goal_heading_cross"); cross.setZValue(23)
+            center = self.scene.addEllipse(anchor.x() - 10, anchor.y() - 10,
+                                           20, 20, QPen(QColor("#00695c"), 3),
+                                           QColor("#80cbc4"))
+            center.setData(0, "nav_goal_center"); center.setZValue(27)
+            if self._rviz_drag_point is not None:
+                radial = self.scene.addLine(anchor.x(), anchor.y(),
+                                            self._rviz_drag_point.x(),
+                                            self._rviz_drag_point.y(), guide_pen)
+                radial.setData(0, "nav_goal_heading_guide"); radial.setZValue(24)
+
             def endpoint(yaw_deg: float, length: float) -> QPointF:
                 paper_heading = world_yaw_to_paper_heading(
                     self.plan.start_heading_deg, yaw_deg)
@@ -2048,10 +2345,7 @@ class MapEditorWidget(QWidget):
                 QPen(QColor("#757575"), 3, Qt.PenStyle.DashLine))
             reference.setData(0, "nav_goal_current_heading"); reference.setZValue(24)
 
-            drag_length = (math.hypot(self._rviz_drag_point.x() - anchor.x(),
-                                      self._rviz_drag_point.y() - anchor.y())
-                           if self._rviz_drag_point is not None else 0.0)
-            arrow_length = max(90.0, min(320.0, drag_length))
+            arrow_length = 150.0
             head = 55.0; shaft = 13.0
             arrow = QGraphicsPolygonItem(QPolygonF([
                 QPointF(0, -shaft), QPointF(arrow_length - head, -shaft),
@@ -2071,7 +2365,7 @@ class MapEditorWidget(QWidget):
             label = self.scene.addText(
                 f"目标 {self.preview_yaw_deg:.1f}°  Δ航向 {delta:+.1f}°")
             label.setDefaultTextColor(color); label.setFont(QFont("Microsoft YaHei", 17))
-            label.setPos(anchor.x() + 20, anchor.y() + 42)
+            label.setPos(anchor.x() + 20, anchor.y() + 54)
             label.setData(0, "nav_goal_angle_label"); label.setZValue(27)
 
     def begin_goto_add(self):
@@ -2290,13 +2584,22 @@ class MapEditorWidget(QWidget):
                 if math.isnan(x):
                     return
                 dx, dy = x - self._rviz_pose_anchor.x(), y - self._rviz_pose_anchor.y()
-                self._rviz_drag_point = QPointF(x, y)
                 if math.hypot(dx, dy) >= 5.0:
-                    paper_heading = paper_vector_to_heading(dx, dy)
+                    distance = math.hypot(dx, dy)
+                    raw_heading = paper_vector_to_heading(dx, dy)
+                    paper_heading = snap_paper_heading_to_right_angle(raw_heading)
+                    radians = math.radians(paper_heading)
+                    self._rviz_drag_point = QPointF(
+                        self._rviz_pose_anchor.x() + distance * math.cos(radians),
+                        self._rviz_pose_anchor.y() - distance * math.sin(radians))
                     self.preview_yaw_deg = paper_heading_to_world_yaw(
                         self.plan.start_heading_deg, paper_heading)
+                else:
+                    self._rviz_drag_point = QPointF(x, y)
                 self.preview_paper = QPointF(self._rviz_pose_anchor)
-                self.redraw(); return
+                if not self._nav_preview_timer.isActive():
+                    self._nav_preview_timer.start()
+                return
             if self.mode not in ("add", "calibrate"):
                 return
             if self.mode == "calibrate" and self.calibration_pending and self.calibration_stage == "position":
@@ -2321,13 +2624,74 @@ class MapEditorWidget(QWidget):
                 return
             # Release point only determines direction; the pressed point is the waypoint.
             self.update_preview(x, y)
+            self._nav_preview_timer.stop()
             goal = QPointF(self._rviz_pose_anchor)
             goal_yaw = self.preview_yaw_deg
             self._rviz_pose_anchor = None
             self._rviz_drag_point = None
             self.clear_preview(False)
-            self.create_auto_path(goal, goal_yaw_deg=goal_yaw,
-                                  yaw_mode="fixed", terminal_rotation=True)
+            self._pending_navigation_goal_paper = QPointF(goal)
+            self._pending_navigation_goal_yaw = goal_yaw
+            self._set_goal_controls(goal.x(), goal.y(), goal_yaw)
+            self.selected_pose_label.setText(
+                f"待生成目标：图纸 X={goal.x():.1f}, Y={goal.y():.1f} mm，航向={goal_yaw:.1f}°")
+            self.generate_segment_button.setText("生成/更新本小段路径")
+            self.status.setText("目标位姿已确定。请调整本小段参数，然后点击黄色“生成本小段路径”。")
+            self.redraw()
+
+    def _selected_auto_path_index(self) -> int | None:
+            index = self.active_index
+            if (0 <= index < len(self.plan.steps) and
+                    isinstance(self.plan.steps[index], RotateInPlace) and
+                    self.plan.steps[index].name == "导航目标朝向"):
+                index -= 1
+            if (0 <= index < len(self.plan.steps) and
+                    isinstance(self.plan.steps[index], ContinuousPathSegment) and
+                    self.plan.steps[index].name.startswith("自动规划")):
+                return index
+            return None
+
+    def generate_navigation_segment(self) -> None:
+            """Generate a new target segment, or replace only the selected auto segment."""
+            replace_index: int | None = None
+            if self._pending_navigation_goal_paper is not None:
+                goal = QPointF(self.auto_goal_x.value(), self.auto_goal_y.value())
+                goal_yaw = self.auto_goal_yaw.value()
+            else:
+                replace_index = self._selected_auto_path_index()
+                if replace_index is None:
+                    self.status.setText("请先用“设置导航目标”选择位置和方向，或选中已有导航目标。")
+                    return
+                path = self.plan.steps[replace_index]
+                if not isinstance(path, ContinuousPathSegment) or not path.points:
+                    return
+                goal = QPointF(self.auto_goal_x.value(), self.auto_goal_y.value())
+                goal_yaw = self.auto_goal_yaw.value()
+
+            strategy = str(self.navigation_strategy.currentData())
+            labels = {
+                "auto": "稳定自动", "fixed": "保持航向", "tangent": "切线航向",
+                "interpolate": "连续转向", "terminal": "末端转向",
+            }
+            if strategy in ("auto", "terminal"):
+                yaw_mode, terminal_rotation = "fixed", True
+            elif strategy == "fixed":
+                yaw_mode, terminal_rotation = "fixed", False
+                goal_yaw = self._step_end_pose(len(self.plan.steps)).yaw_deg
+            elif strategy == "tangent":
+                yaw_mode, terminal_rotation = "tangent", True
+            else:
+                yaw_mode, terminal_rotation = "interpolate", False
+            if self.create_auto_path(
+                    goal, goal_yaw_deg=goal_yaw, yaw_mode=yaw_mode,
+                    terminal_rotation=terminal_rotation,
+                    strategy_name=labels[strategy], replace_index=replace_index):
+                self._pending_navigation_goal_paper = None
+                self._pending_navigation_goal_yaw = None
+
+    def _flush_navigation_preview(self) -> None:
+            if self.mode == "mark_pose" and self._rviz_pose_anchor is not None:
+                self.redraw()
 
     def rotate_preview_clockwise(self):
             if self.preview_yaw_deg is not None:
