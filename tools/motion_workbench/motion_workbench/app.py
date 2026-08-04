@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFormLayout, QHBoxLayout
                                QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from map_planner.gui import MapEditorWidget
-from map_planner.models import ContinuousPathSegment, Pose
+from map_planner.models import BezierPathSegment, ContinuousPathSegment, Pose
 from pid_tuner.gui.plots import TelemetryPlots
 from pid_tuner.gui.widgets import ConnectionPanel
 from pid_tuner.models import MotionGoal, PathControlConfig, Telemetry
@@ -37,14 +37,14 @@ class PathControlPanel(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.source = QComboBox(); self.source.addItems(["当前连续路径", "当前贝塞尔路径"])
         self.upload = QPushButton("上传路径")
         self.start = QPushButton("启动路径")
         self.abort = QPushButton("中止路径")
+        self.start.setEnabled(False)
         self.status = QLabel("未上传")
         layout = QVBoxLayout(self)
         command_form = QFormLayout()
-        command_form.addRow("路径来源", self.source); command_form.addRow(self.upload); command_form.addRow(self.start); command_form.addRow(self.abort); command_form.addRow("状态", self.status)
+        command_form.addRow(self.upload); command_form.addRow(self.start); command_form.addRow(self.abort); command_form.addRow("状态", self.status)
         layout.addLayout(command_form)
         self.config_inputs: dict[str, QDoubleSpinBox] = {}
         groups = (
@@ -211,7 +211,7 @@ class MotionWorkbenchWindow(QMainWindow):
         self.controller.session.telemetry.connect(self._sync_heading_source)
         self.controller.session.path_upload_changed.connect(self.path_panel.status.setText)
         self.path_panel.upload_requested.connect(self._upload_selected_path)
-        self.path_panel.start_requested.connect(lambda: self.controller.start_path(self._path_id))
+        self.path_panel.start_requested.connect(lambda: self.controller.start_path(self._uploaded_path_id))
         self.path_panel.abort_requested.connect(self.controller.abort_path)
         self.path_panel.read_config_requested.connect(self.controller.session.read_path_config)
         self.path_panel.apply_config_requested.connect(self.controller.session.apply_path_config)
@@ -225,7 +225,8 @@ class MotionWorkbenchWindow(QMainWindow):
         self.map_editor.continuous_requested.connect(self.controller.start_continuous)
         self.map_editor.execution_stop_requested.connect(self.controller.stop)
         self.view_switch.clicked.connect(self._switch_workspace)
-        self._path_id = 1
+        self._uploaded_path_id = 0
+        self._next_path_id = 1
         self.controller.set_plan(self.map_editor.get_plan())
 
     def _refresh_ports(self) -> None:
@@ -372,13 +373,27 @@ class MotionWorkbenchWindow(QMainWindow):
         self.map_editor.update()
 
     def _upload_selected_path(self) -> None:
-        plan = self.map_editor.get_plan()
-        for step in plan.steps:
-            if isinstance(step, ContinuousPathSegment):
-                self.controller.upload_path(self._path_id, step.points)
-                self.path_panel.status.setText(f"上传路径 {self._path_id}")
+        step = self.map_editor.selected_step()
+        if step is None:
+            self.path_panel.status.setText("请先在地图中选择路径步骤")
+            return
+        if isinstance(step, ContinuousPathSegment):
+            points = step.points
+        elif isinstance(step, BezierPathSegment):
+            try:
+                points = self.map_editor.selected_step_path_points()
+            except (TypeError, ValueError) as error:
+                self.path_panel.status.setText(f"贝塞尔路径无效：{error}")
                 return
-        self.path_panel.status.setText("当前方案没有连续路径")
+        else:
+            self.path_panel.status.setText("当前步骤不是可上传的连续路径")
+            return
+        path_id = self._next_path_id
+        self._next_path_id += 1
+        self._uploaded_path_id = path_id
+        self.controller.upload_path(path_id, points)
+        self.path_panel.start.setEnabled(True)
+        self.path_panel.status.setText(f"上传路径 {path_id}")
 
     def closeEvent(self, event: object) -> None:
         self.refresh_timer.stop()

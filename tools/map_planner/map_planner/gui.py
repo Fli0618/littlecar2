@@ -286,6 +286,23 @@ class MapEditorWidget(QWidget):
             step = self.plan.steps[self.active_index] if 0 <= self.active_index < len(self.plan.steps) else None
             return copy.deepcopy(step)
 
+    def selected_step_path_points(self) -> list[PathPosePoint]:
+            """按当前选中步骤生成待上传的世界坐标路径点。"""
+            step = self.selected_step()
+            if isinstance(step, ContinuousPathSegment):
+                return step.points
+            if isinstance(step, BezierPathSegment):
+                start = self._step_end_pose(self.active_index)
+                return generate_bezier_path_points(
+                    start,
+                    (step.control_1_x_mm, step.control_1_y_mm),
+                    (step.control_2_x_mm, step.control_2_y_mm),
+                    Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg),
+                    step.yaw_mode,
+                    step.sample_spacing_mm,
+                )
+            raise ValueError("当前步骤不是可上传的路径")
+
     def set_plan(self, plan: Plan, *, calibrated: bool = True) -> None:
             """装载工作台提供的方案，并重置编辑器的短暂交互状态。"""
             if not isinstance(plan, Plan):
