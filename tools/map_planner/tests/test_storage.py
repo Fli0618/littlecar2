@@ -5,7 +5,7 @@ import tempfile
 import pytest
 
 from map_planner.models import (MAP_VERSION, BezierPathSegment, ContinuousPathSegment,
-                                PathPosePoint, Plan, Waypoint)
+                                CostmapSettings, PathPosePoint, Plan, Waypoint)
 from map_planner.storage import load_plan, save_plan
 
 
@@ -19,11 +19,27 @@ def test_v7_round_trip_writes_only_steps():
         assert load_plan("mixed", Path(directory)).steps == plan.steps
 
 
+def test_costmap_settings_round_trip():
+    plan = Plan(name="costmap")
+    plan.layout.costmap = CostmapSettings(
+        vehicle_length_mm=360,
+        vehicle_width_mm=240,
+        boundary_safety_margin_mm=15,
+        platform_inflation_mm=95,
+        obstacle_cost_weight=4.5,
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        save_plan(plan, directory=Path(directory))
+        loaded = load_plan("costmap", Path(directory))
+
+    assert loaded.layout.costmap == plan.layout.costmap
+
+
 @pytest.mark.parametrize("version", [5, 6])
 def test_unsupported_legacy_versions_are_rejected(version):
     value = Plan().to_dict()
     value["map_version"] = version
-    with pytest.raises(ValueError, match="map_version 7、8 或 9"):
+    with pytest.raises(ValueError, match="map_version 7、8、9 或 10"):
         Plan.from_dict(value)
 
 

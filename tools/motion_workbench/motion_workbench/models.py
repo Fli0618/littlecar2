@@ -22,6 +22,7 @@ class SinglePointState(str, Enum):
     ARRIVED = "ARRIVED"
     TIMEOUT = "TIMEOUT"
     CANCELED = "CANCELED"
+    OFF_PATH = "OFF_PATH"
     NO_POSE = "NO_POSE"
     NO_ORIGIN = "NO_ORIGIN"
 

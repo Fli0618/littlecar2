@@ -4,12 +4,14 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from map_planner.gui import MapEditorWidget
 from map_planner.geometry import world_to_paper
-from map_planner.models import BezierPathSegment, Plan, Pose, StepTurnPathSegment, Waypoint
+from map_planner.models import (BezierPathSegment, ContinuousPathSegment,
+                                Plan, Pose, Waypoint)
 
 
 class MapEditorWidgetTests(unittest.TestCase):
@@ -29,6 +31,154 @@ class MapEditorWidgetTests(unittest.TestCase):
 
             self.assertEqual(widget.plan.steps[0].x_mm, 100)
             self.assertTrue(changes)
+        finally:
+            widget.close()
+
+    def test_auto_plan_click_creates_uploadable_continuous_path_and_overlay(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget.create_auto_path(QPointF(1200, 150))
+
+            step = widget.plan.steps[-1]
+            self.assertIsInstance(step, ContinuousPathSegment)
+            self.assertTrue(step.name.startswith("自动规划"))
+            self.assertGreater(len(step.points), 2)
+            self.assertLessEqual(len(step.points), 256)
+            self.assertIn("自动规划完成", widget.status.text())
+            self.assertTrue(any(item.data(0) == "inflated_forbidden"
+                                for item in widget.scene.items()))
+            self.assertEqual(widget.mode, "auto_plan")
+            self.assertTrue(any(item.data(0) == "boundary_cost_band"
+                                for item in widget.scene.items()))
+            self.assertTrue(any(item.data(0) == "auto_goal_label"
+                                for item in widget.scene.items()))
+            self.assertTrue(any(item.data(0) == "soft_cost_zone"
+                                for item in widget.scene.items()))
+            self.assertTrue(any(item.data(0) == "boundary_hard_zone"
+                                for item in widget.scene.items()))
+            self.assertFalse(widget.advanced_group.isChecked())
+            self.assertEqual(
+                [widget.editor_tabs.tabText(index)
+                 for index in range(widget.editor_tabs.count())],
+                ["1 代价地图", "2 点位与航点", "3 方案与输出"],
+            )
+        finally:
+            widget.close()
+
+    def test_costmap_change_marks_auto_paths_stale_and_replan_clears_it(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget.create_auto_path(QPointF(1200, 150))
+            self.assertFalse(widget._auto_paths_stale)
+            widget.boundary_safety.setValue(20)
+
+            self.assertTrue(widget._auto_paths_stale)
+            self.assertEqual(widget.plan.layout.costmap.boundary_safety_margin_mm, 20)
+            with self.assertRaisesRegex(ValueError, "重新规划"):
+                widget.selected_step_path_points()
+
+            widget.replan_all_auto_paths()
+
+            self.assertFalse(widget._auto_paths_stale)
+            self.assertIn("重新规划 1 段", widget.status.text())
+        finally:
+            widget.close()
+
+    def test_vehicle_dimensions_feed_costmap_and_preview_outline(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget.vehicle_length.setValue(360)
+            widget.vehicle_width.setValue(240)
+
+            self.assertEqual(widget.plan.layout.costmap.vehicle_length_mm, 360)
+            self.assertEqual(widget.plan.layout.costmap.vehicle_width_mm, 240)
+            outline = next(item for item in widget.scene.items()
+                           if item.data(0) == "start_pose_preview")
+            self.assertAlmostEqual(outline.rect().width(), 360)
+            self.assertAlmostEqual(outline.rect().height(), 240)
+        finally:
+            widget.close()
+
+    def test_rviz_style_press_drag_draws_guide_and_auto_plans(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget.set_mode("mark_pose")
+            widget.on_map_click(1800, 300)
+            widget.update_preview(1900, 300)
+            expected_yaw = widget.preview_yaw_deg
+            markers = [item.data(0) for item in widget.scene.items()]
+            self.assertIn("nav_goal_arrow", markers)
+            self.assertIn("nav_goal_current_heading", markers)
+            self.assertIn("nav_goal_angle_label", markers)
+            widget.on_map_release(1900, 300)
+
+            path = widget.plan.steps[-2]
+            rotation = widget.plan.steps[-1]
+            expected = widget.paper_of(path.points[-1])
+            self.assertIsInstance(path, ContinuousPathSegment)
+            self.assertAlmostEqual(rotation.yaw_deg, expected_yaw)
+            self.assertAlmostEqual(expected.x_mm, 1800, places=5)
+            self.assertAlmostEqual(expected.y_mm, 300, places=5)
+            self.assertEqual(widget.mode, "mark_pose")
+            self.assertFalse(widget._auto_paths_stale)
+        finally:
+            widget.close()
+
+    def test_costmap_obstacle_tools_place_and_delete(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget.add_obstacle(QPointF(400, 400))
+            obstacle_item = next(item for item in widget.scene.items()
+                                 if item.data(0) == "obstacle")
+            obstacle_item.setSelected(True)
+            widget.remove_selected_obstacles()
+
+            self.assertEqual(widget.plan.layout.obstacles, [])
+            self.assertEqual(widget.obstacle_count_label.text(), "障碍物：0 个")
+            self.assertIs(widget.trajectory_group.parentWidget(), widget.editor_tabs.widget(1))
+        finally:
+            widget.close()
+
+    def test_obstacle_button_places_on_real_mouse_press(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget.resize(1400, 900); widget.show(); widget.fit_map()
+            QTest.mouseClick(widget.obstacle_button, Qt.MouseButton.LeftButton)
+            target = widget.view.mapFromScene(QPointF(400, 400))
+            QTest.mouseClick(widget.view.viewport(), Qt.MouseButton.LeftButton,
+                             pos=target)
+
+            self.assertEqual(widget.mode, "obstacle")
+            self.assertEqual(len(widget.plan.layout.obstacles), 1)
+        finally:
+            widget.close()
+
+    def test_navigation_goal_real_mouse_drag_plans_on_release(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(), calibrated=True)
+            widget.resize(1400, 900); widget.show(); widget.fit_map()
+            QTest.mouseClick(widget.mark_pose_button, Qt.MouseButton.LeftButton)
+            start = widget.view.mapFromScene(QPointF(1800, 300))
+            direction = widget.view.mapFromScene(QPointF(1900, 300))
+
+            QTest.mousePress(widget.view.viewport(), Qt.MouseButton.LeftButton,
+                             pos=start)
+            QTest.mouseMove(widget.view.viewport(), direction)
+            self.assertTrue(any(item.data(0) == "nav_goal_arrow"
+                                for item in widget.scene.items()))
+            QTest.mouseRelease(widget.view.viewport(), Qt.MouseButton.LeftButton,
+                               pos=direction)
+
+            self.assertTrue(any(isinstance(step, ContinuousPathSegment)
+                                for step in widget.plan.steps))
+            self.assertIn("自动规划完成", widget.status.text())
         finally:
             widget.close()
 
@@ -153,39 +303,39 @@ class MapEditorWidgetTests(unittest.TestCase):
         finally:
             widget.close()
 
-    def test_yellow_zone_passage_defaults_allowed_and_keeps_field_boundary(self):
+    def test_yellow_zone_passage_defaults_forbidden_and_can_be_overridden(self):
         widget = MapEditorWidget()
         try:
             platform_center = QPointF(775, 775)
             start = QPointF(400, 775)
             end = QPointF(1100, 775)
 
-            self.assertTrue(widget.allow_yellow_zone.isChecked())
-            self.assertTrue(widget._is_valid_start_candidate(775, 775))
-            self.assertTrue(widget.is_valid_route_segment(start, end))
-            self.assertTrue(widget.is_valid_continuous_segment(start, end))
-            self.assertTrue(widget.is_valid_rotation(platform_center, 0, 90))
-            self.assertFalse(widget._is_valid_start_candidate(50, 50))
-            self.assertIn("黄色区限制已关闭", widget.yellow_zone_status_label.text())
-
-            widget.begin_start("自定义")
-            widget.update_preview(775, 775)
-            allowed_preview = next(
-                item for item in widget.scene.items()
-                if item.data(0) == "start_pose_preview")
-            self.assertEqual(allowed_preview.pen().color().name(), "#1565c0")
-
-            widget.allow_yellow_zone.setChecked(False)
+            self.assertFalse(widget.allow_yellow_zone.isChecked())
             self.assertFalse(widget._is_valid_start_candidate(775, 775))
             self.assertFalse(widget.is_valid_route_segment(start, end))
             self.assertFalse(widget.is_valid_continuous_segment(start, end))
             self.assertFalse(widget.is_valid_rotation(platform_center, 0, 90))
             self.assertFalse(widget._is_valid_start_candidate(50, 50))
             self.assertIn("黄色区限制已启用", widget.yellow_zone_status_label.text())
+
+            widget.begin_start("自定义")
+            widget.update_preview(775, 775)
+            allowed_preview = next(
+                item for item in widget.scene.items()
+                if item.data(0) == "start_pose_preview")
+            self.assertEqual(allowed_preview.pen().color().name(), "#c62828")
+
+            widget.allow_yellow_zone.setChecked(True)
+            self.assertTrue(widget._is_valid_start_candidate(775, 775))
+            self.assertTrue(widget.is_valid_route_segment(start, end))
+            self.assertTrue(widget.is_valid_continuous_segment(start, end))
+            self.assertTrue(widget.is_valid_rotation(platform_center, 0, 90))
+            self.assertFalse(widget._is_valid_start_candidate(50, 50))
+            self.assertIn("黄色区限制已关闭", widget.yellow_zone_status_label.text())
             blocked_preview = next(
                 item for item in widget.scene.items()
                 if item.data(0) == "start_pose_preview")
-            self.assertEqual(blocked_preview.pen().color().name(), "#c62828")
+            self.assertEqual(blocked_preview.pen().color().name(), "#1565c0")
         finally:
             widget.close()
 
@@ -209,33 +359,5 @@ class MapEditorWidgetTests(unittest.TestCase):
             invalid = next(item for item in widget.scene.items()
                            if item.data(0) == "start_pose_preview")
             self.assertEqual(invalid.pen().color().name(), "#c62828")
-        finally:
-            widget.close()
-
-    def test_step_turn_draft_confirm_cancel_continue_and_path_preview(self):
-        widget = MapEditorWidget()
-        try:
-            widget.set_plan(Plan(), calibrated=True)
-            widget.begin_step_turn_add()
-            widget.on_map_release(2100, 200)
-            widget.on_map_release(1900, 400)
-            self.assertEqual(len(widget.step_turn_draft.route_points), 2)
-            self.assertTrue(widget.confirm_step_turn_button.isEnabled())
-            self.assertIn("step_turn_preview_materialized", [item.data(0) for item in widget.scene.items()])
-
-            widget.confirm_step_turn_button.click()
-            self.assertIsInstance(widget.plan.steps[0], StepTurnPathSegment)
-            self.assertGreaterEqual(len(widget.selected_step_path_points()), 2)
-
-            original_count = len(widget.plan.steps[0].route_points)
-            widget.continue_step_turn_edit()
-            widget.on_map_release(1700, 600)
-            widget.cancel_draft()
-            self.assertEqual(len(widget.plan.steps[0].route_points), original_count)
-
-            widget.continue_step_turn_edit()
-            widget.on_map_release(1700, 600)
-            widget.remove_last_step_turn_node()
-            self.assertEqual(len(widget.step_turn_draft.route_points), original_count)
         finally:
             widget.close()

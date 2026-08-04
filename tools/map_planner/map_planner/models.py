@@ -76,25 +76,7 @@ class BezierPathSegment:
     name: str = ""
 
 
-@dataclass
-class StepTurnNode:
-    """垫步路径的用户控制点；编译产生的辅助点不写入方案。"""
-
-    x_mm: float
-    y_mm: float
-    name: str = ""
-
-
-@dataclass
-class StepTurnPathSegment:
-    """由垫步编译器展开为连续路径的折线路径。"""
-
-    route_points: list[StepTurnNode] = field(default_factory=list)
-    step_distance_mm: float = 60.0
-    name: str = ""
-
-
-MotionStep = Union[Waypoint, RotateInPlace, ContinuousPathSegment, BezierPathSegment, StepTurnPathSegment]
+MotionStep = Union[Waypoint, RotateInPlace, ContinuousPathSegment, BezierPathSegment]
 
 
 @dataclass
@@ -104,10 +86,29 @@ class Obstacle:
 
 
 @dataclass
+class CostmapSettings:
+    """Static-map hard clearance and soft inflation, grouped by object type."""
+
+    vehicle_length_mm: float = 300.0
+    vehicle_width_mm: float = 300.0
+    boundary_safety_margin_mm: float = 0.0
+    boundary_inflation_mm: float = 120.0
+    boundary_cost_weight: float = 3.0
+    platform_safety_margin_mm: float = 20.0
+    platform_inflation_mm: float = 80.0
+    platform_cost_weight: float = 3.0
+    obstacle_radius_mm: float = 25.0
+    obstacle_safety_margin_mm: float = 20.0
+    obstacle_inflation_mm: float = 80.0
+    obstacle_cost_weight: float = 3.0
+
+
+@dataclass
 class MapLayout:
     obstacles: list[Obstacle] = field(default_factory=list)
     raw_center_x_mm: float = 1200.0
     qr_center_y_mm: float = 1200.0
+    costmap: CostmapSettings = field(default_factory=CostmapSettings)
 
 
 @dataclass
@@ -136,13 +137,6 @@ class Plan:
                 serialized_steps.append({"type": "continuous_path", "name": step.name, "points": [asdict(point) for point in step.points]})
             elif isinstance(step, BezierPathSegment):
                 serialized_steps.append({"type": "bezier_path", **asdict(step)})
-            elif isinstance(step, StepTurnPathSegment):
-                serialized_steps.append({
-                    "type": "step_turn_path",
-                    "name": step.name,
-                    "step_distance_mm": step.step_distance_mm,
-                    "route_points": [asdict(point) for point in step.route_points],
-                })
             else:
                 raise ValueError("方案包含不支持的步骤类型")
         return {
@@ -152,7 +146,9 @@ class Plan:
                       "paper_y_mm": self.start_paper_y_mm, "heading_deg": self.start_heading_deg},
             "steps": serialized_steps,
             "layout": {"obstacles": [asdict(obstacle) for obstacle in self.layout.obstacles],
-                       "raw_center_x_mm": self.layout.raw_center_x_mm, "qr_center_y_mm": self.layout.qr_center_y_mm},
+                       "raw_center_x_mm": self.layout.raw_center_x_mm,
+                       "qr_center_y_mm": self.layout.qr_center_y_mm,
+                       "costmap": asdict(self.layout.costmap)},
         }
 
     @classmethod
@@ -161,7 +157,7 @@ class Plan:
             raise ValueError("方案 JSON 格式无效")
         version = value.get("map_version")
         if version not in (7, 8, 9, MAP_VERSION):
-            raise ValueError("仅支持 map_version 7、8 或 9（以及当前版本 10）的流程方案")
+            raise ValueError("仅支持 map_version 7、8、9 或 10 的流程方案")
         allowed_keys = {"map_version", "name", "created_at", "updated_at", "start", "steps", "layout"}
         if set(value) != allowed_keys:
             raise ValueError("方案 JSON 格式无效")
@@ -196,19 +192,17 @@ class Plan:
                         step.control_2_x_mm, step.control_2_y_mm = step.control_2_y_mm, step.control_2_x_mm
                         step.end_x_mm, step.end_y_mm = step.end_y_mm, step.end_x_mm
                     steps.append(step)
-                elif step_type == "step_turn_path" and version == MAP_VERSION:
-                    route_points = fields.pop("route_points", [])
-                    if not isinstance(route_points, list) or not all(isinstance(point, dict) for point in route_points):
-                        raise ValueError
-                    steps.append(StepTurnPathSegment(
-                        route_points=[StepTurnNode(**point) for point in route_points], **fields))
                 else: raise ValueError
             obstacles = layout.get("obstacles", [])
             if not isinstance(obstacles, list) or not all(isinstance(item, dict) for item in obstacles): raise ValueError
+            costmap_value = layout.get("costmap", {})
+            if not isinstance(costmap_value, dict): raise ValueError
+            costmap = CostmapSettings(**costmap_value) if costmap_value else CostmapSettings()
             return cls(name=str(value["name"]), created_at=str(value["created_at"]), updated_at=str(value["updated_at"]),
                 start_kind=kind, start_paper_x_mm=float(start["paper_x_mm"]), start_paper_y_mm=float(start["paper_y_mm"]),
                 start_heading_deg=float(start["heading_deg"]), steps=steps,
                 layout=MapLayout(obstacles=[Obstacle(float(item["paper_x_mm"]), float(item["paper_y_mm"])) for item in obstacles],
-                    raw_center_x_mm=float(layout["raw_center_x_mm"]), qr_center_y_mm=float(layout["qr_center_y_mm"])))
+                    raw_center_x_mm=float(layout["raw_center_x_mm"]), qr_center_y_mm=float(layout["qr_center_y_mm"]),
+                    costmap=costmap))
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("方案 JSON 格式无效") from error

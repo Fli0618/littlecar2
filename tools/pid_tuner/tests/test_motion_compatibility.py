@@ -113,6 +113,24 @@ class MotionCompatibilityTests(unittest.TestCase):
             macro = "COMM_TUNER_" + name
             self.assertRegex(source, rf"#define {macro} \(\(uint8_t\)0x{value:02X}U\)")
 
+    def test_path_curvature_feedforward_is_local_to_the_projection(self) -> None:
+        header = (ROOT / "Core" / "Inc" / "advance_motion.h").read_text(encoding="utf-8")
+        source = (ROOT / "Core" / "Src" / "advance_motion.c").read_text(encoding="utf-8")
+
+        self.assertIn("ADVANCE_MOTION_PATH_CURVATURE_LOCAL_SUPPORT_MM", header)
+        self.assertIn("AdvanceMotion_EvaluatePathCurvatureAtProjection(", source)
+        self.assertIn(
+            "g_path.nearest_index, g_path.progress_on_segment);",
+            source,
+        )
+        self.assertNotRegex(
+            source,
+            r"g_path\.signed_curvature_1_mm\s*=\s*\n\s*AdvanceMotion_EvaluatePathVertexCurvature",
+        )
+        self.assertIn("ADVANCE_MOTION_PATH_CROSS_TRACK_ABORT_MM", header)
+        self.assertIn("ADVANCE_MOTION_STATE_OFF_PATH", header)
+        self.assertIn("AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_OFF_PATH)", source)
+
     @staticmethod
     def _path_config():
         from pid_tuner.models import PathControlConfig

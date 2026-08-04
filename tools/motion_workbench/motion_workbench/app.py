@@ -230,7 +230,7 @@ class MotionWorkbenchWindow(QMainWindow):
         self.tabs.addTab(self.pid_panel, "PID")
         self.tabs.addTab(self.point_panel, "单点")
         self.tabs.addTab(self.path_panel, "路径")
-        left_scroll = QScrollArea(); left_scroll.setWidgetResizable(True); left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); left_scroll.setWidget(self.tabs); left_scroll.setMinimumWidth(320)
+        left_scroll = QScrollArea(); left_scroll.setWidgetResizable(True); left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded); left_scroll.setWidget(self.tabs); left_scroll.setMinimumWidth(320)
 
         self.plots = TelemetryPlots()
         plots_scroll = QScrollArea(); plots_scroll.setWidget(self.plots); plots_scroll.setWidgetResizable(False); plots_scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
@@ -238,7 +238,11 @@ class MotionWorkbenchWindow(QMainWindow):
         self.workspace = QStackedWidget(); self.workspace.addWidget(plots_scroll); self.workspace.addWidget(self.map_editor)
         self.view_switch = QPushButton("切换至地图")
         workspace_container = QWidget(); workspace_layout = QVBoxLayout(workspace_container); workspace_layout.setContentsMargins(0, 0, 0, 0); workspace_layout.addWidget(self.view_switch); workspace_layout.addWidget(self.workspace)
-        splitter = QSplitter(Qt.Orientation.Horizontal); splitter.setChildrenCollapsible(False); splitter.addWidget(left_scroll); splitter.addWidget(workspace_container); splitter.setStretchFactor(1, 1); splitter.setSizes([340, 1160])
+        splitter = QSplitter(Qt.Orientation.Horizontal); self.main_splitter = splitter
+        splitter.setChildrenCollapsible(False); splitter.setHandleWidth(8); splitter.setOpaqueResize(True)
+        splitter.setStyleSheet("QSplitter::handle:horizontal{background:#455a64;margin:1px 2px;border-radius:2px;} QSplitter::handle:horizontal:hover{background:#29b6f6;}")
+        splitter.addWidget(left_scroll); splitter.addWidget(workspace_container)
+        splitter.setStretchFactor(0, 0); splitter.setStretchFactor(1, 1); splitter.setSizes([340, 1160])
         root.addWidget(splitter)
         self.setCentralWidget(central)
 

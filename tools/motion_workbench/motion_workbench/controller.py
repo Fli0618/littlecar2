@@ -260,7 +260,8 @@ class MotionWorkbenchController(QObject):
         if self.execution is not None and self._last_state == SinglePointState.RUNNING and item.state not in (0, 1):
             states = {2: (SinglePointState.ARRIVED, "到达"), 3: (SinglePointState.TIMEOUT, "超时"),
                       4: (SinglePointState.NO_POSE, "位姿无效"), 5: (SinglePointState.NO_ORIGIN, "原点无效"),
-                      6: (SinglePointState.CANCELED, "取消")}
+                      6: (SinglePointState.CANCELED, "取消"),
+                      7: (SinglePointState.OFF_PATH, "偏离路径")}
             state, reason = states.get(item.state, (SinglePointState.CANCELED, "结束"))
             self._finish(state, reason)
 
@@ -497,7 +498,8 @@ class MotionWorkbenchController(QObject):
 
     @staticmethod
     def _terminal_reason(state: int) -> str:
-        return {3: "超时", 4: "位姿无效", 5: "原点无效", 6: "已取消"}.get(state, "运动失败")
+        return {3: "超时", 4: "位姿无效", 5: "原点无效", 6: "已取消",
+                7: "偏离路径，已安全停车"}.get(state, "运动失败")
 
     def _finish_plan(self, state: PlanExecutionState, reason: str) -> None:
         if self._plan_state != PlanExecutionState.RUNNING:
