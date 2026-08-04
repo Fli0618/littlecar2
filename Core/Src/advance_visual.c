@@ -253,7 +253,6 @@ static Detect_Status_t AdvanceVisual_StartDetection(AdvanceVisual_Mode_t mode)
 
 static void AdvanceVisual_SetTerminalState(AdvanceVisual_State_t state)
 {
-  Chassis_SmoothStop(ADVANCE_VISUAL_ACC);
   (void)detect_stop();
   AdvanceControl_SetMode(ADVANCE_CONTROL_NONE);
   g_visual_state = state;

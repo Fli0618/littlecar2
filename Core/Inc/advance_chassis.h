@@ -11,21 +11,6 @@ extern "C"
 #include "drive_emm.h"
 
 /*
-    测试
-    直线运动最快
-    Chassis_SetBodyVelocityEx(0, 1500, 0, 160);
-    HAL_Delay(2000);
-    Chassis_SmoothStop(130);
-
-    自转
-    Chassis_SetBodyVelocityEx(1000, 0, 0, 130);
-    HAL_Delay(2000);
-    Chassis_SmoothStop(130);
-
-    
-*/
-
-/*
  * 四个电机地址在这里配置，用于匹配 ZDT 驱动器实际 ID。
  * LF: 左前轮，RF: 右前轮，LR: 左后轮，RR: 右后轮。
  */
