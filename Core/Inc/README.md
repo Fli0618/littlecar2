@@ -11,3 +11,7 @@
 `AdvanceMotion_FollowPathEx()` 强制关闭单点 Goto 的大航向先对准策略。路径中段使用动态前视切向前馈、投影横向 PD、插值航向 PD 和航向变化率前馈；接近终点且参考/实测速度均降到捕获阈值后，才切换到完整 Goto PID 精确停车。
 连续路径的 14 项控制与速度规划参数由 `AdvanceMotion_PathControlConfig_t` 成组保存，可读取、提交或恢复默认；待应用组只在 20 ms 控制周期边界切换，活动路径仅约束当前前视范围，不重置路径进度。
 调试快照中的 `nearest_segment_index` 是投影点所在段，`target_segment_index` 是前视点所在段；路径进度与剩余量均为累计弧长，单位为 mm。
+
+## 运动默认配置
+
+`advance_motion_config.h` 保存由工作台导出的 6 项单点 PID、20 项路径控制参数和 1 项 GOTO 默认策略，供 `advance_motion.c` 构建编译期默认值。该文件可整体替换；`advance_motion.h` 仅保留公共类型、约束和接口。路径参数此前提到的 14 项已废止，当前结构与调参协议均为 20 项。

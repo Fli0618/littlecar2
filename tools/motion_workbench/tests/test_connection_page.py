@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from motion_workbench.app import MotionWorkbenchWindow
-from pid_tuner.models import Telemetry
+from motion_workbench.app import MotionConfigExportDialog, MotionWorkbenchWindow
+from pid_tuner.models import (GotoStrategySnapshot, PathConfigSnapshot, PathConfigState, PidConfig,
+                               PidConfigState, Telemetry)
 
 
 class ConnectionPageTests(unittest.TestCase):
@@ -36,3 +39,39 @@ class ConnectionPageTests(unittest.TestCase):
             self.assertIn("关闭", window.heading_status.text())
         finally:
             window.close()
+
+    def test_motion_config_export_requires_current_session_sync(self) -> None:
+        window = MotionWorkbenchWindow()
+        try:
+            self.assertFalse(window.export_motion_config.isEnabled())
+            window.controller.session.connected = True
+            window._cache_pid_state(PidConfigState(12, PidConfig(1, 2, 3, 4, 5, 6)))
+            self.assertFalse(window.export_motion_config.isEnabled())
+            path = PathConfigState(8, PathConfigSnapshot(*[float(value) for value in range(1, 21)]))
+            window._cache_path_state(path)
+            self.assertFalse(window.export_motion_config.isEnabled())
+            window._cache_goto_strategy(GotoStrategySnapshot(True))
+            self.assertTrue(window.export_motion_config.isEnabled())
+
+            window.pid_panel.pid[0].setValue(19.0)
+            exported = window._active_pid_state
+            self.assertEqual(exported, PidConfigState(12, PidConfig(1, 2, 3, 4, 5, 6)))
+            window._on_connection_changed(False)
+            self.assertFalse(window.export_motion_config.isEnabled())
+            self.assertIsNone(window._active_pid_state)
+        finally:
+            window.close()
+
+    def test_motion_config_export_dialog_copies_and_saves_utf8(self) -> None:
+        text = "#define VALUE (1.0f)\n"
+        dialog = MotionConfigExportDialog(text)
+        try:
+            dialog._copy_all()
+            self.assertEqual(QApplication.clipboard().text(), text)
+            self.assertIn("已复制", dialog.status.text())
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "advance_motion_config.h"
+                self.assertTrue(dialog._save_to_path(path))
+                self.assertEqual(path.read_text(encoding="utf-8"), text)
+        finally:
+            dialog.close()
