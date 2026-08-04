@@ -13,9 +13,9 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDoubleSpi
     QGraphicsScene, QGraphicsTextItem, QGraphicsView, QHBoxLayout, QInputDialog, QLabel, QListWidget,
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QSlider, QSplitter, QVBoxLayout, QWidget, QRubberBand, QComboBox)
 
-from .geometry import (paper_heading_to_world_yaw, paper_to_world, paper_vector_to_heading,
+from .geometry import (StartFrame, paper_heading_to_world_yaw, paper_to_world, paper_vector_to_heading,
                        qgraphics_rotation_deg, world_to_paper, world_yaw_to_paper_heading,
-                       wrap_deg)
+                       rebase_plan_world_frame, wrap_deg)
 from .codegen_c import CodeGenerationError, validate_plan_for_blocking_codegen
 from .codegen_dialog import CodeGenerationDialog
 from .bezier import generate_bezier_path_points
@@ -637,9 +637,26 @@ class MapEditorWidget(QWidget):
                                                          waypoint.yaw_deg))
 
     def rotate_start_clockwise(self):
-            if not (self.calibration_pending and self.calibration_stage == "heading"): return
-            self.push_undo(); self.plan.start_heading_deg=((self.plan.start_heading_deg-90+180)%360)-180
+            if self.calibration_pending and self.calibration_stage == "heading":
+                self.push_undo(); self.plan.start_heading_deg=((self.plan.start_heading_deg-90+180)%360)-180
+            elif not self.calibration_pending:
+                self.set_start_frame(self.plan.start_paper_x_mm, self.plan.start_paper_y_mm,
+                                     self.plan.start_heading_deg - 90.0)
+            else:
+                return
             self.redraw(); self.status.setText("起点朝向已顺时针旋转 90 度，可继续右击修改或点击确认朝向。")
+
+    def set_start_frame(self, paper_x_mm: float, paper_y_mm: float, heading_deg: float) -> None:
+            """修改起点帧并对固定世界目标执行一次性重基准。"""
+            if self._execution_enabled or self.timer.isActive():
+                raise RuntimeError("执行期间不能修改起点帧")
+            old = StartFrame(self.plan.start_paper_x_mm, self.plan.start_paper_y_mm,
+                             self.plan.start_heading_deg)
+            new = StartFrame(float(paper_x_mm), float(paper_y_mm), float(heading_deg))
+            self.push_undo()
+            self.plan = rebase_plan_world_frame(self.plan, old, new)
+            self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw()
+            self.rebuild_timeline_after_edit(); self.plan_changed.emit(copy.deepcopy(self.plan))
 
     def confirm_start_heading(self):
             if not (self.calibration_pending and self.calibration_stage == "heading"): return
