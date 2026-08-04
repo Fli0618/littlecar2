@@ -15,6 +15,7 @@ from pid_tuner.models import MotionGoal, Telemetry
 from map_planner.bezier import generate_bezier_path_points
 from map_planner.models import (BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan, Pose, RotateInPlace,
                                 Waypoint)
+from map_planner.path_materializer import materialize_steps
 
 from .models import (CoordinateSyncState, ExperimentResult, PathTelemetry, PathUploadSnapshot,
                      PathUploadState, PlanExecution, PlanExecutionState, RuntimeUiSnapshot,
@@ -384,7 +385,11 @@ class MotionWorkbenchController(QObject):
             return False
         self._selected_step_index = start_index
         self._plan_cursor = start_index
-        self._plan_pose = self._pose_before_step(start_index)
+        try:
+            self._plan_pose = self._pose_before_step(start_index)
+        except ValueError as error:
+            self.status_changed.emit(str(error))
+            return False
         self._plan_state = PlanExecutionState.RUNNING
         self._plan_continuous = continuous
         self._plan_reason = ""
@@ -395,7 +400,8 @@ class MotionWorkbenchController(QObject):
         pose = Pose()
         if self._plan is None:
             return pose
-        for step in self._plan.steps[:index]:
+        steps = materialize_steps(self._plan)
+        for step in steps[:index]:
             if isinstance(step, Waypoint):
                 pose = Pose(step.x_mm, step.y_mm,
                             step.yaw_deg if step.use_yaw else pose.yaw_deg)
@@ -411,11 +417,11 @@ class MotionWorkbenchController(QObject):
     def _send_current_plan_step(self) -> None:
         if self._plan is None:
             return
-        step = self._plan.steps[self._plan_cursor]
-        self._plan_waiting = True
-        self._plan_active_step_name = getattr(step, "name", "") or type(step).__name__
-        self._emit_plan_execution()
         try:
+            step = materialize_steps(self._plan)[self._plan_cursor]
+            self._plan_waiting = True
+            self._plan_active_step_name = getattr(step, "name", "") or type(step).__name__
+            self._emit_plan_execution()
             if isinstance(step, Waypoint):
                 self.session.start_motion(MotionGoal(
                     step.x_mm, step.y_mm, step.yaw_deg, step.vmax_mm_s, step.wmax_deg_s,
@@ -444,6 +450,15 @@ class MotionWorkbenchController(QObject):
             self._plan_waiting = False
             self._finish_plan(PlanExecutionState.FAILED, str(error))
 
+    def selected_path_points(self) -> list[PathPosePoint]:
+        """Return the selected path after the shared materializer resolves its start pose."""
+        if self._plan is None or not 0 <= self._selected_step_index < len(self._plan.steps):
+            raise ValueError("请先选择有效的路径步骤")
+        step = materialize_steps(self._plan)[self._selected_step_index]
+        if not isinstance(step, ContinuousPathSegment):
+            raise TypeError("当前步骤不是可上传的连续路径")
+        return step.points
+
     def _send_plan_path(self, points: list[PathPosePoint]) -> None:
         path_id = self.allocate_path_id()
         begin, chunks, commit = build_path_upload(path_id, points)
@@ -468,7 +483,7 @@ class MotionWorkbenchController(QObject):
     def _advance_plan_cursor(self) -> None:
         if self._plan is None:
             return
-        step = self._plan.steps[self._plan_cursor]
+        step = materialize_steps(self._plan)[self._plan_cursor]
         if isinstance(step, Waypoint):
             self._plan_pose = Pose(step.x_mm, step.y_mm, step.yaw_deg if step.use_yaw else self._plan_pose.yaw_deg)
         elif isinstance(step, RotateInPlace):
