@@ -135,8 +135,8 @@ class Plan:
         if not isinstance(value, dict):
             raise ValueError("方案 JSON 格式无效")
         version = value.get("map_version")
-        if version != MAP_VERSION:
-            raise ValueError("旧版地图坐标语义不再自动迁移，请重新建立并保存为 map_version 9")
+        if version not in (7, 8, MAP_VERSION):
+            raise ValueError("仅支持 map_version 7、8 或 9 的流程方案")
         allowed_keys = {"map_version", "name", "created_at", "updated_at", "start", "steps", "layout"}
         if set(value) != allowed_keys:
             raise ValueError("方案 JSON 格式无效")
@@ -152,14 +152,25 @@ class Plan:
                 if not isinstance(item, dict): raise ValueError
                 step_type = item.get("type")
                 fields = {key: field_value for key, field_value in item.items() if key != "type"}
-                if step_type == "goto_pose": steps.append(Waypoint(**fields))
+                if step_type == "goto_pose":
+                    step = Waypoint(**fields)
+                    if version in (7, 8): step.x_mm, step.y_mm = step.y_mm, step.x_mm
+                    steps.append(step)
                 elif step_type == "rotate_in_place": steps.append(RotateInPlace(**fields))
                 elif step_type == "continuous_path":
                     points = fields.pop("points", [])
                     if not isinstance(points, list) or not all(isinstance(point, dict) for point in points): raise ValueError
-                    steps.append(ContinuousPathSegment(points=[PathPosePoint(**point) for point in points], **fields))
-                elif step_type == "bezier_path":
-                    steps.append(BezierPathSegment(**fields))
+                    path_points = [PathPosePoint(**point) for point in points]
+                    if version in (7, 8):
+                        for point in path_points: point.x_mm, point.y_mm = point.y_mm, point.x_mm
+                    steps.append(ContinuousPathSegment(points=path_points, **fields))
+                elif step_type == "bezier_path" and version in (8, MAP_VERSION):
+                    step = BezierPathSegment(**fields)
+                    if version == 8:
+                        step.control_1_x_mm, step.control_1_y_mm = step.control_1_y_mm, step.control_1_x_mm
+                        step.control_2_x_mm, step.control_2_y_mm = step.control_2_y_mm, step.control_2_x_mm
+                        step.end_x_mm, step.end_y_mm = step.end_y_mm, step.end_x_mm
+                    steps.append(step)
                 else: raise ValueError
             obstacles = layout.get("obstacles", [])
             if not isinstance(obstacles, list) or not all(isinstance(item, dict) for item in obstacles): raise ValueError

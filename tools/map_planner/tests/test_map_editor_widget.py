@@ -7,7 +7,8 @@ from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication
 
 from map_planner.gui import MapEditorWidget
-from map_planner.models import Plan, Pose, Waypoint
+from map_planner.geometry import world_to_paper
+from map_planner.models import BezierPathSegment, Plan, Pose, Waypoint
 
 
 class MapEditorWidgetTests(unittest.TestCase):
@@ -84,6 +85,43 @@ class MapEditorWidgetTests(unittest.TestCase):
             self.assertFalse(widget.execution_step_button.isEnabled())
             self.assertFalse(widget.execution_run_button.isEnabled())
             self.assertFalse(widget.execution_stop_button.isEnabled())
+        finally:
+            widget.close()
+
+    def test_start_preset_uses_start_frame_rebase(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(steps=[Waypoint(0, 100, 30)]))
+            original = world_to_paper(widget.plan.steps[0], 2250, 150, 180)
+
+            widget.begin_start("启停区 2")
+
+            rebased = world_to_paper(widget.plan.steps[0], 2250, 2250, 180)
+            self.assertAlmostEqual(rebased[0], original[0])
+            self.assertAlmostEqual(rebased[1], original[1])
+        finally:
+            widget.close()
+
+    def test_start_frame_change_is_blocked_while_executing(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_execution_enabled(True)
+            with self.assertRaisesRegex(RuntimeError, "执行期间"):
+                widget.begin_start("启停区 2")
+        finally:
+            widget.close()
+
+    def test_tangent_bezier_closes_following_step_with_derived_endpoint_yaw(self):
+        widget = MapEditorWidget()
+        try:
+            widget.set_plan(Plan(steps=[
+                BezierPathSegment(0, 100, 100, 300, 200, 300, 17, "tangent"),
+                Waypoint(300, 400, 0),
+            ]))
+
+            endpoint = widget._step_end_pose(1)
+
+            self.assertAlmostEqual(endpoint.yaw_deg, 90.0)
         finally:
             widget.close()
 

@@ -13,6 +13,14 @@ MAX_BEZIER_SAMPLE_SPACING_MM = 50.0
 MAX_BEZIER_SAMPLE_POINTS = 512
 
 
+def bezier_tangent_yaw(start: Pose, control_1: tuple[float, float], control_2: tuple[float, float],
+                       end: Pose, t: float) -> float:
+    """Return the path tangent heading at ``t`` in the planner's world frame."""
+    dx, dy = evaluate_cubic_derivative(
+        (start.x_mm, start.y_mm), control_1, control_2, (end.x_mm, end.y_mm), t)
+    return wrap_deg(math.degrees(math.atan2(dx, dy))) if math.hypot(dx, dy) > 1e-6 else start.yaw_deg
+
+
 def evaluate_cubic(p0, p1, p2, p3, t: float) -> tuple[float, float]:
     u = 1.0 - t
     return (u**3 * p0[0] + 3*u*u*t*p1[0] + 3*u*t*t*p2[0] + t**3*p3[0],
@@ -72,7 +80,6 @@ def generate_bezier_path_points(start: Pose, control_1: tuple[float, float], con
         if yaw_mode == "fixed": yaw = start.yaw_deg
         elif yaw_mode == "interpolate": yaw = wrap_deg(start.yaw_deg + wrap_deg(end.yaw_deg-start.yaw_deg)*t)
         else:
-            dx, dy = evaluate_cubic_derivative(p0, control_1, control_2, p3, t)
-            yaw = wrap_deg(math.degrees(math.atan2(dx, dy))) if math.hypot(dx, dy) > 1e-6 else start.yaw_deg
+            yaw = bezier_tangent_yaw(start, control_1, control_2, end, t)
         result.append(PathPosePoint(x, y, yaw))
     return result
