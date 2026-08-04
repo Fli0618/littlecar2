@@ -255,6 +255,7 @@ class MapEditorWidget(QWidget):
             self._execution_target: Pose | None = None
             self._execution_error: tuple[float, float, float] | None = None
             self._execution_trace: list[Pose] = []
+            self._path_runtime = None
             self._execution_enabled = False
             self._start_preview_paper: QPointF | None = None
             self._runtime_car_item = None
@@ -353,6 +354,11 @@ class MapEditorWidget(QWidget):
             self._execution_trace = copy.deepcopy(poses)
             self._refresh_runtime_overlay()
             self._emit_execution_state()
+
+    def set_path_runtime(self, telemetry: object | None) -> None:
+            """更新路径投影和 lookahead 运行时覆盖层，不重绘编辑场景。"""
+            self._path_runtime = copy.deepcopy(telemetry)
+            self._refresh_runtime_overlay()
 
     def update_execution_telemetry(self, *, target: Pose | None = None, actual: Pose | None = None,
                                    error: tuple[float, float, float] | None = None,
@@ -756,6 +762,8 @@ class MapEditorWidget(QWidget):
             self._runtime_car_item = None; self._runtime_direction_item = None
             self._runtime_target_item = None; self._runtime_target_direction_item = None
             self._runtime_trace_item = None
+            self._runtime_projection_item = None
+            self._runtime_lookahead_item = None
             self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_start(); self.draw_route(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None); self.draw_runtime_overlay(); self.position_layout_sliders()
             for item in self.scene.items():
                 if isinstance(item,WaypointItem) and item.index in self.selected_indices: item.setSelected(True)
@@ -1549,6 +1557,10 @@ class MapEditorWidget(QWidget):
             self._runtime_target_direction_item.setZValue(40); self._runtime_target_direction_item.setData(0, "runtime_target_direction"); self.scene.addItem(self._runtime_target_direction_item)
             self._runtime_trace_item = QGraphicsPathItem()
             self._runtime_trace_item.setPen(QPen(QColor("#fb8c00"), 4, Qt.PenStyle.DashLine)); self._runtime_trace_item.setZValue(38); self._runtime_trace_item.setData(0, "runtime_trace"); self.scene.addItem(self._runtime_trace_item)
+            self._runtime_projection_item = self.scene.addEllipse(-16, -16, 32, 32, QPen(QColor("#ff9800"), 3), QColor(255, 152, 0, 100))
+            self._runtime_projection_item.setZValue(40); self._runtime_projection_item.setData(0, "runtime_projection")
+            self._runtime_lookahead_item = self.scene.addEllipse(-14, -14, 28, 28, QPen(QColor("#00acc1"), 3), QColor(0, 172, 193, 100))
+            self._runtime_lookahead_item.setZValue(40); self._runtime_lookahead_item.setData(0, "runtime_lookahead")
 
     def draw_runtime_overlay(self):
             """创建并更新持久化的运行时图元。"""
@@ -1560,7 +1572,8 @@ class MapEditorWidget(QWidget):
             self._ensure_runtime_overlay_items()
             for item in (self._runtime_car_item, self._runtime_direction_item,
                          self._runtime_target_item, self._runtime_target_direction_item,
-                         self._runtime_trace_item):
+                         self._runtime_trace_item, self._runtime_projection_item,
+                         self._runtime_lookahead_item):
                 item.setVisible(False)
             if len(self._execution_trace) >= 2:
                 path = QPainterPath()
@@ -1578,6 +1591,17 @@ class MapEditorWidget(QWidget):
                 self._runtime_target_direction_item.setPos(x, y)
                 self._runtime_target_direction_item.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, self._execution_target.yaw_deg))
                 self._runtime_target_direction_item.setVisible(True)
+            if self._path_runtime is not None:
+                projection = Pose(self._path_runtime.projection_x_mm,
+                                  self._path_runtime.projection_y_mm)
+                lookahead = Pose(self._path_runtime.lookahead_x_mm,
+                                 self._path_runtime.lookahead_y_mm)
+                px, py = world_to_paper(projection, self.plan.start_paper_x_mm,
+                                        self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                lx, ly = world_to_paper(lookahead, self.plan.start_paper_x_mm,
+                                        self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                self._runtime_projection_item.setPos(px, py); self._runtime_projection_item.setVisible(True)
+                self._runtime_lookahead_item.setPos(lx, ly); self._runtime_lookahead_item.setVisible(True)
             if self._runtime_pose is not None:
                 x, y = world_to_paper(self._runtime_pose, self.plan.start_paper_x_mm,
                                       self.plan.start_paper_y_mm, self.plan.start_heading_deg)

@@ -192,6 +192,7 @@ class MotionWorkbenchWindow(QMainWindow):
         self.controller.actual_pose_changed.connect(self._set_actual_pose)
         self.controller.execution_changed.connect(self._set_execution_target)
         self.controller.trace_changed.connect(self._set_execution_trace)
+        self.controller.path_telemetry_changed.connect(self.map_editor.set_path_runtime)
         self.controller.plan_execution_changed.connect(self._set_plan_execution_status)
         self.controller.plan_finished.connect(self._set_plan_execution_status)
         self.controller.motion_state_changed.connect(lambda value: self.motion_status.setText(f"运动: {value}"))

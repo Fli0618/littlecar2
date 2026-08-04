@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections import deque
 from dataclasses import replace
 
 from PySide6.QtCore import QObject, Signal
@@ -41,6 +42,10 @@ class MotionWorkbenchController(QObject):
         super().__init__()
         self.session = session or SessionController()
         self.buffer = TelemetryBuffer()
+        self.telemetry_buffer = self.buffer
+        self.path_telemetry_buffer: deque[PathTelemetry] = deque(maxlen=256)
+        self.latest_telemetry: Telemetry | None = None
+        self.latest_path_telemetry: PathTelemetry | None = None
         self.candidate: TargetPose | None = None
         self.execution: TargetPose | None = None
         self.actual: TargetPose | None = None
@@ -158,6 +163,7 @@ class MotionWorkbenchController(QObject):
         self.trace_changed.emit(self.trace)
 
     def on_telemetry(self, item: Telemetry) -> None:
+        self.latest_telemetry = item
         self.buffer.append(item)
         self._pid_revision = item.pid_revision
         pose = TargetPose(*item.actual)
@@ -179,6 +185,8 @@ class MotionWorkbenchController(QObject):
             self._finish(state, reason)
 
     def on_path_telemetry(self, item: PathTelemetry) -> None:
+        self.latest_path_telemetry = item
+        self.path_telemetry_buffer.append(item)
         self._last_path = item
         self.path_telemetry_changed.emit(item)
 
