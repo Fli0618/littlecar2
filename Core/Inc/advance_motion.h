@@ -154,6 +154,32 @@ extern "C"
     float final_capture_speed_mm_s;
   } AdvanceMotion_PathControlConfig_t;
 
+  /** @brief 单点 GOTO 分阶段速度规划与捕获参数。 */
+  typedef struct
+  {
+    float profile_threshold_mm;
+    float cruise_speed_mm_s;
+    float accel_mm_s2;
+    float decel_mm_s2;
+    float capture_distance_mm;
+    float capture_speed_mm_s;
+    float final_max_speed_mm_s;
+    float cross_track_kp;
+    float cross_track_kd;
+    float cross_track_correction_max_mm_s;
+    float yaw_cruise_rate_deg_s;
+    float yaw_accel_deg_s2;
+    float yaw_decel_deg_s2;
+    float yaw_capture_equivalent_mm;
+    float yaw_capture_rate_deg_s;
+    float yaw_final_max_rate_deg_s;
+    float yaw_correction_kp;
+    float yaw_correction_kd;
+    float yaw_correction_max_deg_s;
+    uint32_t correction_open_loop_ms;
+    uint32_t correction_blend_ms;
+  } AdvanceMotion_GotoControlConfig_t;
+
   typedef struct
   {
     float x_mm;
@@ -286,6 +312,14 @@ extern "C"
       const AdvanceMotion_PathControlConfig_t *config, uint32_t *revision);
   /** @brief 恢复固件默认连续路径参数。 */
   AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultPathControl(uint32_t *revision);
+  /** @brief 获取当前生效的单点 GOTO 分阶段速度规划参数与版本号。 */
+  AdvanceMotion_Status_t AdvanceMotion_GetGotoControlConfig(
+      AdvanceMotion_GotoControlConfig_t *config, uint32_t *revision);
+  /** @brief 提交单点 GOTO 速度规划参数；下一次 20 ms 控制周期边界整体生效。 */
+  AdvanceMotion_Status_t AdvanceMotion_RequestGotoControlConfig(
+      const AdvanceMotion_GotoControlConfig_t *config, uint32_t *revision);
+  /** @brief 恢复固件默认的单点 GOTO 速度规划参数。 */
+  AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultGotoControlConfig(uint32_t *revision);
   /** @brief 设置组合 GOTO 的大航向误差先对准策略；仅空闲状态可修改。 */
   AdvanceMotion_Status_t AdvanceMotion_SetLargeYawAlignEnabled(uint8_t enabled);
   /** @brief 获取组合 GOTO 的大航向误差先对准策略当前状态。 */

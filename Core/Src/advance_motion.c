@@ -82,10 +82,25 @@ typedef struct
   uint8_t active;
 } AdvanceMotion_PathContext_t;
 
+typedef struct
+{
+  float start_x_mm;
+  float start_y_mm;
+  float direction_x;
+  float direction_y;
+  float linear_speed_mm_s;
+  float yaw_rate_deg_s;
+  float correction_alpha;
+  uint8_t linear_capture;
+  uint8_t yaw_capture;
+  uint8_t active;
+} AdvanceMotion_GotoContext_t;
+
 static AdvanceMotion_RuntimeData_t g_motion = {0};
 static AdvanceMotion_DebugSnapshot_t g_motion_debug = {0};
 static AdvanceMotion_Control_t g_motion_control = {0};
 static AdvanceMotion_PathContext_t g_path = {0};
+static AdvanceMotion_GotoContext_t g_goto = {0};
 static volatile AdvanceMotion_RunState_t g_motion_state = ADVANCE_MOTION_STATE_IDLE;
 static AdvanceMotion_PidConfig_t g_pid_active;
 static AdvanceMotion_PidConfig_t g_pid_pending;
@@ -99,6 +114,12 @@ static volatile uint8_t g_path_config_pending_valid;
 static volatile uint32_t g_path_config_active_revision;
 static volatile uint32_t g_path_config_pending_revision;
 static volatile uint32_t g_path_config_next_revision;
+static AdvanceMotion_GotoControlConfig_t g_goto_profile_active;
+static AdvanceMotion_GotoControlConfig_t g_goto_profile_pending;
+static volatile uint8_t g_goto_profile_pending_valid;
+static volatile uint32_t g_goto_profile_active_revision;
+static volatile uint32_t g_goto_profile_pending_revision;
+static volatile uint32_t g_goto_profile_next_revision;
 static uint8_t g_large_yaw_align_enabled;
 
 static const AdvanceMotion_PidConfig_t g_pid_default = {
@@ -131,6 +152,32 @@ static const AdvanceMotion_PathControlConfig_t g_path_config_default = {
     .final_capture_distance_mm = ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM,
     .final_capture_speed_mm_s = ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S};
 
+static const AdvanceMotion_GotoControlConfig_t g_goto_profile_default = {
+    .profile_threshold_mm = ADVANCE_MOTION_GOTO_PROFILE_THRESHOLD_MM,
+    .cruise_speed_mm_s = ADVANCE_MOTION_GOTO_CRUISE_SPEED_MM_S,
+    .accel_mm_s2 = ADVANCE_MOTION_GOTO_ACCEL_MM_S2,
+    .decel_mm_s2 = ADVANCE_MOTION_GOTO_DECEL_MM_S2,
+    .capture_distance_mm = ADVANCE_MOTION_GOTO_CAPTURE_DISTANCE_MM,
+    .capture_speed_mm_s = ADVANCE_MOTION_GOTO_CAPTURE_SPEED_MM_S,
+    .final_max_speed_mm_s = ADVANCE_MOTION_GOTO_FINAL_MAX_SPEED_MM_S,
+    .cross_track_kp = ADVANCE_MOTION_GOTO_CROSS_TRACK_KP,
+    .cross_track_kd = ADVANCE_MOTION_GOTO_CROSS_TRACK_KD,
+    .cross_track_correction_max_mm_s = ADVANCE_MOTION_GOTO_CROSS_TRACK_MAX_MM_S,
+    .yaw_cruise_rate_deg_s = ADVANCE_MOTION_GOTO_YAW_CRUISE_DEG_S,
+    .yaw_accel_deg_s2 = ADVANCE_MOTION_GOTO_YAW_ACCEL_DEG_S2,
+    .yaw_decel_deg_s2 = ADVANCE_MOTION_GOTO_YAW_DECEL_DEG_S2,
+    .yaw_capture_equivalent_mm = ADVANCE_MOTION_GOTO_YAW_CAPTURE_EQUIVALENT_MM,
+    .yaw_capture_rate_deg_s = ADVANCE_MOTION_GOTO_YAW_CAPTURE_RATE_DEG_S,
+    .yaw_final_max_rate_deg_s = ADVANCE_MOTION_GOTO_YAW_FINAL_MAX_DEG_S,
+    .yaw_correction_kp = ADVANCE_MOTION_GOTO_YAW_CORRECTION_KP,
+    .yaw_correction_kd = ADVANCE_MOTION_GOTO_YAW_CORRECTION_KD,
+    .yaw_correction_max_deg_s = ADVANCE_MOTION_GOTO_YAW_CORRECTION_MAX_DEG_S,
+    .correction_open_loop_ms = ADVANCE_MOTION_GOTO_CORRECTION_OPEN_LOOP_MS,
+    .correction_blend_ms = ADVANCE_MOTION_GOTO_CORRECTION_BLEND_MS};
+
+static float AdvanceMotion_GetGoalVmax(const WorldGoalPose2D_t *goal);
+static float AdvanceMotion_GetGoalWmax(const WorldGoalPose2D_t *goal);
+
 /* 返回浮点数的绝对值。 */
 static float AdvanceMotion_AbsFloat(float value)
 {
@@ -140,6 +187,11 @@ static float AdvanceMotion_AbsFloat(float value)
 static void AdvanceMotion_ClearPathContext(void)
 {
   g_path = (AdvanceMotion_PathContext_t){0};
+}
+
+static void AdvanceMotion_ClearGotoContext(void)
+{
+  g_goto = (AdvanceMotion_GotoContext_t){0};
 }
 
 /* 清除位置 PID 与平面速度估计项。 */
@@ -446,6 +498,90 @@ static void AdvanceMotion_ApplyPendingPathControlConfig(void)
   {
     __enable_irq();
   }
+}
+
+static uint8_t AdvanceMotion_IsGotoProfileConfigValid(const AdvanceMotion_GotoControlConfig_t *config)
+{
+  if ((config == NULL) ||
+      (isfinite(config->profile_threshold_mm) == 0) || (isfinite(config->cruise_speed_mm_s) == 0) ||
+      (isfinite(config->accel_mm_s2) == 0) || (isfinite(config->decel_mm_s2) == 0) ||
+      (isfinite(config->capture_distance_mm) == 0) || (isfinite(config->capture_speed_mm_s) == 0) ||
+      (isfinite(config->final_max_speed_mm_s) == 0) || (isfinite(config->cross_track_kp) == 0) ||
+      (isfinite(config->cross_track_kd) == 0) || (isfinite(config->cross_track_correction_max_mm_s) == 0) ||
+      (isfinite(config->yaw_cruise_rate_deg_s) == 0) || (isfinite(config->yaw_accel_deg_s2) == 0) ||
+      (isfinite(config->yaw_decel_deg_s2) == 0) || (isfinite(config->yaw_capture_equivalent_mm) == 0) ||
+      (isfinite(config->yaw_capture_rate_deg_s) == 0) || (isfinite(config->yaw_final_max_rate_deg_s) == 0) ||
+      (isfinite(config->yaw_correction_kp) == 0) || (isfinite(config->yaw_correction_kd) == 0) ||
+      (isfinite(config->yaw_correction_max_deg_s) == 0))
+  {
+    return 0U;
+  }
+  return ((config->profile_threshold_mm > 0.0f) &&
+          (config->capture_distance_mm > 0.0f) &&
+          (config->capture_distance_mm <= config->profile_threshold_mm) &&
+          (config->cruise_speed_mm_s > 0.0f) && (config->cruise_speed_mm_s <= ADVANCE_MOTION_MAX_VMAX_MM_S) &&
+          (config->accel_mm_s2 > 0.0f) && (config->accel_mm_s2 <= 5000.0f) &&
+          (config->decel_mm_s2 > 0.0f) && (config->decel_mm_s2 <= 5000.0f) &&
+          (config->capture_speed_mm_s > 0.0f) && (config->capture_speed_mm_s <= config->cruise_speed_mm_s) &&
+          (config->final_max_speed_mm_s > 0.0f) && (config->final_max_speed_mm_s <= config->cruise_speed_mm_s) &&
+          (config->cross_track_kp >= 0.0f) && (config->cross_track_kp <= 20.0f) &&
+          (config->cross_track_kd >= 0.0f) && (config->cross_track_kd <= 20.0f) &&
+          (config->cross_track_correction_max_mm_s >= 0.0f) &&
+          (config->cross_track_correction_max_mm_s <= config->cruise_speed_mm_s) &&
+          (config->yaw_cruise_rate_deg_s > 0.0f) && (config->yaw_cruise_rate_deg_s <= ADVANCE_MOTION_MAX_WMAX_DEG_S) &&
+          (config->yaw_accel_deg_s2 > 0.0f) && (config->yaw_accel_deg_s2 <= 5000.0f) &&
+          (config->yaw_decel_deg_s2 > 0.0f) && (config->yaw_decel_deg_s2 <= 5000.0f) &&
+          (config->yaw_capture_equivalent_mm > 0.0f) &&
+          (config->yaw_capture_equivalent_mm <= config->profile_threshold_mm) &&
+          (config->yaw_capture_rate_deg_s > 0.0f) &&
+          (config->yaw_capture_rate_deg_s <= config->yaw_cruise_rate_deg_s) &&
+          (config->yaw_final_max_rate_deg_s > 0.0f) &&
+          (config->yaw_final_max_rate_deg_s <= config->yaw_cruise_rate_deg_s) &&
+          (config->yaw_correction_kp >= 0.0f) && (config->yaw_correction_kp <= 20.0f) &&
+          (config->yaw_correction_kd >= 0.0f) && (config->yaw_correction_kd <= 20.0f) &&
+          (config->yaw_correction_max_deg_s >= 0.0f) &&
+          (config->yaw_correction_max_deg_s <= config->yaw_cruise_rate_deg_s) &&
+          (config->correction_open_loop_ms <= 5000U) &&
+          (config->correction_blend_ms <= 10000U)) ? 1U : 0U;
+}
+
+static void AdvanceMotion_ApplyPendingGotoProfileConfig(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if (g_goto_profile_pending_valid != 0U)
+  {
+    g_goto_profile_active = g_goto_profile_pending;
+    g_goto_profile_active_revision = g_goto_profile_pending_revision;
+    g_goto_profile_pending_valid = 0U;
+    if (g_goto.active != 0U)
+    {
+      g_goto.linear_speed_mm_s = fminf(g_goto.linear_speed_mm_s,
+                                       fminf(g_goto_profile_active.cruise_speed_mm_s,
+                                             AdvanceMotion_GetGoalVmax(&g_motion.goal)));
+      g_goto.yaw_rate_deg_s = fminf(g_goto.yaw_rate_deg_s,
+                                    fminf(g_goto_profile_active.yaw_cruise_rate_deg_s,
+                                          AdvanceMotion_GetGoalWmax(&g_motion.goal)));
+      g_goto.correction_alpha = AdvanceWorld_LimitFloat(g_goto.correction_alpha, 0.0f, 1.0f);
+    }
+  }
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+}
+
+static float AdvanceMotion_UpdateProfileSpeed(float current_speed, float remaining,
+                                              float cruise_speed, float accel, float decel,
+                                              float dt_s)
+{
+  float braking_speed = sqrtf(2.0f * decel * fmaxf(remaining, 0.0f));
+  float target_speed = fminf(cruise_speed, braking_speed);
+  if (current_speed < target_speed)
+  {
+    return fminf(current_speed + (accel * dt_s), target_speed);
+  }
+  return fmaxf(current_speed - (decel * dt_s), target_speed);
 }
 
 /* 按传感器时间戳更新实测速度，并记录控制周期时间。 */
@@ -1077,6 +1213,7 @@ static void AdvanceMotion_SetTerminalState(AdvanceMotion_RunState_t state)
   g_motion_control.arrival_stop_sent = 0U;
   AdvanceMotion_ResetPidAndProgress();
   AdvanceMotion_ClearPathContext();
+  AdvanceMotion_ClearGotoContext();
   (void)AdvanceControl_ReleaseMode();
   g_motion_state = state;
 }
@@ -1143,6 +1280,12 @@ void AdvanceMotion_Init(void)
   g_path_config_active_revision = 0U;
   g_path_config_pending_revision = 0U;
   g_path_config_next_revision = 0U;
+  g_goto_profile_active = g_goto_profile_default;
+  g_goto_profile_pending = g_goto_profile_default;
+  g_goto_profile_pending_valid = 0U;
+  g_goto_profile_active_revision = 0U;
+  g_goto_profile_pending_revision = 0U;
+  g_goto_profile_next_revision = 0U;
   g_large_yaw_align_enabled = ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE;
   AdvanceMotion_UpdateDebugSnapshot(HAL_GetTick(), 0U);
 }
@@ -1162,6 +1305,7 @@ AdvanceMotion_Status_t AdvanceMotion_SetWorldVelocityEx(float vx_world_mm_s, flo
     g_motion_control.arrival_stop_sent = 0U;
     AdvanceMotion_ResetPidAndProgress();
     AdvanceMotion_ClearPathContext();
+    AdvanceMotion_ClearGotoContext();
   }
 
   return AdvanceMotion_ApplyWorldVelocityEx(vx_world_mm_s, vy_world_mm_s, wz_ccw_deg_s, acc, NULL);
@@ -1206,6 +1350,21 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
   g_motion.position_error_mm = 0.0f;
   g_motion.yaw_error_deg = 0.0f;
   g_motion_control.acc = acc;
+  AdvanceMotion_ClearGotoContext();
+  if ((goal->goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) != 0U)
+  {
+    float dx = goal->x_mm - pose.x_mm;
+    float dy = goal->y_mm - pose.y_mm;
+    float distance_mm = sqrtf((dx * dx) + (dy * dy));
+    g_goto.start_x_mm = pose.x_mm;
+    g_goto.start_y_mm = pose.y_mm;
+    if (distance_mm > 0.001f)
+    {
+      g_goto.direction_x = dx / distance_mm;
+      g_goto.direction_y = dy / distance_mm;
+    }
+  }
+  g_goto.active = 1U;
   g_motion_control.large_yaw_align_enabled = g_large_yaw_align_enabled;
   g_motion_control.yaw_aligning =
       ((g_motion_control.large_yaw_align_enabled != 0U) &&
@@ -1389,6 +1548,7 @@ void AdvanceMotion_Update(void)
 
   AdvanceMotion_ApplyPendingPidConfig();
   AdvanceMotion_ApplyPendingPathControlConfig();
+  AdvanceMotion_ApplyPendingGotoProfileConfig();
 
   if (g_motion_state != ADVANCE_MOTION_STATE_RUNNING)
   {
@@ -1600,6 +1760,76 @@ void AdvanceMotion_Update(void)
       }
       linear_saturated = (raw_linear_magnitude > vmax_mm_s) ? 1U : 0U;
     }
+    else if (g_goto.active != 0U)
+    {
+      float profile_dt_s = (dt_s > 0.0f) ? dt_s : ((float)ADVANCE_MOTION_CONTROL_PERIOD_MS / 1000.0f);
+      float goal_vmax_mm_s = AdvanceMotion_GetGoalVmax(&g_motion.goal);
+      float elapsed_ms = (float)(now_tick - g_motion.started_tick);
+      float correction_scale = 0.0f;
+      float cross_track_mm;
+      float cross_velocity_mm_s;
+      float cross_command_mm_s;
+
+      if (elapsed_ms >= (float)g_goto_profile_active.correction_open_loop_ms)
+      {
+        correction_scale = (g_goto_profile_active.correction_blend_ms == 0U) ? 1.0f :
+            AdvanceWorld_LimitFloat((elapsed_ms - (float)g_goto_profile_active.correction_open_loop_ms) /
+                                        (float)g_goto_profile_active.correction_blend_ms,
+                                    0.0f, 1.0f);
+      }
+      if (correction_scale > g_goto.correction_alpha)
+      {
+        g_goto.correction_alpha = correction_scale;
+      }
+      correction_scale = g_goto.correction_alpha;
+      if ((g_goto.linear_capture == 0U) &&
+          (g_motion.position_error_mm <= g_goto_profile_active.capture_distance_mm))
+      {
+        g_goto.linear_capture = 1U;
+        g_goto.linear_speed_mm_s = fminf(g_goto_profile_active.capture_speed_mm_s,
+                                         goal_vmax_mm_s);
+      }
+      if (g_goto.linear_capture == 0U)
+      {
+        g_goto.linear_speed_mm_s = fmaxf(
+            AdvanceMotion_UpdateProfileSpeed(
+                g_goto.linear_speed_mm_s,
+                g_motion.position_error_mm - g_goto_profile_active.profile_threshold_mm,
+                fminf(g_goto_profile_active.cruise_speed_mm_s, goal_vmax_mm_s),
+                g_goto_profile_active.accel_mm_s2, g_goto_profile_active.decel_mm_s2, profile_dt_s),
+            fminf(g_goto_profile_active.capture_speed_mm_s, goal_vmax_mm_s));
+        cross_track_mm = (-g_goto.direction_y * (g_motion.pose.x_mm - g_goto.start_x_mm)) +
+                         (g_goto.direction_x * (g_motion.pose.y_mm - g_goto.start_y_mm));
+        cross_velocity_mm_s = (-g_goto.direction_y * g_motion_control.measured_vx_world_mm_s) +
+                               (g_goto.direction_x * g_motion_control.measured_vy_world_mm_s);
+        cross_command_mm_s = correction_scale * AdvanceWorld_LimitFloat(
+            -(g_goto_profile_active.cross_track_kp * cross_track_mm) -
+                (g_goto_profile_active.cross_track_kd * cross_velocity_mm_s),
+            -g_goto_profile_active.cross_track_correction_max_mm_s,
+            g_goto_profile_active.cross_track_correction_max_mm_s);
+        vx_world_mm_s = (g_goto.direction_x * g_goto.linear_speed_mm_s) -
+                        (g_goto.direction_y * cross_command_mm_s);
+        vy_world_mm_s = (g_goto.direction_y * g_goto.linear_speed_mm_s) +
+                        (g_goto.direction_x * cross_command_mm_s);
+        vmax_mm_s = fminf(goal_vmax_mm_s,
+                           g_goto.linear_speed_mm_s +
+                               g_goto_profile_active.cross_track_correction_max_mm_s);
+        raw_linear_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) + (vy_world_mm_s * vy_world_mm_s));
+        (void)AdvanceMotion_LimitVector(&vx_world_mm_s, &vy_world_mm_s, vmax_mm_s);
+        linear_saturated = (raw_linear_magnitude > vmax_mm_s) ? 1U : 0U;
+      }
+      else
+      {
+        vx_world_mm_s = (g_pid_active.kp_pos * g_motion.error_x_mm) -
+                        (g_pid_active.kd_pos * g_motion_control.measured_vx_world_mm_s);
+        vy_world_mm_s = (g_pid_active.kp_pos * g_motion.error_y_mm) -
+                        (g_pid_active.kd_pos * g_motion_control.measured_vy_world_mm_s);
+        vmax_mm_s = fminf(goal_vmax_mm_s, g_goto_profile_active.final_max_speed_mm_s);
+        raw_linear_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) + (vy_world_mm_s * vy_world_mm_s));
+        (void)AdvanceMotion_LimitVector(&vx_world_mm_s, &vy_world_mm_s, vmax_mm_s);
+        linear_saturated = (raw_linear_magnitude > vmax_mm_s) ? 1U : 0U;
+      }
+    }
     else
     {
       vx_world_mm_s = (g_pid_active.kp_pos * g_motion.error_x_mm) +
@@ -1628,6 +1858,52 @@ void AdvanceMotion_Update(void)
       raw_wz_ccw_deg_s = g_path.feedforward_wz_deg_s +
                          (g_path_config_active.kp_yaw * g_motion.yaw_error_deg) -
                          (g_path_config_active.kd_yaw_rate * g_motion_control.measured_wz_deg_s);
+    }
+    else if (g_goto.active != 0U)
+    {
+      float profile_dt_s = (dt_s > 0.0f) ? dt_s : ((float)ADVANCE_MOTION_CONTROL_PERIOD_MS / 1000.0f);
+      float yaw_abs_error = AdvanceMotion_AbsFloat(g_motion.yaw_error_deg);
+      float elapsed_ms = (float)(now_tick - g_motion.started_tick);
+      float correction_scale = 0.0f;
+      if (elapsed_ms >= (float)g_goto_profile_active.correction_open_loop_ms)
+      {
+        correction_scale = (g_goto_profile_active.correction_blend_ms == 0U) ? 1.0f :
+            AdvanceWorld_LimitFloat((elapsed_ms - (float)g_goto_profile_active.correction_open_loop_ms) /
+                                        (float)g_goto_profile_active.correction_blend_ms,
+                                    0.0f, 1.0f);
+      }
+      if (correction_scale > g_goto.correction_alpha)
+      {
+        g_goto.correction_alpha = correction_scale;
+      }
+      correction_scale = g_goto.correction_alpha;
+      if ((g_goto.yaw_capture == 0U) &&
+          (yaw_abs_error <= g_goto_profile_active.yaw_capture_equivalent_mm))
+      {
+        g_goto.yaw_capture = 1U;
+        g_goto.yaw_rate_deg_s = g_goto_profile_active.yaw_capture_rate_deg_s;
+      }
+      if (g_goto.yaw_capture == 0U)
+      {
+        float correction = correction_scale * AdvanceWorld_LimitFloat(
+            (g_goto_profile_active.yaw_correction_kp * g_motion.yaw_error_deg) -
+                (g_goto_profile_active.yaw_correction_kd * g_motion_control.measured_wz_deg_s),
+            -g_goto_profile_active.yaw_correction_max_deg_s,
+            g_goto_profile_active.yaw_correction_max_deg_s);
+        g_goto.yaw_rate_deg_s = AdvanceMotion_UpdateProfileSpeed(
+            g_goto.yaw_rate_deg_s, yaw_abs_error - g_goto_profile_active.yaw_capture_equivalent_mm,
+            fminf(g_goto_profile_active.yaw_cruise_rate_deg_s, wmax_deg_s),
+            g_goto_profile_active.yaw_accel_deg_s2, g_goto_profile_active.yaw_decel_deg_s2, profile_dt_s);
+        raw_wz_ccw_deg_s = ((g_motion.yaw_error_deg >= 0.0f) ? g_goto.yaw_rate_deg_s : -g_goto.yaw_rate_deg_s) + correction;
+      }
+      else
+      {
+        raw_wz_ccw_deg_s = (g_pid_active.kp_yaw * g_motion.yaw_error_deg) -
+                            (g_pid_active.kd_yaw * g_motion_control.measured_wz_deg_s);
+        wmax_deg_s = fminf(wmax_deg_s, g_goto_profile_active.yaw_final_max_rate_deg_s);
+      }
+      wz_ccw_deg_s = AdvanceWorld_LimitFloat(raw_wz_ccw_deg_s, -wmax_deg_s, wmax_deg_s);
+      yaw_saturated = (AdvanceMotion_AbsFloat(raw_wz_ccw_deg_s) > wmax_deg_s) ? 1U : 0U;
     }
     else
     {
@@ -1850,6 +2126,56 @@ AdvanceMotion_Status_t AdvanceMotion_RequestPathControlConfig(
 AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultPathControl(uint32_t *revision)
 {
   return AdvanceMotion_RequestPathControlConfig(&g_path_config_default, revision);
+}
+
+AdvanceMotion_Status_t AdvanceMotion_GetGotoControlConfig(
+    AdvanceMotion_GotoControlConfig_t *config, uint32_t *revision)
+{
+  uint32_t primask;
+  if ((config == NULL) || (revision == NULL))
+  {
+    return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+  }
+  primask = __get_PRIMASK();
+  __disable_irq();
+  *config = g_goto_profile_active;
+  *revision = g_goto_profile_active_revision;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+  return ADVANCE_MOTION_STATUS_OK;
+}
+
+AdvanceMotion_Status_t AdvanceMotion_RequestGotoControlConfig(
+    const AdvanceMotion_GotoControlConfig_t *config, uint32_t *revision)
+{
+  uint32_t primask;
+  if ((revision == NULL) || (AdvanceMotion_IsGotoProfileConfigValid(config) == 0U))
+  {
+    return ADVANCE_MOTION_STATUS_INVALID_PARAM;
+  }
+  primask = __get_PRIMASK();
+  __disable_irq();
+  ++g_goto_profile_next_revision;
+  if (g_goto_profile_next_revision == 0U)
+  {
+    ++g_goto_profile_next_revision;
+  }
+  g_goto_profile_pending = *config;
+  g_goto_profile_pending_revision = g_goto_profile_next_revision;
+  g_goto_profile_pending_valid = 1U;
+  *revision = g_goto_profile_pending_revision;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+  return ADVANCE_MOTION_STATUS_OK;
+}
+
+AdvanceMotion_Status_t AdvanceMotion_RestoreDefaultGotoControlConfig(uint32_t *revision)
+{
+  return AdvanceMotion_RequestGotoControlConfig(&g_goto_profile_default, revision);
 }
 
 AdvanceMotion_Status_t AdvanceMotion_SetLargeYawAlignEnabled(uint8_t enabled)
