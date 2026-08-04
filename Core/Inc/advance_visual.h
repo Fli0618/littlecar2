@@ -20,8 +20,8 @@ extern "C"
 #define ADVANCE_VISUAL_CIRCLE_REF_Y ((int16_t)(ADVANCE_VISUAL_IMAGE_HEIGHT / 2))
 #define ADVANCE_VISUAL_COLOR_REF_X ((int16_t)(ADVANCE_VISUAL_IMAGE_WIDTH / 2))
 #define ADVANCE_VISUAL_COLOR_REF_Y ((int16_t)(ADVANCE_VISUAL_IMAGE_HEIGHT / 2))
-#define ADVANCE_VISUAL_MATERIAL_REF_X ((int16_t)(ADVANCE_VISUAL_IMAGE_WIDTH / 2))
-#define ADVANCE_VISUAL_MATERIAL_REF_Y ((int16_t)(ADVANCE_VISUAL_IMAGE_HEIGHT / 2))
+#define ADVANCE_VISUAL_DISK_CENTER_REF_X ((int16_t)(ADVANCE_VISUAL_IMAGE_WIDTH / 2))
+#define ADVANCE_VISUAL_DISK_CENTER_REF_Y ((int16_t)(ADVANCE_VISUAL_IMAGE_HEIGHT / 2))
 
 /* 像素误差到车体横向/前向速度的比例系数；需结合实车低速标定调整。 */
 #define ADVANCE_VISUAL_KP_X (0.8f)
@@ -44,10 +44,21 @@ extern "C"
 
 typedef enum
 {
-  ADVANCE_VISUAL_MODE_CIRCLE = 0U,
-  ADVANCE_VISUAL_MODE_COLOR,
-  ADVANCE_VISUAL_MODE_MATERIAL
-} AdvanceVisual_Mode_t;
+  RED = 0U,
+  YELLOW,
+  BLUE,
+  GREEN,
+  BLACK,
+  LIGHT_BLUE,
+  EMPTY_SLOT
+} ColorType_t;
+
+typedef enum
+{
+  NUMBER_1 = 0U,
+  NUMBER_2,
+  NUMBER_3
+} CircleType_t;
 
 /* 相机图像相对车体坐标的顺时针安装角度。 */
 typedef enum
@@ -79,10 +90,11 @@ void AdvanceVisual_Update(void);
 
 /*
  * 顺序业务可直接调用本接口，例如：
- * (void)AdvanceVisual_AlignBlocking(ADVANCE_VISUAL_MODE_COLOR, material_type);
  * 函数仅等待 TIM6 推进视觉控制并在终态返回。
  */
-AdvanceVisual_State_t AdvanceVisual_AlignBlocking(AdvanceVisual_Mode_t mode, uint8_t target_type);
+AdvanceVisual_State_t AdvanceVisual_AlignColorBlocking(ColorType_t color);
+AdvanceVisual_State_t AdvanceVisual_AlignDiskCenterBlocking(void);
+AdvanceVisual_State_t AdvanceVisual_AlignCircleBlocking(CircleType_t number);
 
 void AdvanceVisual_Cancel(void);
 AdvanceVisual_State_t AdvanceVisual_GetState(void);
