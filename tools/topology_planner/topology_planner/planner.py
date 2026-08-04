@@ -41,6 +41,12 @@ def edge_key(node_a: str, node_b: str) -> tuple[str, str]:
     return tuple(sorted((node_a, node_b)))
 
 
+def edge_length(node_a: str, node_b: str) -> float:
+    """返回固定拓扑中无向边的长度。"""
+
+    return _EDGE_LENGTHS[edge_key(node_a, node_b)]
+
+
 _NAVIGATION = {
     "NW": ("左上", 0.0, 0.0),
     "N": ("上", 1.0, 0.0),
