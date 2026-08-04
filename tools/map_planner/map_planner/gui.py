@@ -9,11 +9,13 @@ import sys
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, QPen, QPolygonF, QShortcut
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDoubleSpinBox, QFormLayout,
-    QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsPolygonItem, QGraphicsRectItem,
+    QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsRectItem,
     QGraphicsScene, QGraphicsTextItem, QGraphicsView, QHBoxLayout, QInputDialog, QLabel, QListWidget,
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QSlider, QSplitter, QVBoxLayout, QWidget, QRubberBand, QComboBox)
 
-from .geometry import paper_to_world, world_to_paper, wrap_deg
+from .geometry import (StartFrame, paper_heading_to_world_yaw, paper_to_world, paper_vector_to_heading,
+                       qgraphics_rotation_deg, world_to_paper, world_yaw_to_paper_heading,
+                       rebase_plan_world_frame, wrap_deg)
 from .codegen_c import CodeGenerationError, validate_plan_for_blocking_codegen
 from .codegen_dialog import CodeGenerationDialog
 from .bezier import generate_bezier_path_points
@@ -234,7 +236,6 @@ class MapEditorWidget(QWidget):
     hardware_enabled_changed = Signal(bool)
     single_step_requested = Signal(int)
     continuous_requested = Signal(int)
-    runtime_axis_transform_changed = Signal(bool, bool, bool)
     execution_stop_requested = Signal()
     execution_state_changed = Signal(object)
 
@@ -254,8 +255,14 @@ class MapEditorWidget(QWidget):
             self._execution_target: Pose | None = None
             self._execution_error: tuple[float, float, float] | None = None
             self._execution_trace: list[Pose] = []
+            self._path_runtime = None
             self._execution_enabled = False
             self._start_preview_paper: QPointF | None = None
+            self._runtime_car_item = None
+            self._runtime_direction_item = None
+            self._runtime_target_item = None
+            self._runtime_target_direction_item = None
+            self._runtime_trace_item = None
             self.scene = QGraphicsScene(self); self.view = MapView(); self.view.setScene(self.scene)
             self.view.clicked.connect(self.on_map_click); self.view.hovered.connect(self.update_preview); self.view.released.connect(self.on_map_release); self.view.preview_rotated.connect(self.rotate_preview_clockwise); self.view.box_selected.connect(self.select_box); self.timer = QTimer(self); self.timer.setInterval(20); self.timer.timeout.connect(self.tick)
             self._build(); self._build_layout_sliders(); self.view.view_changed.connect(self.position_layout_sliders); QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo); QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo); QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self.select_all); QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.remove_selected_step); QShortcut(QKeySequence(Qt.Key.Key_Return), self, activated=self.confirm_bezier_draft); QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.cancel_bezier_draft)
@@ -273,6 +280,28 @@ class MapEditorWidget(QWidget):
     def get_plan(self) -> Plan:
             """返回当前方案副本，避免外部绕过编辑器状态直接修改。"""
             return copy.deepcopy(self.plan)
+
+    def selected_step(self):
+            """返回当前选中动作的副本；未选中时返回 None。"""
+            step = self.plan.steps[self.active_index] if 0 <= self.active_index < len(self.plan.steps) else None
+            return copy.deepcopy(step)
+
+    def selected_step_path_points(self) -> list[PathPosePoint]:
+            """按当前选中步骤生成待上传的世界坐标路径点。"""
+            step = self.selected_step()
+            if isinstance(step, ContinuousPathSegment):
+                return step.points
+            if isinstance(step, BezierPathSegment):
+                start = self._step_end_pose(self.active_index)
+                return generate_bezier_path_points(
+                    start,
+                    (step.control_1_x_mm, step.control_1_y_mm),
+                    (step.control_2_x_mm, step.control_2_y_mm),
+                    Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg),
+                    step.yaw_mode,
+                    step.sample_spacing_mm,
+                )
+            raise ValueError("当前步骤不是可上传的路径")
 
     def set_plan(self, plan: Plan, *, calibrated: bool = True) -> None:
             """装载工作台提供的方案，并重置编辑器的短暂交互状态。"""
@@ -343,6 +372,11 @@ class MapEditorWidget(QWidget):
             self._refresh_runtime_overlay()
             self._emit_execution_state()
 
+    def set_path_runtime(self, telemetry: object | None) -> None:
+            """更新路径投影和 lookahead 运行时覆盖层，不重绘编辑场景。"""
+            self._path_runtime = copy.deepcopy(telemetry)
+            self._refresh_runtime_overlay()
+
     def update_execution_telemetry(self, *, target: Pose | None = None, actual: Pose | None = None,
                                    error: tuple[float, float, float] | None = None,
                                    trace: list[Pose] | None = None) -> None:
@@ -405,12 +439,6 @@ class MapEditorWidget(QWidget):
                 self.set_execution_status("请先选择连续执行的起始动作")
                 return
             self.continuous_requested.emit(self.active_index)
-
-    def _emit_runtime_axis_transform(self) -> None:
-            self.runtime_axis_transform_changed.emit(
-                self.execution_swap_xy.isChecked(),
-                self.execution_flip_x.isChecked(),
-                self.execution_flip_y.isChecked())
 
     def _set_yellow_zone_passage(self, allowed: bool) -> None:
             self.yellow_zone_status_label.setText(
@@ -538,9 +566,6 @@ class MapEditorWidget(QWidget):
             self.execution_step_button = QPushButton("单步执行")
             self.execution_run_button = QPushButton("连贯执行")
             self.execution_stop_button = QPushButton("停止")
-            self.execution_swap_xy = QCheckBox("显示交换 X/Y")
-            self.execution_flip_x = QCheckBox("显示反转 X")
-            self.execution_flip_y = QCheckBox("显示反转 Y")
             self.execution_step_button.clicked.connect(self._request_single_execution)
             self.execution_run_button.clicked.connect(self._request_continuous_execution)
             self.execution_stop_button.clicked.connect(self.execution_stop_requested.emit)
@@ -548,13 +573,7 @@ class MapEditorWidget(QWidget):
             execution_row.addWidget(self.execution_step_button)
             execution_row.addWidget(self.execution_run_button)
             execution_row.addWidget(self.execution_stop_button)
-            execution_row.addWidget(self.execution_swap_xy)
-            execution_row.addWidget(self.execution_flip_x)
-            execution_row.addWidget(self.execution_flip_y)
             box.addLayout(execution_row)
-            self.execution_swap_xy.toggled.connect(self._emit_runtime_axis_transform)
-            self.execution_flip_x.toggled.connect(self._emit_runtime_axis_transform)
-            self.execution_flip_y.toggled.connect(self._emit_runtime_axis_transform)
             self.execution_status_label = QLabel("实机执行未启用")
             self.execution_status_label.setWordWrap(True)
             box.addWidget(self.execution_status_label)
@@ -634,12 +653,33 @@ class MapEditorWidget(QWidget):
             elif self.mode == "obstacle": self.add_obstacle(QPointF(x, y))
 
     def paper_of(self, waypoint):
-            x,y=world_to_paper(Pose(waypoint.x_mm, waypoint.y_mm, waypoint.yaw_deg),self.plan.start_paper_x_mm,self.plan.start_paper_y_mm,self.plan.start_heading_deg); return Pose(x,y,waypoint.yaw_deg+self.plan.start_heading_deg)
+            x, y = world_to_paper(Pose(waypoint.x_mm, waypoint.y_mm, waypoint.yaw_deg),
+                                  self.plan.start_paper_x_mm, self.plan.start_paper_y_mm,
+                                  self.plan.start_heading_deg)
+            return Pose(x, y, world_yaw_to_paper_heading(self.plan.start_heading_deg,
+                                                         waypoint.yaw_deg))
 
     def rotate_start_clockwise(self):
-            if not (self.calibration_pending and self.calibration_stage == "heading"): return
-            self.push_undo(); self.plan.start_heading_deg=((self.plan.start_heading_deg-90+180)%360)-180
+            if self.calibration_pending and self.calibration_stage == "heading":
+                self.push_undo(); self.plan.start_heading_deg=((self.plan.start_heading_deg-90+180)%360)-180
+            elif not self.calibration_pending:
+                self.set_start_frame(self.plan.start_paper_x_mm, self.plan.start_paper_y_mm,
+                                     self.plan.start_heading_deg - 90.0)
+            else:
+                return
             self.redraw(); self.status.setText("起点朝向已顺时针旋转 90 度，可继续右击修改或点击确认朝向。")
+
+    def set_start_frame(self, paper_x_mm: float, paper_y_mm: float, heading_deg: float) -> None:
+            """修改起点帧并对固定世界目标执行一次性重基准。"""
+            if self._execution_enabled or self.timer.isActive():
+                raise RuntimeError("执行期间不能修改起点帧")
+            old = StartFrame(self.plan.start_paper_x_mm, self.plan.start_paper_y_mm,
+                             self.plan.start_heading_deg)
+            new = StartFrame(float(paper_x_mm), float(paper_y_mm), float(heading_deg))
+            self.push_undo()
+            self.plan = rebase_plan_world_frame(self.plan, old, new)
+            self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw()
+            self.rebuild_timeline_after_edit(); self.plan_changed.emit(copy.deepcopy(self.plan))
 
     def confirm_start_heading(self):
             if not (self.calibration_pending and self.calibration_stage == "heading"): return
@@ -736,6 +776,11 @@ class MapEditorWidget(QWidget):
             if hasattr(self,"raw_slider"):
                 for slider,value in ((self.raw_slider,self.plan.layout.raw_center_x_mm),(self.qr_slider,self.plan.layout.qr_center_y_mm)):
                     slider.blockSignals(True); slider.setValue(round(value)); slider.blockSignals(False)
+            self._runtime_car_item = None; self._runtime_direction_item = None
+            self._runtime_target_item = None; self._runtime_target_direction_item = None
+            self._runtime_trace_item = None
+            self._runtime_projection_item = None
+            self._runtime_lookahead_item = None
             self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_start(); self.draw_route(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None); self.draw_runtime_overlay(); self.position_layout_sliders()
             for item in self.scene.items():
                 if isinstance(item,WaypointItem) and item.index in self.selected_indices: item.setSelected(True)
@@ -794,12 +839,29 @@ class MapEditorWidget(QWidget):
                      if self.calibration_pending else True)
             color = QColor("#1565c0") if valid else QColor("#c62828")
             car = CarOutlineItem(self.rotate_start_clockwise if interactive else (lambda: None))
-            car.setPos(x, y); car.setRotation(-self.plan.start_heading_deg)
+            car.setPos(x, y); car.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, 0.0))
             car.setPen(QPen(color, 5)); car.setBrush(QColor(color.red(), color.green(), color.blue(), 55))
             car.setAcceptedMouseButtons(Qt.MouseButton.NoButton); car.setData(0, "start_pose_preview"); car.setZValue(16); self.scene.addItem(car)
             item=StartItem(self.plan.start_heading_deg,self.rotate_start_clockwise); item.setPos(x, y)
             if not interactive: item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
             item.setData(0, "start_direction_preview"); self.scene.addItem(item)
+            self._draw_start_axes(x, y)
+
+    def _draw_start_axes(self, paper_x: float, paper_y: float) -> None:
+            """绘制固定世界坐标方向辅助线，不参与交互和路径数据。"""
+            origin = QPointF(paper_x, paper_y)
+            right = world_to_paper(Pose(200.0, 0.0), self.plan.start_paper_x_mm,
+                                   self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+            forward = world_to_paper(Pose(0.0, 200.0), self.plan.start_paper_x_mm,
+                                     self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+            for end, color in ((QPointF(*right), QColor("#ef6c00")),
+                               (QPointF(*forward), QColor("#2e7d32"))):
+                line = self.scene.addLine(origin.x(), origin.y(), end.x(), end.y(), QPen(color, 3))
+                line.setZValue(12); line.setAcceptedMouseButtons(Qt.MouseButton.NoButton); line.setData(0, "start_axis")
+            arc = self.scene.addEllipse(paper_x - 70, paper_y - 70, 140, 140,
+                                        QPen(QColor("#6a1b9a"), 2))
+            arc.setStartAngle(0); arc.setSpanAngle(90 * 16); arc.setZValue(12)
+            arc.setAcceptedMouseButtons(Qt.MouseButton.NoButton); arc.setData(0, "start_yaw_arc")
 
     def add_measurement_point(self, point, shift=False):
             if len(self.measurement_points) >= 2: self.measurement_points=[]
@@ -1315,7 +1377,10 @@ class MapEditorWidget(QWidget):
             if index != self.active_index or not isinstance(self._selected_step(), Waypoint):
                 return
             self.push_undo(); step = self._selected_step(); delta = item.pos()
-            step.yaw_deg = -math.degrees(math.atan2(delta.y(), delta.x())) - self.plan.start_heading_deg; step.use_yaw = True
+            step.yaw_deg = paper_heading_to_world_yaw(
+                self.plan.start_heading_deg,
+                paper_vector_to_heading(delta.x(), delta.y()))
+            step.use_yaw = True
             self._sync_continuous_entries(); self.show_node(index); self.redraw(); self.rebuild_timeline_after_edit()
 
     def set_active_from_context(self, index):
@@ -1376,7 +1441,8 @@ class MapEditorWidget(QWidget):
                     start_p = self.paper_of(start)
                     self.scene.addLine(start_p.x_mm, start_p.y_mm, self.preview_paper.x(), self.preview_paper.y(), QPen(QColor("#1565c0"), 4, Qt.PenStyle.DashLine))
                     car = CarOutlineItem(self.rotate_preview_clockwise)
-                    car.setPos(self.preview_paper); car.setRotation(-(self.preview_yaw_deg + self.plan.start_heading_deg))
+                    car.setPos(self.preview_paper); car.setRotation(
+                        qgraphics_rotation_deg(self.plan.start_heading_deg, self.preview_yaw_deg))
                     car.setPen(QPen(QColor("#1565c0"), 4)); car.setBrush(QColor(21, 101, 192, 45)); car.setZValue(19)
                     car.setData(0, "bezier_endpoint_preview_car"); self.scene.addItem(car)
                     self._draw_direction_arrow(self.preview_paper.x(), self.preview_paper.y(), self.preview_yaw_deg, QColor("#1565c0"), "bezier_endpoint_preview_direction")
@@ -1406,7 +1472,7 @@ class MapEditorWidget(QWidget):
             path = self.scene.addPath(self.sweep_path(sweep), QPen(Qt.PenStyle.NoPen), QColor(color.red(), color.green(), color.blue(), 70)); path.setData(0, "preview_sweep"); path.setZValue(2)
             if not hit_platform.isEmpty():
                 collision = self.scene.addPath(hit_platform, QPen(Qt.PenStyle.NoPen), QColor("#d32f2f")); collision.setData(0, "preview_platform_collision"); collision.setZValue(3)
-            item = CarOutlineItem(self.rotate_preview_clockwise); item.setPos(self.preview_paper); item.setRotation(-(self.preview_yaw_deg + self.plan.start_heading_deg)); item.setPen(QPen(color, 4)); item.setBrush(QColor(color.red(), color.green(), color.blue(), 42)); item.setZValue(17); self.scene.addItem(item)
+            item = CarOutlineItem(self.rotate_preview_clockwise); item.setPos(self.preview_paper); item.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, self.preview_yaw_deg)); item.setPen(QPen(color, 4)); item.setBrush(QColor(color.red(), color.green(), color.blue(), 42)); item.setZValue(17); self.scene.addItem(item)
             self._draw_direction_arrow(self.preview_paper.x(), self.preview_paper.y(), self.preview_yaw_deg, color, "preview_direction")
             self._set_path_check("预览", "可行" if not out_of_bounds and hit_platform.isEmpty() else ("越界" if out_of_bounds else "碰撞平台"))
 
@@ -1446,7 +1512,7 @@ class MapEditorWidget(QWidget):
 
     def _draw_direction_arrow(self, x, y, yaw, color, marker):
             arrow = QGraphicsPolygonItem(QPolygonF([QPointF(-18, -14), QPointF(20, -14), QPointF(20, -28), QPointF(52, 0), QPointF(20, 28), QPointF(20, 14), QPointF(-18, 14)]))
-            arrow.setPos(x, y); arrow.setRotation(-(yaw + self.plan.start_heading_deg)); arrow.setBrush(color); arrow.setPen(QPen(QColor("#0d47a1"), 2)); arrow.setData(0, marker); arrow.setZValue(18); self.scene.addItem(arrow)
+            arrow.setPos(x, y); arrow.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, yaw)); arrow.setBrush(color); arrow.setPen(QPen(QColor("#0d47a1"), 2)); arrow.setData(0, marker); arrow.setZValue(18); self.scene.addItem(arrow)
 
     def _set_path_check(self, subject, result):
             self.path_check.setText(f"路径检查：{subject} - {result}")
@@ -1485,48 +1551,83 @@ class MapEditorWidget(QWidget):
             p = pose or self._step_end_pose(self.active_index + 1)
             x, y = world_to_paper(p, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
             invalid = self.active_index in self.invalid_waypoints(); color = QColor("#c62828") if invalid else QColor("#455a64")
-            car = CarOutlineItem(self.rotate_car_clockwise); car.setPos(x, y); car.setRotation(-(p.yaw_deg + self.plan.start_heading_deg)); car.setPen(QPen(color, 5)); car.setBrush(QColor(120, 144, 156, 105)); car.setZValue(15); self.scene.addItem(car)
+            car = CarOutlineItem(self.rotate_car_clockwise); car.setPos(x, y); car.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, p.yaw_deg)); car.setPen(QPen(color, 5)); car.setBrush(QColor(120, 144, 156, 105)); car.setZValue(15); self.scene.addItem(car)
             self._draw_direction_arrow(x, y, p.yaw_deg, QColor("#1565c0"), "car_direction")
 
+    def _ensure_runtime_overlay_items(self) -> None:
+            if self._runtime_car_item is not None and self._runtime_car_item.scene() is self.scene:
+                return
+            self._runtime_car_item = CarOutlineItem(lambda: None)
+            self._runtime_car_item.setPen(QPen(QColor("#e53935"), 5))
+            self._runtime_car_item.setBrush(QColor(229, 57, 53, 65))
+            self._runtime_car_item.setZValue(40); self._runtime_car_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            self._runtime_car_item.setData(0, "runtime_car"); self.scene.addItem(self._runtime_car_item)
+            arrow_shape = QPolygonF([QPointF(-18, -14), QPointF(20, -14), QPointF(20, -28),
+                                     QPointF(52, 0), QPointF(20, 28), QPointF(20, 14), QPointF(-18, 14)])
+            self._runtime_direction_item = QGraphicsPolygonItem(arrow_shape)
+            self._runtime_direction_item.setBrush(QColor("#e53935")); self._runtime_direction_item.setPen(QPen(QColor("#0d47a1"), 2))
+            self._runtime_direction_item.setZValue(41); self._runtime_direction_item.setData(0, "runtime_direction"); self.scene.addItem(self._runtime_direction_item)
+            self._runtime_target_item = self.scene.addEllipse(-38, -38, 76, 76, QPen(QColor("#2e7d32"), 4), QColor(46, 125, 50, 35))
+            self._runtime_target_item.setZValue(39); self._runtime_target_item.setData(0, "runtime_target")
+            self._runtime_target_direction_item = QGraphicsPolygonItem(arrow_shape)
+            self._runtime_target_direction_item.setBrush(QColor("#2e7d32")); self._runtime_target_direction_item.setPen(QPen(QColor("#2e7d32"), 2))
+            self._runtime_target_direction_item.setZValue(40); self._runtime_target_direction_item.setData(0, "runtime_target_direction"); self.scene.addItem(self._runtime_target_direction_item)
+            self._runtime_trace_item = QGraphicsPathItem()
+            self._runtime_trace_item.setPen(QPen(QColor("#fb8c00"), 4, Qt.PenStyle.DashLine)); self._runtime_trace_item.setZValue(38); self._runtime_trace_item.setData(0, "runtime_trace"); self.scene.addItem(self._runtime_trace_item)
+            self._runtime_projection_item = self.scene.addEllipse(-16, -16, 32, 32, QPen(QColor("#ff9800"), 3), QColor(255, 152, 0, 100))
+            self._runtime_projection_item.setZValue(40); self._runtime_projection_item.setData(0, "runtime_projection")
+            self._runtime_lookahead_item = self.scene.addEllipse(-14, -14, 28, 28, QPen(QColor("#00acc1"), 3), QColor(0, 172, 193, 100))
+            self._runtime_lookahead_item.setZValue(40); self._runtime_lookahead_item.setData(0, "runtime_lookahead")
+
     def draw_runtime_overlay(self):
-            """绘制工作台注入的实时车辆位姿，不参与编辑或仿真状态。"""
-            self._draw_execution_trace()
-            self._draw_execution_target()
-            if self._runtime_pose is None:
-                return
-            x, y = world_to_paper(self._runtime_pose, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
-            car = CarOutlineItem(lambda: None); car.setPos(x, y)
-            car.setRotation(-(self._runtime_pose.yaw_deg + self.plan.start_heading_deg))
-            car.setPen(QPen(QColor("#e53935"), 5)); car.setBrush(QColor(229, 57, 53, 65)); car.setZValue(40)
-            car.setAcceptedMouseButtons(Qt.MouseButton.NoButton); car.setData(0, "runtime_car"); self.scene.addItem(car)
-            self._draw_direction_arrow(x, y, self._runtime_pose.yaw_deg, QColor("#e53935"), "runtime_direction")
-
-    def _draw_execution_target(self) -> None:
-            if self._execution_target is None:
-                return
-            x, y = world_to_paper(self._execution_target, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg)
-            target = self.scene.addEllipse(x - 38, y - 38, 76, 76, QPen(QColor("#2e7d32"), 4), QColor(46, 125, 50, 35))
-            target.setZValue(39); target.setAcceptedMouseButtons(Qt.MouseButton.NoButton); target.setData(0, "runtime_target")
-            self._draw_direction_arrow(x, y, self._execution_target.yaw_deg, QColor("#2e7d32"), "runtime_target_direction")
-
-    def _draw_execution_trace(self) -> None:
-            if len(self._execution_trace) < 2:
-                return
-            pen = QPen(QColor("#fb8c00"), 4, Qt.PenStyle.DashLine)
-            points = [world_to_paper(pose, self.plan.start_paper_x_mm, self.plan.start_paper_y_mm, self.plan.start_heading_deg) for pose in self._execution_trace]
-            for start, end in zip(points, points[1:]):
-                item = self.scene.addLine(start[0], start[1], end[0], end[1], pen)
-                item.setZValue(38); item.setAcceptedMouseButtons(Qt.MouseButton.NoButton); item.setData(0, "runtime_trace")
+            """创建并更新持久化的运行时图元。"""
+            self._refresh_runtime_overlay()
 
     def _refresh_runtime_overlay(self) -> None:
-            """仅替换实机遥测图元，避免高频遥测清空并重建整个地图场景。"""
             if not hasattr(self, "scene"):
                 return
-            for item in list(self.scene.items()):
-                marker = item.data(0)
-                if isinstance(marker, str) and marker.startswith("runtime_"):
-                    self.scene.removeItem(item)
-            self.draw_runtime_overlay()
+            self._ensure_runtime_overlay_items()
+            for item in (self._runtime_car_item, self._runtime_direction_item,
+                         self._runtime_target_item, self._runtime_target_direction_item,
+                         self._runtime_trace_item, self._runtime_projection_item,
+                         self._runtime_lookahead_item):
+                item.setVisible(False)
+            if len(self._execution_trace) >= 2:
+                path = QPainterPath()
+                points = [world_to_paper(pose, self.plan.start_paper_x_mm,
+                                         self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                          for pose in self._execution_trace]
+                path.moveTo(*points[0])
+                for point in points[1:]:
+                    path.lineTo(*point)
+                self._runtime_trace_item.setPath(path); self._runtime_trace_item.setVisible(True)
+            if self._execution_target is not None:
+                x, y = world_to_paper(self._execution_target, self.plan.start_paper_x_mm,
+                                      self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                self._runtime_target_item.setPos(x, y); self._runtime_target_item.setVisible(True)
+                self._runtime_target_direction_item.setPos(x, y)
+                self._runtime_target_direction_item.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, self._execution_target.yaw_deg))
+                self._runtime_target_direction_item.setVisible(True)
+            if self._path_runtime is not None:
+                projection = Pose(self._path_runtime.projection_x_mm,
+                                  self._path_runtime.projection_y_mm)
+                lookahead = Pose(self._path_runtime.lookahead_x_mm,
+                                 self._path_runtime.lookahead_y_mm)
+                px, py = world_to_paper(projection, self.plan.start_paper_x_mm,
+                                        self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                lx, ly = world_to_paper(lookahead, self.plan.start_paper_x_mm,
+                                        self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                self._runtime_projection_item.setPos(px, py); self._runtime_projection_item.setVisible(True)
+                self._runtime_lookahead_item.setPos(lx, ly); self._runtime_lookahead_item.setVisible(True)
+            if self._runtime_pose is not None:
+                x, y = world_to_paper(self._runtime_pose, self.plan.start_paper_x_mm,
+                                      self.plan.start_paper_y_mm, self.plan.start_heading_deg)
+                self._runtime_car_item.setPos(x, y)
+                self._runtime_car_item.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, self._runtime_pose.yaw_deg))
+                self._runtime_car_item.setVisible(True)
+                self._runtime_direction_item.setPos(x, y)
+                self._runtime_direction_item.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, self._runtime_pose.yaw_deg))
+                self._runtime_direction_item.setVisible(True)
             self._refresh_execution_status()
 
     def clear_preview(self, redraw=True):

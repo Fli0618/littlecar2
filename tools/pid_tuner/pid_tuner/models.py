@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
-class PidConfig:
+class PidConfigSnapshot:
     kp_pos: float
     ki_pos: float
     kd_pos: float
@@ -19,7 +20,7 @@ class PidConfig:
 
 
 @dataclass(frozen=True)
-class PathControlConfig:
+class PathConfigSnapshot:
     """Runtime-tunable continuous-path controller and speed-planner values."""
 
     kp_cross_track: float
@@ -31,11 +32,17 @@ class PathControlConfig:
     accel_mm_s2: float
     decel_mm_s2: float
     max_lateral_accel_mm_s2: float
+    curvature_preview_mm: float
+    curvature_ff_time_s: float
     lookahead_min_mm: float
     lookahead_base_mm: float
     lookahead_speed_gain_s: float
     lookahead_curve_gain_mm: float
     lookahead_max_mm: float
+    lookahead_rate_mm_s: float
+    initial_lookahead_mm: float
+    final_capture_distance_mm: float
+    final_capture_speed_mm_s: float
 
     def to_dict(self) -> dict[str, float]:
         return asdict(self)
@@ -92,6 +99,100 @@ class Telemetry:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class GotoStrategySnapshot:
+    large_yaw_align_enabled: bool
+
+
+@dataclass(frozen=True)
+class AckResponse:
+    command: int
+    sequence: int
+    revision: int = 0
+    applied: bool = False
+
+
+@dataclass(frozen=True)
+class PathStatus:
+    motion_state: int
+    active_present: bool
+    staging_state: int
+    active_count: int
+    staging_count: int
+    received_count: int
+    active_id: int
+    staging_id: int
+
+
+@dataclass(frozen=True)
+class PathPointSnapshot:
+    x_mm: float
+    y_mm: float
+    yaw_deg: float
+
+
+@dataclass(frozen=True)
+class PathBeginCommand:
+    path_id: int
+    point_count: int
+    crc16: int
+
+
+@dataclass(frozen=True)
+class PathChunkCommand:
+    path_id: int
+    first_index: int
+    points: tuple[PathPointSnapshot, ...]
+
+
+@dataclass(frozen=True)
+class PathCommitCommand:
+    path_id: int
+
+
+@dataclass(frozen=True)
+class PathStartCommand:
+    path_id: int
+
+
+@dataclass(frozen=True)
+class PathTelemetry:
+    tick: int
+    path_id: int
+    path_config_revision: int
+    state: int
+    nearest_segment_index: int
+    target_segment_index: int
+    final_stage: int
+    progress_mm: float
+    remaining_mm: float
+    projection_x_mm: float
+    projection_y_mm: float
+    lookahead_x_mm: float
+    lookahead_y_mm: float
+    signed_curvature_1_mm: float
+    curvature_preview_1_mm: float
+    yaw_gradient_deg_per_mm: float
+    reference_speed_mm_s: float
+    lookahead_mm: float
+    feedforward_vx_mm_s: float
+    feedforward_vy_mm_s: float
+    feedforward_wz_deg_s: float
+    cross_track_mm: float
+    measured_normal_velocity_mm_s: float
+    normal_velocity_ff_mm_s: float
+    normal_feedback_mm_s: float
+    command_wz_deg_s: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+# 兼容已有工具调用方；新代码应使用带 Snapshot 后缀的类型名。
+PidConfig = PidConfigSnapshot
+PathControlConfig = PathConfigSnapshot
 
 
 class TunerError(RuntimeError):

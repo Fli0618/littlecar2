@@ -9,7 +9,7 @@ from typing import Literal, Union
 
 FIELD_SIZE_MM = 2400.0
 CAR_SIZE_MM = 300.0
-MAP_VERSION = 8
+MAP_VERSION = 9
 StartKind = Literal["zone_1", "zone_2", "custom"]
 # 仅用于旧调用方的类型兼容；v7 的持久化语义由 steps 决定。
 
@@ -135,8 +135,8 @@ class Plan:
         if not isinstance(value, dict):
             raise ValueError("方案 JSON 格式无效")
         version = value.get("map_version")
-        if version not in (7, MAP_VERSION):
-            raise ValueError("仅支持 map_version: 7 或 8 的流程方案")
+        if version != MAP_VERSION:
+            raise ValueError("旧版地图坐标语义不再自动迁移，请重新建立并保存为 map_version 9")
         allowed_keys = {"map_version", "name", "created_at", "updated_at", "start", "steps", "layout"}
         if set(value) != allowed_keys:
             raise ValueError("方案 JSON 格式无效")
@@ -158,7 +158,7 @@ class Plan:
                     points = fields.pop("points", [])
                     if not isinstance(points, list) or not all(isinstance(point, dict) for point in points): raise ValueError
                     steps.append(ContinuousPathSegment(points=[PathPosePoint(**point) for point in points], **fields))
-                elif step_type == "bezier_path" and version == MAP_VERSION:
+                elif step_type == "bezier_path":
                     steps.append(BezierPathSegment(**fields))
                 else: raise ValueError
             obstacles = layout.get("obstacles", [])

@@ -7,7 +7,7 @@ from pid_tuner.protocol import (
     Frame,
     StreamDecoder,
     crc16_ccitt_false,
-    decode_telemetry,
+    decode_path_telemetry, decode_telemetry,
     encode_frame,
 )
 from pid_tuner.models import PathControlConfig
@@ -15,7 +15,8 @@ from pid_tuner.models import PathControlConfig
 
 PATH_CONFIG = PathControlConfig(
     0.98, 0.62, 1.42, 0.427, 820.0, 100.0, 800.0, 1000.0,
-    600.0, 60.0, 60.0, 0.15, 120.0, 180.0,
+    600.0, 300.0, 0.05, 60.0, 60.0, 0.15, 120.0, 180.0,
+    400.0, 80.0, 60.0, 150.0,
 )
 
 
@@ -72,7 +73,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_path_config_round_trip_and_validation(self) -> None:
         encoded = encode_path_config(PATH_CONFIG)
-        self.assertEqual(len(encoded), 56)
+        self.assertEqual(len(encoded), 80)
         revision, decoded = decode_path_config(struct.pack("<I", 7) + encoded)
         self.assertEqual(revision, 7)
         for actual, expected in zip(decoded.to_dict().values(), PATH_CONFIG.to_dict().values()):
@@ -82,6 +83,20 @@ class ProtocolTests(unittest.TestCase):
                 **{**PATH_CONFIG.to_dict(), "lookahead_min_mm": 200.0,
                    "lookahead_max_mm": 100.0}
             ))
+
+    def test_path_telemetry_is_typed_and_within_frame_budget(self) -> None:
+        values = [float(index) for index in range(19)]
+        payload = struct.pack("<IIIBHHB19f", 1, 2, 3, 1, 4, 5, 0, *values)
+        self.assertEqual(len(payload), 94)
+        item = decode_path_telemetry(Frame(0x85, 0, payload))
+        self.assertEqual((item.path_id, item.path_config_revision), (2, 3))
+        self.assertEqual(item.command_wz_deg_s, 18.0)
+
+    def test_decoder_rejects_legacy_protocol_version(self) -> None:
+        legacy = encode_frame(0x01, 1, version=2)
+        decoder = StreamDecoder()
+        self.assertEqual(decoder.feed(legacy), [])
+        self.assertEqual(decoder.format_errors, 1)
 
 
 if __name__ == "__main__":

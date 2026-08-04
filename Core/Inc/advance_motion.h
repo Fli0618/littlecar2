@@ -156,20 +156,35 @@ extern "C"
   /** @brief 连续路径控制器与速度规划器的完整运行时参数组。 */
   typedef struct
   {
+    /* 横向与航向反馈。 */
     float kp_cross_track;
     float kd_cross_track_velocity;
     float kp_yaw;
     float kd_yaw_rate;
+
+    /* 速度与加速度约束。 */
     float cruise_speed_mm_s;
     float max_yaw_rate_deg_s;
     float accel_mm_s2;
     float decel_mm_s2;
     float max_lateral_accel_mm_s2;
+
+    /* 曲率预览与法向前馈。 */
+    float curvature_preview_mm;
+    float curvature_ff_time_s;
+
+    /* 前视距离规划。 */
     float lookahead_min_mm;
     float lookahead_base_mm;
     float lookahead_speed_gain_s;
     float lookahead_curve_gain_mm;
     float lookahead_max_mm;
+    float lookahead_rate_mm_s;
+    float initial_lookahead_mm;
+
+    /* 末段捕获。 */
+    float final_capture_distance_mm;
+    float final_capture_speed_mm_s;
   } AdvanceMotion_PathControlConfig_t;
 
   typedef struct
@@ -198,6 +213,7 @@ extern "C"
   {
     uint32_t tick;
     uint32_t pid_revision;
+    uint32_t path_config_revision;
     AdvanceMotion_RunState_t state;
     uint8_t flags;
     WorldGoalPose2D_t goal;
@@ -220,6 +236,9 @@ extern "C"
     float path_remaining_mm; /*!< 从投影点到最终点的剩余弧长，单位为 mm。 */
     float path_projection_x_mm; /*!< 当前路径投影点 world X，单位为 mm。 */
     float path_projection_y_mm; /*!< 当前路径投影点 world Y，单位为 mm。 */
+    float path_lookahead_x_mm; /*!< 动态前视点 world X，单位为 mm。 */
+    float path_lookahead_y_mm; /*!< 动态前视点 world Y，单位为 mm。 */
+    float path_signed_curvature_1_mm; /*!< 当前局部带符号曲率，单位为 1/mm。 */
     float path_curvature_preview_1_mm; /*!< 预览窗口内的最大绝对曲率，单位为 1/mm。 */
     float path_yaw_gradient_deg_per_mm; /*!< 投影段的有符号航向梯度，单位为 deg/mm。 */
     float path_reference_speed_mm_s; /*!< 加减速约束后的路径参考速度，单位为 mm/s。 */
@@ -227,6 +246,11 @@ extern "C"
     float path_feedforward_vx_mm_s; /*!< 路径切向 X 速度前馈，单位为 mm/s。 */
     float path_feedforward_vy_mm_s; /*!< 路径切向 Y 速度前馈，单位为 mm/s。 */
     float path_feedforward_wz_deg_s; /*!< 路径航向变化率前馈，单位为 deg/s。 */
+    float path_cross_track_mm; /*!< 当前横向误差，单位为 mm。 */
+    float path_measured_normal_velocity_mm_s; /*!< 实测左法向速度，单位为 mm/s。 */
+    float path_normal_velocity_ff_mm_s; /*!< 曲率法向速度前馈，单位为 mm/s。 */
+    float path_normal_feedback_mm_s; /*!< 横向 PD 合成修正量，单位为 mm/s。 */
+    float path_command_wz_deg_s; /*!< 路径分支最终角速度指令，单位为 deg/s。 */
     uint8_t path_final_stage; /*!< 非零表示已进入最终 Goto PID 捕获阶段。 */
   } AdvanceMotion_DebugSnapshot_t;
 
