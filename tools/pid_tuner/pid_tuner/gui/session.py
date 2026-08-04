@@ -93,10 +93,15 @@ class SessionController(QObject):
         self._submit(lambda client: client.get_pid(), lambda value: self.pid_read.emit(value[0], value[1]))
 
     def apply_pid(self, pid: PidConfig) -> None:
-        def accepted(value: object) -> None:
-            self._pending_pid = (int(value), pid)
-            self.status.emit(f"PID 修订号 {value}：等待周期应用")
-        self._submit(lambda client: client.set_pid(pid), accepted)
+        def set_and_confirm(client: SerialClient) -> tuple[int, PidConfig]:
+            revision = client.set_pid(pid)
+            for _ in range(25):
+                active, _config = client.get_pid()
+                if active == revision:
+                    return revision, pid
+                time.sleep(0.02)
+            raise RuntimeError(f"PID 修订号 {revision} 未在周期边界生效")
+        self._submit(set_and_confirm, lambda value: self.pid_applied.emit(*value))
 
     def restore_pid(self) -> None:
         self._submit(lambda client: client.restore_pid(), lambda value: self.status.emit(f"PID 已恢复默认，修订号 {value}"))
@@ -106,16 +111,25 @@ class SessionController(QObject):
                      lambda value: self.path_config_read.emit(value[0], value[1]))
 
     def apply_path_config(self, config: PathControlConfig) -> None:
-        def accepted(value: object) -> None:
-            self._pending_path_config = (int(value), config)
-            self.status.emit(f"路径参数修订号 {value}：等待路径遥测确认")
-        self._submit(lambda client: client.set_path_config(config), accepted)
+        def set_and_confirm(client: SerialClient) -> tuple[int, PathControlConfig]:
+            revision = client.set_path_config(config)
+            for _ in range(25):
+                active, _config = client.get_path_config()
+                if active == revision:
+                    return revision, config
+                time.sleep(0.02)
+            raise RuntimeError(f"路径参数修订号 {revision} 未在周期边界生效")
+        self._submit(set_and_confirm, lambda value: self.path_config_applied.emit(*value))
 
     def restore_path_config(self) -> None:
         def restore_and_read(client: SerialClient) -> tuple[int, tuple[int, PathControlConfig]]:
             revision = client.restore_path_config()
-            time.sleep(0.05)
-            return revision, client.get_path_config()
+            for _ in range(25):
+                active = client.get_path_config()
+                if active[0] == revision:
+                    return revision, active
+                time.sleep(0.02)
+            raise RuntimeError(f"路径默认参数修订号 {revision} 未生效")
 
         def restored(value: object) -> None:
             revision, active = cast(tuple[int, tuple[int, PathControlConfig]], value)

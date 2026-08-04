@@ -17,11 +17,12 @@ class PathControlPanelTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_panel_round_trips_all_fourteen_values(self) -> None:
+    def test_panel_round_trips_all_twenty_values(self) -> None:
         panel = PathControlPanel()
         config = PathControlConfig(
             1.0, 0.5, 1.5, 0.4, 700.0, 90.0, 600.0, 800.0,
-            500.0, 50.0, 70.0, 0.12, 100.0, 160.0,
+            500.0, 300.0, 0.05, 50.0, 70.0, 0.12, 100.0, 160.0,
+            400.0, 80.0, 60.0, 150.0,
         )
         requested: list[PathControlConfig] = []
         panel.apply_config_requested.connect(requested.append)

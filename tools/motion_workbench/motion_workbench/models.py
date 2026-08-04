@@ -60,5 +60,3 @@ class ExperimentResult:
     reason: str
     pid_revision: int
     yaw_source: str
-
-

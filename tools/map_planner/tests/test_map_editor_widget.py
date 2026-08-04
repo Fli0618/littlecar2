@@ -46,7 +46,8 @@ class MapEditorWidgetTests(unittest.TestCase):
             self.assertIn("runtime_car", [item.data(0) for item in widget.scene.items()])
             widget.clear_runtime_pose()
             self.assertEqual(len(overlays), 2)
-            self.assertNotIn("runtime_car", [item.data(0) for item in widget.scene.items()])
+            runtime_car = next(item for item in widget.scene.items() if item.data(0) == "runtime_car")
+            self.assertFalse(runtime_car.isVisible())
         finally:
             widget.close()
 
@@ -78,20 +79,6 @@ class MapEditorWidgetTests(unittest.TestCase):
             self.assertIn("runtime_car", markers)
             self.assertIn("runtime_trace", markers)
             self.assertIn("误差 X=10.0 mm", widget.execution_status_label.text())
-
-            transforms = []
-            widget.runtime_axis_transform_changed.connect(
-                lambda swap, x, y: transforms.append((swap, x, y)))
-            self.assertFalse(widget.execution_flip_x.isChecked())
-            self.assertFalse(widget.execution_flip_y.isChecked())
-            widget.execution_swap_xy.setChecked(True)
-            widget.execution_flip_x.setChecked(True)
-            widget.execution_flip_y.setChecked(True)
-            self.assertEqual(transforms, [
-                (True, False, False),
-                (True, True, False),
-                (True, True, True),
-            ])
 
             widget.set_execution_enabled(False)
             self.assertFalse(widget.execution_step_button.isEnabled())

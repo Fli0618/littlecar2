@@ -8,9 +8,7 @@ from pid_tuner.models import MotionGoal, Telemetry
 from map_planner.models import BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan, RotateInPlace, Waypoint
 
 from motion_workbench.controller import MotionWorkbenchController
-from motion_workbench.models import (PlanExecutionState, TargetPose,
-                                     inverse_transform_target_pose,
-                                     reflect_target_pose, transform_target_pose)
+from motion_workbench.models import PlanExecutionState, TargetPose
 
 
 class FakeSession(QObject):
@@ -21,12 +19,12 @@ class FakeSession(QObject):
 
     def __init__(self) -> None:
         super().__init__(); self.started: list[MotionGoal] = []; self.stopped = 0
-        self.uploaded: list[tuple[bytes, list[bytes], bytes]] = []; self.paths_started: list[bytes] = []
+        self.uploaded = []; self.paths_started = []
 
     def start_motion(self, goal: MotionGoal) -> None: self.started.append(goal)
     def stop(self) -> None: self.stopped += 1
-    def upload_path(self, begin: bytes, chunks: list[bytes], commit: bytes) -> None: self.uploaded.append((begin, chunks, commit))
-    def start_path(self, payload: bytes) -> None: self.paths_started.append(payload)
+    def upload_path(self, begin, chunks, commit) -> None: self.uploaded.append((begin, chunks, commit))
+    def start_path(self, command) -> None: self.paths_started.append(command)
 
 
 class ControllerTests(unittest.TestCase):
@@ -111,61 +109,13 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(len(session.started), 2)
         self.assertEqual(session.started[0], session.started[1])
 
-    def test_runtime_pose_reflection_updates_position_and_heading(self) -> None:
-        pose = TargetPose(10.0, 20.0, 30.0)
-        self.assertEqual(reflect_target_pose(pose, False, False), pose)
-        self.assertEqual(reflect_target_pose(pose, True, False), TargetPose(-10.0, 20.0, -30.0))
-        self.assertEqual(reflect_target_pose(pose, False, True), TargetPose(10.0, -20.0, 150.0))
-        both = reflect_target_pose(pose, True, True)
-        self.assertEqual((both.x_mm, both.y_mm), (-10.0, -20.0))
-        self.assertAlmostEqual(both.yaw_deg, -150.0)
-
-    def test_runtime_pose_transform_covers_all_axis_combinations(self) -> None:
-        pose = TargetPose(10.0, 20.0, 30.0)
-        expected = {
-            (False, False, False): (10.0, 20.0, 30.0),
-            (False, True, False): (-10.0, 20.0, -30.0),
-            (False, False, True): (10.0, -20.0, 150.0),
-            (False, True, True): (-10.0, -20.0, -150.0),
-            (True, False, False): (20.0, 10.0, 60.0),
-            (True, True, False): (-20.0, 10.0, -60.0),
-            (True, False, True): (20.0, -10.0, 120.0),
-            (True, True, True): (-20.0, -10.0, -120.0),
-        }
-        for flags, result in expected.items():
-            with self.subTest(flags=flags):
-                transformed = transform_target_pose(pose, *flags)
-                self.assertEqual((transformed.x_mm, transformed.y_mm), result[:2])
-                self.assertAlmostEqual(transformed.yaw_deg, result[2])
-
-        self.assertEqual(pose, TargetPose(10.0, 20.0, 30.0))
-
-    def test_display_and_command_axis_transforms_are_inverse(self) -> None:
-        pose = TargetPose(10.0, 20.0, 30.0)
-        for swap_xy in (False, True):
-            for flip_x in (False, True):
-                for flip_y in (False, True):
-                    with self.subTest(swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y):
-                        displayed = transform_target_pose(pose, swap_xy, flip_x, flip_y)
-                        restored = inverse_transform_target_pose(
-                            displayed, swap_xy, flip_x, flip_y)
-                        self.assertAlmostEqual(restored.x_mm, pose.x_mm)
-                        self.assertAlmostEqual(restored.y_mm, pose.y_mm)
-                        self.assertAlmostEqual(restored.yaw_deg, pose.yaw_deg)
-
-    def test_command_transform_applies_to_goal_and_path_without_changing_plan(self) -> None:
+    def test_commands_use_fixed_world_coordinates_without_runtime_transform(self) -> None:
         session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
-        controller.set_command_axis_transform(False, True, True)
         controller.select_candidate(TargetPose(10, 20, 30))
         controller.start_goal(MotionGoal(10, 20, 30, 100, 50, 1000))
 
         self.assertEqual(controller.execution, TargetPose(10, 20, 30))
-        self.assertEqual(session.started[-1], MotionGoal(-10, -20, -150, 100, 50, 1000))
-
-        source = [PathPosePoint(10, 20, 30)]
-        transformed = controller._transform_path_for_command(source)
-        self.assertEqual(source, [PathPosePoint(10, 20, 30)])
-        self.assertEqual(transformed, [PathPosePoint(-10, -20, -150)])
+        self.assertEqual(session.started[-1], MotionGoal(10, 20, 30, 100, 50, 1000))
 
     @staticmethod
     def _telemetry(state: int) -> Telemetry:

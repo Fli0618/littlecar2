@@ -11,4 +11,3 @@ from pid_tuner.protocol import build_path_upload
 def build_path_commands(path_id: int, points: Iterable[object]) -> tuple[
         PathBeginCommand, tuple[PathChunkCommand, ...], PathCommitCommand]:
     return build_path_upload(path_id, points)
-

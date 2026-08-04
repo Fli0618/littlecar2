@@ -289,11 +289,10 @@ def decode_path_status(frame: Frame) -> PathStatus:
 
 
 def decode_ack(frame: Frame) -> AckResponse:
-    if frame.version != VERSION or frame.command != CMD_ACK or len(frame.payload) not in (0, 5):
+    if frame.version != VERSION or frame.command != CMD_ACK or len(frame.payload) not in (1, 5):
         raise ProtocolError("invalid ACK frame")
-    revision = struct.unpack("<I", frame.payload[:4])[0] if len(frame.payload) >= 4 else 0
-    applied = bool(frame.payload[4]) if len(frame.payload) == 5 else False
-    return AckResponse(frame.command, frame.sequence, revision, applied)
+    revision = struct.unpack("<I", frame.payload[1:5])[0] if len(frame.payload) == 5 else 0
+    return AckResponse(frame.payload[0], frame.sequence, revision, False)
 
 
 class StreamDecoder:
