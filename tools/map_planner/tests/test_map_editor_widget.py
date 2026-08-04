@@ -105,7 +105,7 @@ class MapEditorWidgetTests(unittest.TestCase):
     def test_start_frame_change_is_blocked_while_executing(self):
         widget = MapEditorWidget()
         try:
-            widget.set_execution_enabled(True)
+            widget.set_hardware_motion_active(True)
             with self.assertRaisesRegex(RuntimeError, "执行期间"):
                 widget.begin_start("启停区 2")
         finally:
