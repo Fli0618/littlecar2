@@ -8,7 +8,7 @@
 
 #define COMM_TUNER_RX_DMA_SIZE ((uint16_t)128U)
 #define COMM_TUNER_QUEUE_DEPTH ((uint8_t)4U)
-#define COMM_TUNER_PROTOCOL_VERSION ((uint8_t)2U)
+#define COMM_TUNER_PROTOCOL_VERSION ((uint8_t)3U)
 #define COMM_TUNER_MAX_PAYLOAD_SIZE ((uint16_t)96U)
 #define COMM_TUNER_FRAME_OVERHEAD ((uint16_t)9U)
 #define COMM_TUNER_FRAME_MAX_SIZE (COMM_TUNER_FRAME_OVERHEAD + COMM_TUNER_MAX_PAYLOAD_SIZE)
@@ -75,9 +75,9 @@
 #define COMM_TUNER_PATH_CHUNK_HEADER_BYTES ((uint16_t)7U)
 #define COMM_TUNER_PATH_CHUNK_MAX_POINTS ((uint8_t)7U)
 #define COMM_TUNER_PATH_STATUS_PAYLOAD_SIZE ((uint16_t)17U)
-#define COMM_TUNER_PATH_TELEMETRY_PAYLOAD_SIZE ((uint16_t)50U)
-#define COMM_TUNER_SET_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)56U)
-#define COMM_TUNER_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)60U)
+#define COMM_TUNER_PATH_TELEMETRY_PAYLOAD_SIZE ((uint16_t)94U)
+#define COMM_TUNER_SET_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)80U)
+#define COMM_TUNER_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)84U)
 
 typedef enum
 {
@@ -375,7 +375,7 @@ static void CommTuner_SendPathConfig(uint8_t request_command, uint8_t request_se
   AdvanceMotion_PathControlConfig_t config;
   uint32_t revision;
   uint8_t payload[COMM_TUNER_PATH_CONFIG_PAYLOAD_SIZE];
-  float values[14U];
+  float values[20U];
   uint8_t index;
 
   if (AdvanceMotion_GetPathControlConfig(&config, &revision) != ADVANCE_MOTION_STATUS_OK)
@@ -394,12 +394,18 @@ static void CommTuner_SendPathConfig(uint8_t request_command, uint8_t request_se
   values[6] = config.accel_mm_s2;
   values[7] = config.decel_mm_s2;
   values[8] = config.max_lateral_accel_mm_s2;
-  values[9] = config.lookahead_min_mm;
-  values[10] = config.lookahead_base_mm;
-  values[11] = config.lookahead_speed_gain_s;
-  values[12] = config.lookahead_curve_gain_mm;
-  values[13] = config.lookahead_max_mm;
-  for (index = 0U; index < 14U; ++index)
+  values[9] = config.curvature_preview_mm;
+  values[10] = config.curvature_ff_time_s;
+  values[11] = config.lookahead_min_mm;
+  values[12] = config.lookahead_base_mm;
+  values[13] = config.lookahead_speed_gain_s;
+  values[14] = config.lookahead_curve_gain_mm;
+  values[15] = config.lookahead_max_mm;
+  values[16] = config.lookahead_rate_mm_s;
+  values[17] = config.initial_lookahead_mm;
+  values[18] = config.final_capture_distance_mm;
+  values[19] = config.final_capture_speed_mm_s;
+  for (index = 0U; index < 20U; ++index)
   {
     CommTuner_WriteFloat(&payload[4U + ((uint16_t)index * 4U)], values[index]);
   }
@@ -470,20 +476,31 @@ static void CommTuner_QueuePathTelemetry(void)
     return;
   }
   CommTuner_WriteU32(&payload[0], snapshot.tick);
-  payload[4] = (uint8_t)snapshot.state;
-  CommTuner_WriteU16(&payload[5], snapshot.nearest_segment_index);
-  CommTuner_WriteU16(&payload[7], snapshot.target_segment_index);
-  CommTuner_WriteFloat(&payload[9], snapshot.path_progress_mm);
-  CommTuner_WriteFloat(&payload[13], snapshot.path_remaining_mm);
-  CommTuner_WriteFloat(&payload[17], snapshot.path_projection_x_mm);
-  CommTuner_WriteFloat(&payload[21], snapshot.path_projection_y_mm);
-  CommTuner_WriteFloat(&payload[25], snapshot.path_curvature_preview_1_mm);
-  CommTuner_WriteFloat(&payload[29], snapshot.path_yaw_gradient_deg_per_mm);
-  CommTuner_WriteFloat(&payload[33], snapshot.path_reference_speed_mm_s);
-  CommTuner_WriteFloat(&payload[37], snapshot.path_lookahead_mm);
-  CommTuner_WriteFloat(&payload[41], snapshot.path_feedforward_vx_mm_s);
-  CommTuner_WriteFloat(&payload[45], snapshot.path_feedforward_vy_mm_s);
-  payload[49] = snapshot.path_final_stage;
+  CommTuner_WriteU32(&payload[4], g_path_active_id);
+  CommTuner_WriteU32(&payload[8], snapshot.path_config_revision);
+  payload[12] = (uint8_t)snapshot.state;
+  CommTuner_WriteU16(&payload[13], snapshot.nearest_segment_index);
+  CommTuner_WriteU16(&payload[15], snapshot.target_segment_index);
+  payload[17] = snapshot.path_final_stage;
+  CommTuner_WriteFloat(&payload[18], snapshot.path_progress_mm);
+  CommTuner_WriteFloat(&payload[22], snapshot.path_remaining_mm);
+  CommTuner_WriteFloat(&payload[26], snapshot.path_projection_x_mm);
+  CommTuner_WriteFloat(&payload[30], snapshot.path_projection_y_mm);
+  CommTuner_WriteFloat(&payload[34], snapshot.path_lookahead_x_mm);
+  CommTuner_WriteFloat(&payload[38], snapshot.path_lookahead_y_mm);
+  CommTuner_WriteFloat(&payload[42], snapshot.path_signed_curvature_1_mm);
+  CommTuner_WriteFloat(&payload[46], snapshot.path_curvature_preview_1_mm);
+  CommTuner_WriteFloat(&payload[50], snapshot.path_yaw_gradient_deg_per_mm);
+  CommTuner_WriteFloat(&payload[54], snapshot.path_reference_speed_mm_s);
+  CommTuner_WriteFloat(&payload[58], snapshot.path_lookahead_mm);
+  CommTuner_WriteFloat(&payload[62], snapshot.path_feedforward_vx_mm_s);
+  CommTuner_WriteFloat(&payload[66], snapshot.path_feedforward_vy_mm_s);
+  CommTuner_WriteFloat(&payload[70], snapshot.path_feedforward_wz_deg_s);
+  CommTuner_WriteFloat(&payload[74], snapshot.path_cross_track_mm);
+  CommTuner_WriteFloat(&payload[78], snapshot.path_measured_normal_velocity_mm_s);
+  CommTuner_WriteFloat(&payload[82], snapshot.path_normal_velocity_ff_mm_s);
+  CommTuner_WriteFloat(&payload[86], snapshot.path_normal_feedback_mm_s);
+  CommTuner_WriteFloat(&payload[90], snapshot.path_command_wz_deg_s);
 
   frame_length = CommTuner_BuildFrame(COMM_TUNER_CMD_PATH_TELEMETRY,
                                       g_telemetry_sequence++, payload, sizeof(payload),
@@ -892,7 +909,7 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
     AdvanceMotion_PathControlConfig_t config;
     AdvanceMotion_Status_t status;
     uint32_t revision;
-    float values[14U];
+    float values[20U];
     uint8_t index;
 
     if (payload_length != COMM_TUNER_SET_PATH_CONFIG_PAYLOAD_SIZE)
@@ -900,7 +917,7 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
       CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
       return;
     }
-    for (index = 0U; index < 14U; ++index)
+    for (index = 0U; index < 20U; ++index)
     {
       values[index] = CommTuner_ReadFloat(&payload[(uint16_t)index * 4U]);
     }
@@ -913,11 +930,17 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
     config.accel_mm_s2 = values[6];
     config.decel_mm_s2 = values[7];
     config.max_lateral_accel_mm_s2 = values[8];
-    config.lookahead_min_mm = values[9];
-    config.lookahead_base_mm = values[10];
-    config.lookahead_speed_gain_s = values[11];
-    config.lookahead_curve_gain_mm = values[12];
-    config.lookahead_max_mm = values[13];
+    config.curvature_preview_mm = values[9];
+    config.curvature_ff_time_s = values[10];
+    config.lookahead_min_mm = values[11];
+    config.lookahead_base_mm = values[12];
+    config.lookahead_speed_gain_s = values[13];
+    config.lookahead_curve_gain_mm = values[14];
+    config.lookahead_max_mm = values[15];
+    config.lookahead_rate_mm_s = values[16];
+    config.initial_lookahead_mm = values[17];
+    config.final_capture_distance_mm = values[18];
+    config.final_capture_speed_mm_s = values[19];
     status = AdvanceMotion_RequestPathControlConfig(&config, &revision);
     if (status != ADVANCE_MOTION_STATUS_OK)
     {

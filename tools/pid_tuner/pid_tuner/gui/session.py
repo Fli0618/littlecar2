@@ -6,9 +6,8 @@ from typing import Callable, cast
 
 from PySide6.QtCore import QObject, Signal
 
-from ..models import MotionGoal, PathControlConfig, PidConfig, Telemetry
+from ..models import MotionGoal, PathControlConfig, PathTelemetry, PidConfig, Telemetry
 from ..serial_client import SerialClient
-from ..protocol import Frame
 
 
 class SessionController(QObject):
@@ -188,8 +187,8 @@ class SessionController(QObject):
         self._set_motion_active(False)
         self._submit(lambda client: client.path_abort(), lambda _: self.path_upload_changed.emit("路径已中止"))
 
-    def _handle_path_telemetry(self, frame: Frame) -> None:
-        self.path_telemetry.emit(frame)
+    def _handle_path_telemetry(self, telemetry: PathTelemetry) -> None:
+        self.path_telemetry.emit(telemetry)
 
     def shutdown(self) -> None:
         self.disconnect(); self._executor.shutdown(wait=False)

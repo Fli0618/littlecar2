@@ -61,12 +61,22 @@ class PathControlPanel(QWidget):
                 ("decel_mm_s2", "减速度 mm/s²", 1000.0, 1.0, 5000.0, 10.0),
                 ("max_lateral_accel_mm_s2", "横向加速度 mm/s²", 600.0, 1.0, 5000.0, 10.0),
             )),
+            ("曲率前馈", (
+                ("curvature_preview_mm", "曲率预览 mm", 300.0, 1.0, 2000.0, 5.0),
+                ("curvature_ff_time_s", "曲率前馈等效时间 s", 0.05, 0.0, 2.0, 0.01),
+            )),
             ("前视规划", (
                 ("lookahead_min_mm", "最小前视 mm", 60.0, 1.0, 1000.0, 5.0),
                 ("lookahead_base_mm", "基础前视 mm", 60.0, 1.0, 1000.0, 5.0),
                 ("lookahead_speed_gain_s", "速度增益 s", 0.15, 0.0, 2.0, 0.01),
                 ("lookahead_curve_gain_mm", "曲率增益 mm", 120.0, 0.0, 1000.0, 5.0),
                 ("lookahead_max_mm", "最大前视 mm", 180.0, 1.0, 1000.0, 5.0),
+                ("lookahead_rate_mm_s", "前视变化率 mm/s", 400.0, 1.0, 2000.0, 10.0),
+                ("initial_lookahead_mm", "初始前视 mm", 80.0, 1.0, 1000.0, 5.0),
+            )),
+            ("末段捕获", (
+                ("final_capture_distance_mm", "捕获距离 mm", 60.0, 0.0, 2000.0, 5.0),
+                ("final_capture_speed_mm_s", "捕获速度 mm/s", 150.0, 0.0, 1500.0, 5.0),
             )),
         )
         for title, fields in groups:
