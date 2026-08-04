@@ -151,6 +151,23 @@ class MotionCompatibilityTests(unittest.TestCase):
         self.assertRegex(source, r"COMM_TUNER_SET_GOTO_CONFIG_PAYLOAD_SIZE \(\(uint16_t\)84U\)")
         self.assertRegex(source, r"COMM_TUNER_GOTO_CONFIG_PAYLOAD_SIZE \(\(uint16_t\)88U\)")
 
+    def test_goto_profile_source_keeps_capture_and_final_stage_guards(self) -> None:
+        source = (ROOT / "Core" / "Src" / "advance_motion.c").read_text(encoding="utf-8")
+
+        for field in (
+            "linear_profile_enabled", "yaw_profile_enabled", "linear_final_stage",
+            "yaw_final_stage", "linear_reference_speed_mm_s", "yaw_reference_rate_deg_s",
+        ):
+            self.assertIn(field, source)
+        self.assertIn("AdvanceMotion_GotoEquivalentDistanceToYawDeg", source)
+        self.assertIn("CHASSIS_HALF_LENGTH_MM + CHASSIS_HALF_WIDTH_MM", source)
+        self.assertIn("along_remaining_mm < 0.0f", source)
+        self.assertIn("measured_tangential_speed_mm_s", source)
+        self.assertIn("g_goto.linear_final_stage != 0U", source)
+        self.assertIn("g_goto.yaw_final_stage != 0U", source)
+        self.assertIn("g_pid_active.ki_pos", source)
+        self.assertIn("g_pid_active.ki_yaw", source)
+
     @staticmethod
     def _path_config():
         from pid_tuner.models import PathControlConfig

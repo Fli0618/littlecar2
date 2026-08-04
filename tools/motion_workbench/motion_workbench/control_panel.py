@@ -233,8 +233,10 @@ class GotoControlConfigPanel(QWidget):
 
     def current_config(self) -> GotoControlConfig:
         values = {name: box.value() for name, box in self.config_inputs.items()}
-        if values["capture_distance_mm"] < values["profile_threshold_mm"]:
-            raise ValueError("捕获距离必须不小于规划距离阈值")
+        if values["capture_distance_mm"] > values["profile_threshold_mm"]:
+            raise ValueError("捕获距离不能超过规划距离阈值")
+        if values["yaw_capture_equivalent_mm"] > values["profile_threshold_mm"]:
+            raise ValueError("航向捕获等效距离不能超过规划距离阈值")
         if values["capture_speed_mm_s"] > values["cruise_speed_mm_s"]:
             raise ValueError("捕获速度不能超过巡航速度")
         return GotoControlConfig(**values)

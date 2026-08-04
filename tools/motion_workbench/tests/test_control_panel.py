@@ -146,6 +146,35 @@ class ControlPanelTests(unittest.TestCase):
         finally:
             panel.close()
 
+    def test_goto_config_allows_capture_distances_at_profile_threshold(self) -> None:
+        panel = GotoControlConfigPanel()
+        try:
+            panel.config_inputs["profile_threshold_mm"].setValue(40.0)
+            panel.config_inputs["capture_distance_mm"].setValue(40.0)
+            panel.config_inputs["yaw_capture_equivalent_mm"].setValue(40.0)
+
+            config = panel.current_config()
+
+            self.assertEqual(config.capture_distance_mm, 40.0)
+            self.assertEqual(config.yaw_capture_equivalent_mm, 40.0)
+        finally:
+            panel.close()
+
+    def test_goto_config_rejects_capture_distances_above_profile_threshold(self) -> None:
+        panel = GotoControlConfigPanel()
+        try:
+            panel.config_inputs["profile_threshold_mm"].setValue(40.0)
+            panel.config_inputs["capture_distance_mm"].setValue(45.0)
+            with self.assertRaisesRegex(ValueError, "捕获距离不能超过规划距离阈值"):
+                panel.current_config()
+
+            panel.config_inputs["capture_distance_mm"].setValue(40.0)
+            panel.config_inputs["yaw_capture_equivalent_mm"].setValue(45.0)
+            with self.assertRaisesRegex(ValueError, "航向捕获等效距离不能超过规划距离阈值"):
+                panel.current_config()
+        finally:
+            panel.close()
+
 
 if __name__ == "__main__":
     unittest.main()
