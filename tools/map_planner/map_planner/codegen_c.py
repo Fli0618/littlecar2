@@ -135,6 +135,27 @@ def generate_task_function(plan: Plan, function_name: str,
     return "\n".join([*lines, "}", ""])
 
 
+def generate_standalone_c(plan: Plan, function_name: str,
+                          mode: CodeGenerationMode = CodeGenerationMode.FEEDBACK) -> str:
+    """Generate one complete .c translation unit that can be copied into Core/Src."""
+
+    validate_task_function_name(function_name)
+    function = generate_task_function(plan, function_name, mode)
+    return "\n".join([
+        "/* Copy this file to Core/Src and add it to the Keil/EIDE build. */",
+        '#include "advance_motion.h"',
+        "",
+        f"void {function_name}(void);",
+        "",
+        function.rstrip(),
+        "",
+        "/* Call from your business state machine after chassis initialization:",
+        f" *     {function_name}();",
+        " */",
+        "",
+    ])
+
+
 def _step_turn_codegen_summary(x_mm: float, y_mm: float, yaw_deg: float,
                                source_step: object, point_count: int) -> list[str]:
     if not isinstance(source_step, StepTurnPathSegment):

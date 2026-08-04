@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import math
 
 from .geometry import wrap_deg
-from .models import (BezierPathSegment, CAR_SIZE_MM, ContinuousPathSegment, PathPosePoint,
+from .models import (BezierPathSegment, CAR_SIZE_MM, ContinuousPathSegment,
                      Plan, Pose, RotateInPlace, StepTurnPathSegment, Waypoint)
 from .path_materializer import materialize_steps
 from .sim import Simulation
@@ -38,18 +38,25 @@ def _interpolate_poses(previous: Pose, current: Pose) -> list[Pose]:
     ]
 
 
-def car_polygon(pose: Pose) -> list[tuple[float, float]]:
+def car_polygon(pose: Pose, vehicle_length_mm: float = CAR_SIZE_MM,
+                vehicle_width_mm: float = CAR_SIZE_MM) -> list[tuple[float, float]]:
     """返回图纸 Y 轴向下坐标系中，按实际航向旋转后的车体四角。"""
-    half = CAR_SIZE_MM / 2.0
+    half_length = vehicle_length_mm / 2.0
+    half_width = vehicle_width_mm / 2.0
     angle = -math.radians(pose.yaw_deg)
     cosine, sine = math.cos(angle), math.sin(angle)
     return [
         (pose.x_mm + x * cosine - y * sine, pose.y_mm + x * sine + y * cosine)
-        for x, y in ((-half, -half), (half, -half), (half, half), (-half, half))
+        for x, y in ((-half_length, -half_width),
+                     (half_length, -half_width),
+                     (half_length, half_width),
+                     (-half_length, half_width))
     ]
 
 
-def build_goto_sweep(start: Pose, target: Pose, vmax_mm_s: float, wmax_deg_s: float, timeout_s: float) -> SweepGeometry:
+def build_goto_sweep(start: Pose, target: Pose, vmax_mm_s: float, wmax_deg_s: float,
+                     timeout_s: float, vehicle_length_mm: float = CAR_SIZE_MM,
+                     vehicle_width_mm: float = CAR_SIZE_MM) -> SweepGeometry:
     """以正式仿真的同一固定加减速状态机生成 GOTO 的车体扫掠。"""
     command = Waypoint(target.x_mm, target.y_mm, target.yaw_deg, use_yaw=True, vmax_mm_s=vmax_mm_s, wmax_deg_s=wmax_deg_s, timeout_s=timeout_s)
     simulation = Simulation([command])
@@ -58,10 +65,13 @@ def build_goto_sweep(start: Pose, target: Pose, vmax_mm_s: float, wmax_deg_s: fl
     while not simulation.finished and not simulation.failed:
         frame = simulation.step()
         poses.extend(_interpolate_poses(poses[-1], frame.actual))
-    return SweepGeometry(poses, [car_polygon(pose) for pose in poses])
+    return SweepGeometry(poses, [car_polygon(pose, vehicle_length_mm,
+                                             vehicle_width_mm) for pose in poses])
 
 
-def build_rotation_sweep(start: Pose, target_yaw_deg: float, wmax_deg_s: float, timeout_s: float) -> SweepGeometry:
+def build_rotation_sweep(start: Pose, target_yaw_deg: float, wmax_deg_s: float,
+                         timeout_s: float, vehicle_length_mm: float = CAR_SIZE_MM,
+                         vehicle_width_mm: float = CAR_SIZE_MM) -> SweepGeometry:
     """以正式仿真的同一状态机生成原地转向期间的车体扫掠。"""
     simulation = Simulation([RotateInPlace(target_yaw_deg, wmax_deg_s, timeout_s)])
     simulation.actual = Pose(start.x_mm, start.y_mm, start.yaw_deg)
@@ -69,20 +79,27 @@ def build_rotation_sweep(start: Pose, target_yaw_deg: float, wmax_deg_s: float, 
     while not simulation.finished and not simulation.failed:
         frame = simulation.step()
         poses.extend(_interpolate_poses(poses[-1], frame.actual))
-    return SweepGeometry(poses, [car_polygon(pose) for pose in poses])
+    return SweepGeometry(poses, [car_polygon(pose, vehicle_length_mm,
+                                             vehicle_width_mm) for pose in poses])
 
 
-def build_continuous_segment_sweep(start: Pose, target: Pose) -> SweepGeometry:
+def build_continuous_segment_sweep(start: Pose, target: Pose,
+                                   vehicle_length_mm: float = CAR_SIZE_MM,
+                                   vehicle_width_mm: float = CAR_SIZE_MM) -> SweepGeometry:
     """连续路径的纯几何扫掠；不复用停点动作的加减速模型。"""
 
     poses = [start, *_interpolate_poses(start, target)]
-    return SweepGeometry(poses, [car_polygon(pose) for pose in poses])
+    return SweepGeometry(poses, [car_polygon(pose, vehicle_length_mm,
+                                             vehicle_width_mm) for pose in poses])
 
 
 def build_path_segment_sweep(
-    start: Pose, step: ContinuousPathSegment | BezierPathSegment | StepTurnPathSegment,
+    start: Pose,
+    step: ContinuousPathSegment | BezierPathSegment | StepTurnPathSegment,
+    vehicle_length_mm: float = CAR_SIZE_MM,
+    vehicle_width_mm: float = CAR_SIZE_MM,
 ) -> SweepGeometry:
-    """Build a geometric sweep after expanding a path segment through the shared materializer."""
+    """Expand a path through the shared materializer and sweep the full body."""
 
     materialized = materialize_steps(Plan(steps=[
         Waypoint(start.x_mm, start.y_mm, start.yaw_deg), step,
@@ -106,5 +123,10 @@ def build_path_segment_sweep(
         raise ValueError("连续路径至少需要两个点")
     poses = [Pose(points[0].x_mm, points[0].y_mm, points[0].yaw_deg)]
     for target in points[1:]:
-        poses.extend(_interpolate_poses(poses[-1], Pose(target.x_mm, target.y_mm, target.yaw_deg)))
-    return SweepGeometry(poses, [car_polygon(pose) for pose in poses])
+        poses.extend(_interpolate_poses(
+            poses[-1], Pose(target.x_mm, target.y_mm, target.yaw_deg)))
+    return SweepGeometry(
+        poses,
+        [car_polygon(pose, vehicle_length_mm, vehicle_width_mm)
+         for pose in poses],
+    )
