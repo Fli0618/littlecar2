@@ -6,7 +6,8 @@ from typing import Callable, cast
 
 from PySide6.QtCore import QObject, Signal
 
-from ..models import MotionGoal, PathControlConfig, PathTelemetry, PidConfig, Telemetry
+from ..models import (MotionGoal, PathBeginCommand, PathChunkCommand, PathCommitCommand,
+                      PathControlConfig, PathStartCommand, PathTelemetry, PidConfig, Telemetry)
 from ..serial_client import SerialClient
 
 
@@ -34,6 +35,8 @@ class SessionController(QObject):
         self.motion_active = False
         self._heartbeat_in_flight = False
         self._motion_generation = 0
+        self._pending_pid: tuple[int, PidConfig] | None = None
+        self._pending_path_config: tuple[int, PathControlConfig] | None = None
 
     def connect_port(self, port: str, baud: int) -> None:
         def action() -> tuple[SerialClient, tuple[int, PidConfig], bool]:
@@ -90,7 +93,10 @@ class SessionController(QObject):
         self._submit(lambda client: client.get_pid(), lambda value: self.pid_read.emit(value[0], value[1]))
 
     def apply_pid(self, pid: PidConfig) -> None:
-        self._submit(lambda client: client.set_pid(pid), lambda value: self.pid_applied.emit(value, pid))
+        def accepted(value: object) -> None:
+            self._pending_pid = (int(value), pid)
+            self.status.emit(f"PID 修订号 {value}：等待周期应用")
+        self._submit(lambda client: client.set_pid(pid), accepted)
 
     def restore_pid(self) -> None:
         self._submit(lambda client: client.restore_pid(), lambda value: self.status.emit(f"PID 已恢复默认，修订号 {value}"))
@@ -100,8 +106,10 @@ class SessionController(QObject):
                      lambda value: self.path_config_read.emit(value[0], value[1]))
 
     def apply_path_config(self, config: PathControlConfig) -> None:
-        self._submit(lambda client: client.set_path_config(config),
-                     lambda value: self.path_config_applied.emit(value, config))
+        def accepted(value: object) -> None:
+            self._pending_path_config = (int(value), config)
+            self.status.emit(f"路径参数修订号 {value}：等待路径遥测确认")
+        self._submit(lambda client: client.set_path_config(config), accepted)
 
     def restore_path_config(self) -> None:
         def restore_and_read(client: SerialClient) -> tuple[int, tuple[int, PathControlConfig]]:
@@ -139,6 +147,10 @@ class SessionController(QObject):
 
     def _handle_telemetry(self, item: Telemetry) -> None:
         self.telemetry.emit(item)
+        if self._pending_pid is not None and item.pid_revision == self._pending_pid[0]:
+            revision, config = self._pending_pid
+            self._pending_pid = None
+            self.pid_applied.emit(revision, config)
         if self.motion_active and (item.state not in (0, 1) or item.heartbeat_timed_out):
             self._set_motion_active(False)
 
@@ -169,7 +181,8 @@ class SessionController(QObject):
             self.motion_active = False; self.motion_changed.emit(False); self.status.emit("已发送 STOP")
         self._submit(lambda client: client.stop(), done)
 
-    def upload_path(self, begin: bytes, chunks: list[bytes], commit: bytes) -> None:
+    def upload_path(self, begin: PathBeginCommand, chunks: tuple[PathChunkCommand, ...],
+                    commit: PathCommitCommand) -> None:
         """Upload one path through the existing single-session executor."""
         def upload(client: SerialClient) -> None:
             client.path_begin(begin)
@@ -179,8 +192,8 @@ class SessionController(QObject):
         self.path_upload_changed.emit("正在上传")
         self._submit(upload, lambda _: self.path_upload_changed.emit("路径已提交"))
 
-    def start_path(self, payload: bytes) -> None:
-        self._submit(lambda client: client.path_start(payload), lambda _: self._set_motion_active(True))
+    def start_path(self, command: PathStartCommand) -> None:
+        self._submit(lambda client: client.path_start(command), lambda _: self._set_motion_active(True))
 
     def abort_path(self) -> None:
         self._motion_generation += 1
@@ -188,6 +201,11 @@ class SessionController(QObject):
         self._submit(lambda client: client.path_abort(), lambda _: self.path_upload_changed.emit("路径已中止"))
 
     def _handle_path_telemetry(self, telemetry: PathTelemetry) -> None:
+        if (self._pending_path_config is not None and
+                telemetry.path_config_revision == self._pending_path_config[0]):
+            revision, config = self._pending_path_config
+            self._pending_path_config = None
+            self.path_config_applied.emit(revision, config)
         self.path_telemetry.emit(telemetry)
 
     def shutdown(self) -> None:

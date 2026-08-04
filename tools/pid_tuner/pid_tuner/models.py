@@ -127,6 +127,37 @@ class PathStatus:
 
 
 @dataclass(frozen=True)
+class PathPointSnapshot:
+    x_mm: float
+    y_mm: float
+    yaw_deg: float
+
+
+@dataclass(frozen=True)
+class PathBeginCommand:
+    path_id: int
+    point_count: int
+    crc16: int
+
+
+@dataclass(frozen=True)
+class PathChunkCommand:
+    path_id: int
+    first_index: int
+    points: tuple[PathPointSnapshot, ...]
+
+
+@dataclass(frozen=True)
+class PathCommitCommand:
+    path_id: int
+
+
+@dataclass(frozen=True)
+class PathStartCommand:
+    path_id: int
+
+
+@dataclass(frozen=True)
 class PathTelemetry:
     tick: int
     path_id: int

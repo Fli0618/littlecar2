@@ -13,6 +13,11 @@ from .models import (
     PathControlConfig,
     PathStatus,
     PathTelemetry,
+    PathBeginCommand,
+    PathChunkCommand,
+    PathCommitCommand,
+    PathPointSnapshot,
+    PathStartCommand,
     PidConfig,
     Telemetry,
 )
@@ -60,6 +65,8 @@ PATH_CONFIG_FIELDS = (
     "lookahead_curve_gain_mm", "lookahead_max_mm", "lookahead_rate_mm_s",
     "initial_lookahead_mm", "final_capture_distance_mm", "final_capture_speed_mm_s",
 )
+PATH_MAX_POINTS = 256
+PATH_CHUNK_MAX_POINTS = 7
 
 
 class ProtocolError(ValueError):
@@ -140,6 +147,52 @@ def encode_goal(goal: "MotionGoal") -> bytes:
     return struct.pack("<5fIB", goal.x_mm, goal.y_mm, goal.yaw_deg,
                        goal.vmax_mm_s, goal.wmax_deg_s, goal.timeout_ms,
                        (0x01 if goal.use_yaw else 0x00) | (0x02 if goal.use_position else 0x00))
+
+
+def _path_point_bytes(points: Iterable[object]) -> tuple[PathPointSnapshot, bytes]:
+    snapshots = tuple(PathPointSnapshot(float(point.x_mm), float(point.y_mm), float(point.yaw_deg))
+                      for point in points)
+    if not 2 <= len(snapshots) <= PATH_MAX_POINTS:
+        raise ProtocolError(f"path point count must be between 2 and {PATH_MAX_POINTS}")
+    if not all(math.isfinite(value) for point in snapshots for value in
+               (point.x_mm, point.y_mm, point.yaw_deg)):
+        raise ProtocolError("path point values must be finite")
+    raw = b"".join(struct.pack("<fff", point.x_mm, point.y_mm, point.yaw_deg)
+                   for point in snapshots)
+    return snapshots, raw
+
+
+def build_path_upload(path_id: int, points: Iterable[object]) -> tuple[
+        PathBeginCommand, tuple[PathChunkCommand, ...], PathCommitCommand]:
+    snapshots, raw = _path_point_bytes(points)
+    if not 0 <= path_id <= 0xFFFFFFFF:
+        raise ProtocolError("path id is out of range")
+    chunks: list[PathChunkCommand] = []
+    for offset in range(0, len(snapshots), PATH_CHUNK_MAX_POINTS):
+        chunks.append(PathChunkCommand(path_id, offset,
+                                       snapshots[offset:offset + PATH_CHUNK_MAX_POINTS]))
+    return (PathBeginCommand(path_id, len(snapshots), crc16_ccitt_false(raw)),
+            tuple(chunks), PathCommitCommand(path_id))
+
+
+def encode_path_begin(command: PathBeginCommand) -> bytes:
+    return struct.pack("<IHH", command.path_id, command.point_count, command.crc16)
+
+
+def encode_path_chunk(command: PathChunkCommand) -> bytes:
+    if not 1 <= len(command.points) <= PATH_CHUNK_MAX_POINTS:
+        raise ProtocolError("path chunk point count is out of range")
+    return (struct.pack("<IHB", command.path_id, command.first_index, len(command.points)) +
+            b"".join(struct.pack("<fff", point.x_mm, point.y_mm, point.yaw_deg)
+                     for point in command.points))
+
+
+def encode_path_commit(command: PathCommitCommand) -> bytes:
+    return struct.pack("<I", command.path_id)
+
+
+def encode_path_start(command: PathStartCommand) -> bytes:
+    return struct.pack("<I", command.path_id)
 
 
 def encode_yaw_source(source: str) -> bytes:

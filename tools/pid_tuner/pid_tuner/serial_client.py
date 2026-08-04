@@ -8,8 +8,9 @@ import threading
 import time
 from typing import Protocol
 
-from .models import (BoardError, MotionGoal, PathControlConfig, PathStatus,
-                     PathTelemetry, PidConfig, RequestTimeout, Telemetry)
+from .models import (BoardError, MotionGoal, PathBeginCommand, PathChunkCommand,
+                     PathCommitCommand, PathControlConfig, PathStartCommand,
+                     PathStatus, PathTelemetry, PidConfig, RequestTimeout, Telemetry)
 from .protocol import (
     CMD_ACK, CMD_ERROR, CMD_GET_GOTO_STRATEGY, CMD_GET_PID, CMD_GOTO_POSE,
     CMD_GOTO_STRATEGY, CMD_HEARTBEAT, CMD_PATH_ABORT, CMD_PATH_BEGIN, CMD_PATH_CHUNK,
@@ -20,7 +21,8 @@ from .protocol import (
     CMD_STOP, CMD_TELEMETRY, Frame, ProtocolError, StreamDecoder,
     decode_goto_strategy, decode_path_config, decode_path_status, decode_pid,
     decode_path_telemetry, decode_telemetry, encode_frame, encode_goal, encode_goto_strategy,
-    encode_path_config, encode_pid, encode_yaw_source,
+    encode_path_begin, encode_path_chunk, encode_path_commit, encode_path_config,
+    encode_path_start, encode_pid, encode_yaw_source,
 )
 
 
@@ -157,17 +159,17 @@ class SerialClient:
     def stop(self) -> None:
         self.request(CMD_STOP)
 
-    def path_begin(self, payload: bytes) -> None:
-        self.request(CMD_PATH_BEGIN, payload)
+    def path_begin(self, command: PathBeginCommand) -> None:
+        self.request(CMD_PATH_BEGIN, encode_path_begin(command))
 
-    def path_chunk(self, payload: bytes) -> None:
-        self.request(CMD_PATH_CHUNK, payload)
+    def path_chunk(self, command: PathChunkCommand) -> None:
+        self.request(CMD_PATH_CHUNK, encode_path_chunk(command))
 
-    def path_commit(self, payload: bytes) -> None:
-        self.request(CMD_PATH_COMMIT, payload)
+    def path_commit(self, command: PathCommitCommand) -> None:
+        self.request(CMD_PATH_COMMIT, encode_path_commit(command))
 
-    def path_start(self, payload: bytes) -> None:
-        self.request(CMD_PATH_START, payload)
+    def path_start(self, command: PathStartCommand) -> None:
+        self.request(CMD_PATH_START, encode_path_start(command))
 
     def path_abort(self) -> None:
         self.request(CMD_PATH_ABORT)
