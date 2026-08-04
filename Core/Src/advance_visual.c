@@ -2,6 +2,13 @@
 
 typedef enum
 {
+  ADVANCE_VISUAL_MODE_COLOR = 0U,
+  ADVANCE_VISUAL_MODE_DISK_CENTER,
+  ADVANCE_VISUAL_MODE_CIRCLE
+} AdvanceVisual_Mode_t;
+
+typedef enum
+{
   ADVANCE_VISUAL_FRAME_NONE = 0U,
   ADVANCE_VISUAL_FRAME_NO_TARGET,
   ADVANCE_VISUAL_FRAME_TARGET
@@ -19,27 +26,19 @@ static uint32_t g_last_target_tick;
 static volatile uint8_t g_visual_transform_test_passed;
 #endif
 
-static uint8_t AdvanceVisual_IsModeValid(AdvanceVisual_Mode_t mode)
-{
-  return ((mode == ADVANCE_VISUAL_MODE_CIRCLE) ||
-          (mode == ADVANCE_VISUAL_MODE_COLOR) ||
-          (mode == ADVANCE_VISUAL_MODE_MATERIAL))
-             ? 1U
-             : 0U;
-}
-
 static int16_t AdvanceVisual_GetReferenceX(void)
 {
   switch (g_visual_mode)
   {
-    case ADVANCE_VISUAL_MODE_CIRCLE:
-      return ADVANCE_VISUAL_CIRCLE_REF_X;
-
     case ADVANCE_VISUAL_MODE_COLOR:
       return ADVANCE_VISUAL_COLOR_REF_X;
 
+    case ADVANCE_VISUAL_MODE_DISK_CENTER:
+      return ADVANCE_VISUAL_DISK_CENTER_REF_X;
+
+    case ADVANCE_VISUAL_MODE_CIRCLE:
     default:
-      return ADVANCE_VISUAL_MATERIAL_REF_X;
+      return ADVANCE_VISUAL_CIRCLE_REF_X;
   }
 }
 
@@ -47,14 +46,15 @@ static int16_t AdvanceVisual_GetReferenceY(void)
 {
   switch (g_visual_mode)
   {
-    case ADVANCE_VISUAL_MODE_CIRCLE:
-      return ADVANCE_VISUAL_CIRCLE_REF_Y;
-
     case ADVANCE_VISUAL_MODE_COLOR:
       return ADVANCE_VISUAL_COLOR_REF_Y;
 
+    case ADVANCE_VISUAL_MODE_DISK_CENTER:
+      return ADVANCE_VISUAL_DISK_CENTER_REF_Y;
+
+    case ADVANCE_VISUAL_MODE_CIRCLE:
     default:
-      return ADVANCE_VISUAL_MATERIAL_REF_Y;
+      return ADVANCE_VISUAL_CIRCLE_REF_Y;
   }
 }
 
@@ -164,7 +164,8 @@ static uint8_t AdvanceVisual_RunTransformSelfTest(void)
 }
 #endif
 
-static AdvanceVisual_FrameState_t AdvanceVisual_GetFrame(int16_t *center_x, int16_t *center_y)
+static AdvanceVisual_FrameState_t
+AdvanceVisual_GetTypedTargetFrame(int16_t *center_x, int16_t *center_y)
 {
   Detect_TargetList_t targets;
   uint8_t i;
@@ -196,9 +197,58 @@ static AdvanceVisual_FrameState_t AdvanceVisual_GetFrame(int16_t *center_x, int1
   return (found != 0U) ? ADVANCE_VISUAL_FRAME_TARGET : ADVANCE_VISUAL_FRAME_NO_TARGET;
 }
 
+static AdvanceVisual_FrameState_t
+AdvanceVisual_GetDiskCenterFrame(int16_t *center_x, int16_t *center_y)
+{
+  Detect_DiskCenter_t result;
+
+  if (detect_get_disk_center(&result) == 0U)
+  {
+    return ADVANCE_VISUAL_FRAME_NONE;
+  }
+  if (result.status != DETECT_STATUS_OK)
+  {
+    return ADVANCE_VISUAL_FRAME_NO_TARGET;
+  }
+
+  *center_x = result.x;
+  *center_y = result.y;
+  return ADVANCE_VISUAL_FRAME_TARGET;
+}
+
+static AdvanceVisual_FrameState_t
+AdvanceVisual_GetFrame(int16_t *center_x, int16_t *center_y)
+{
+  switch (g_visual_mode)
+  {
+    case ADVANCE_VISUAL_MODE_COLOR:
+    case ADVANCE_VISUAL_MODE_CIRCLE:
+      return AdvanceVisual_GetTypedTargetFrame(center_x, center_y);
+
+    case ADVANCE_VISUAL_MODE_DISK_CENTER:
+      return AdvanceVisual_GetDiskCenterFrame(center_x, center_y);
+
+    default:
+      return ADVANCE_VISUAL_FRAME_NONE;
+  }
+}
+
 static Detect_Status_t AdvanceVisual_StartDetection(AdvanceVisual_Mode_t mode)
 {
-  return (mode == ADVANCE_VISUAL_MODE_CIRCLE) ? detect_circle_start() : detect_color_start();
+  switch (mode)
+  {
+    case ADVANCE_VISUAL_MODE_COLOR:
+      return detect_color_start();
+
+    case ADVANCE_VISUAL_MODE_DISK_CENTER:
+      return detect_disk_center_start();
+
+    case ADVANCE_VISUAL_MODE_CIRCLE:
+      return detect_circle_start();
+
+    default:
+      return DETECT_STATUS_BAD_PARAMETER;
+  }
 }
 
 static void AdvanceVisual_SetTerminalState(AdvanceVisual_State_t state)
@@ -316,30 +366,33 @@ void AdvanceVisual_Update(void)
   Chassis_SetBodyVelocityEx(vx_right, vy_forward, 0.0f, ADVANCE_VISUAL_ACC);
 }
 
-AdvanceVisual_State_t AdvanceVisual_AlignBlocking(AdvanceVisual_Mode_t mode, uint8_t target_type)
+static AdvanceVisual_State_t AdvanceVisual_ReturnStartError(void)
+{
+  g_visual_state = ADVANCE_VISUAL_STATE_START_ERROR;
+  return g_visual_state;
+}
+
+static AdvanceVisual_State_t
+AdvanceVisual_RunBlockingInternal(AdvanceVisual_Mode_t mode, uint8_t target_type)
 {
   Detect_Status_t status;
   uint32_t now_tick;
 
-  if ((AdvanceVisual_IsModeValid(mode) == 0U) ||
-      (AdvanceControl_GetMode() != ADVANCE_CONTROL_NONE))
+  if (AdvanceControl_GetMode() != ADVANCE_CONTROL_NONE)
   {
-    g_visual_state = ADVANCE_VISUAL_STATE_START_ERROR;
-    return g_visual_state;
+    return AdvanceVisual_ReturnStartError();
   }
 
   status = AdvanceVisual_StartDetection(mode);
   if (status != DETECT_STATUS_OK)
   {
-    g_visual_state = ADVANCE_VISUAL_STATE_START_ERROR;
-    return g_visual_state;
+    return AdvanceVisual_ReturnStartError();
   }
 
   if (AdvanceControl_SetMode(ADVANCE_CONTROL_VISUAL) == 0U)
   {
     (void)detect_stop();
-    g_visual_state = ADVANCE_VISUAL_STATE_START_ERROR;
-    return g_visual_state;
+    return AdvanceVisual_ReturnStartError();
   }
 
   now_tick = HAL_GetTick();
@@ -357,6 +410,37 @@ AdvanceVisual_State_t AdvanceVisual_AlignBlocking(AdvanceVisual_Mode_t mode, uin
   }
 
   return g_visual_state;
+}
+
+AdvanceVisual_State_t AdvanceVisual_AlignColorBlocking(ColorType_t color)
+{
+  if ((uint32_t)color > (uint32_t)EMPTY_SLOT)
+  {
+    return AdvanceVisual_ReturnStartError();
+  }
+
+  return AdvanceVisual_RunBlockingInternal(
+      ADVANCE_VISUAL_MODE_COLOR,
+      (uint8_t)color);
+}
+
+AdvanceVisual_State_t AdvanceVisual_AlignDiskCenterBlocking(void)
+{
+  return AdvanceVisual_RunBlockingInternal(
+      ADVANCE_VISUAL_MODE_DISK_CENTER,
+      0U);
+}
+
+AdvanceVisual_State_t AdvanceVisual_AlignCircleBlocking(CircleType_t number)
+{
+  if ((uint32_t)number > (uint32_t)NUMBER_3)
+  {
+    return AdvanceVisual_ReturnStartError();
+  }
+
+  return AdvanceVisual_RunBlockingInternal(
+      ADVANCE_VISUAL_MODE_CIRCLE,
+      (uint8_t)number);
 }
 
 void AdvanceVisual_Cancel(void)
