@@ -749,11 +749,11 @@ class MapEditorWidget(QWidget):
             self.execution_status_label.setWordWrap(True)
             box.addWidget(self.execution_status_label)
             self.allow_yellow_zone = QCheckBox("允许通过黄色区")
-            self.allow_yellow_zone.setChecked(False)
+            self.allow_yellow_zone.setChecked(True)
             self.allow_yellow_zone.toggled.connect(self._set_yellow_zone_passage)
             cost_box.addWidget(self.allow_yellow_zone)
             self.yellow_zone_status_label = QLabel(
-                "黄色区限制已启用：符合比赛离开启停区后仅在灰色车道行驶的要求。")
+                "黄色区限制已关闭：实车运行前请确认平台可安全通行。")
             self.yellow_zone_status_label.setWordWrap(True)
             self.yellow_zone_status_label.setStyleSheet("color: #ef6c00;")
             cost_box.addWidget(self.yellow_zone_status_label)
@@ -794,8 +794,8 @@ class MapEditorWidget(QWidget):
             self.redraw()
 
     def _costmap_overlay_visible(self) -> bool:
-            return (self.editor_tabs.currentWidget() is self.navigation_page
-                    and self.show_inflated_zones.isChecked())
+            toggle = getattr(self, "show_inflated_zones", None)
+            return toggle is not None and toggle.isChecked()
 
     def set_mode(self, mode, source_button=None):
             if mode != "add": self._discard_bezier_draft(); self.clear_preview()

@@ -390,39 +390,39 @@ class MapEditorWidgetTests(unittest.TestCase):
         finally:
             widget.close()
 
-    def test_yellow_zone_passage_defaults_forbidden_and_can_be_overridden(self):
+    def test_yellow_zone_passage_defaults_allowed_and_can_be_forbidden(self):
         widget = MapEditorWidget()
         try:
             platform_center = QPointF(775, 775)
             start = QPointF(400, 775)
             end = QPointF(1100, 775)
 
-            self.assertFalse(widget.allow_yellow_zone.isChecked())
-            self.assertFalse(widget._is_valid_start_candidate(775, 775))
-            self.assertFalse(widget.is_valid_route_segment(start, end))
-            self.assertFalse(widget.is_valid_continuous_segment(start, end))
-            self.assertFalse(widget.is_valid_rotation(platform_center, 0, 90))
-            self.assertFalse(widget._is_valid_start_candidate(50, 50))
-            self.assertIn("黄色区限制已启用", widget.yellow_zone_status_label.text())
-
-            widget.begin_start("自定义")
-            widget.update_preview(775, 775)
-            allowed_preview = next(
-                item for item in widget.scene.items()
-                if item.data(0) == "start_pose_preview")
-            self.assertEqual(allowed_preview.pen().color().name(), "#c62828")
-
-            widget.allow_yellow_zone.setChecked(True)
+            self.assertTrue(widget.allow_yellow_zone.isChecked())
             self.assertTrue(widget._is_valid_start_candidate(775, 775))
             self.assertTrue(widget.is_valid_route_segment(start, end))
             self.assertTrue(widget.is_valid_continuous_segment(start, end))
             self.assertTrue(widget.is_valid_rotation(platform_center, 0, 90))
             self.assertFalse(widget._is_valid_start_candidate(50, 50))
             self.assertIn("黄色区限制已关闭", widget.yellow_zone_status_label.text())
+
+            widget.begin_start("自定义")
+            widget.update_preview(775, 775)
+            allowed_preview = next(
+                item for item in widget.scene.items()
+                if item.data(0) == "start_pose_preview")
+            self.assertEqual(allowed_preview.pen().color().name(), "#1565c0")
+
+            widget.allow_yellow_zone.setChecked(False)
+            self.assertFalse(widget._is_valid_start_candidate(775, 775))
+            self.assertFalse(widget.is_valid_route_segment(start, end))
+            self.assertFalse(widget.is_valid_continuous_segment(start, end))
+            self.assertFalse(widget.is_valid_rotation(platform_center, 0, 90))
+            self.assertFalse(widget._is_valid_start_candidate(50, 50))
+            self.assertIn("黄色区限制已启用", widget.yellow_zone_status_label.text())
             blocked_preview = next(
                 item for item in widget.scene.items()
                 if item.data(0) == "start_pose_preview")
-            self.assertEqual(blocked_preview.pen().color().name(), "#1565c0")
+            self.assertEqual(blocked_preview.pen().color().name(), "#c62828")
         finally:
             widget.close()
 
