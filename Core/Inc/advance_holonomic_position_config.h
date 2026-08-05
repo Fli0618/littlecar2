@@ -2,6 +2,7 @@
 #define __ADVANCE_HOLONOMIC_POSITION_CONFIG_H__
 
 #include <stdint.h>
+#include "advance_motion_config.h"
 
 /*
  * 全向位置控制器固定安全参数与默认运行时参数。
@@ -47,19 +48,6 @@
 #define ADVANCE_HOLONOMIC_DEFAULT_TIMEOUT_MS ((uint32_t)10000U) /* 默认目标超时，单位 ms */
 
 /* 默认运行时参数（保守初值，均需实车标定，不作为已标定参数） */
-#define ADVANCE_HOLONOMIC_DEFAULT_LINEAR_ACCEL_MM_S2 (600.0f) /* 平移加速度，单位 mm/s^2 */
-#define ADVANCE_HOLONOMIC_DEFAULT_LINEAR_DECEL_MM_S2 (800.0f) /* 平移减速度，单位 mm/s^2 */
-#define ADVANCE_HOLONOMIC_DEFAULT_YAW_ACCEL_DEG_S2 (150.0f)   /* 航向角加速度（对称），单位 deg/s^2 */
-#define ADVANCE_HOLONOMIC_DEFAULT_KP_FORWARD (0.8f)           /* 前向位置增益，单位 1/s */
-#define ADVANCE_HOLONOMIC_DEFAULT_KV_FORWARD (0.3f)           /* 前向速度增益，无量纲 */
-#define ADVANCE_HOLONOMIC_DEFAULT_KP_LATERAL (0.8f)           /* 横向位置增益，单位 1/s */
-#define ADVANCE_HOLONOMIC_DEFAULT_KV_LATERAL (0.3f)           /* 横向速度增益，无量纲 */
-#define ADVANCE_HOLONOMIC_DEFAULT_KP_YAW (2.0f)               /* 航向位置增益，单位 1/s */
-#define ADVANCE_HOLONOMIC_DEFAULT_KV_YAW (0.3f)               /* 航向速度增益，无量纲 */
-#define ADVANCE_HOLONOMIC_DEFAULT_FORWARD_SCALE (1.0f)        /* 前向驱动比例校准，无量纲 */
-#define ADVANCE_HOLONOMIC_DEFAULT_LATERAL_SCALE (1.0f)        /* 横向驱动比例校准，无量纲 */
-#define ADVANCE_HOLONOMIC_DEFAULT_YAW_SCALE (1.0f)            /* 旋转驱动比例校准，无量纲 */
-
 /* 配置校验边界 */
 #define ADVANCE_HOLONOMIC_MAX_GAIN (20.0f)   /* 增益上限，单位 1/s 或无量纲 */
 #define ADVANCE_HOLONOMIC_MIN_SCALE (0.5f)   /* scale 下限，无量纲 */
