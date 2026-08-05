@@ -28,6 +28,14 @@ uint8_t AdvanceControl_SetMode(AdvanceControl_Mode_t mode);
 uint8_t AdvanceControl_ReleaseMode(void);
 /** @brief 获取当前唯一的底盘控制权模式。 */
 AdvanceControl_Mode_t AdvanceControl_GetMode(void);
+/** @brief 查询是否存在活动控制权（mode != NONE）。 */
+uint8_t AdvanceControl_IsBusy(void);
+/**
+ * @brief 取消当前活动控制器并按模式停车。
+ * @details WORLD 路由到 AdvanceMotion_Cancel，HOLONOMIC 路由到
+ * AdvanceHolonomic_Cancel，其他模式不动作。
+ */
+void AdvanceControl_CancelActive(void);
 
 #ifdef __cplusplus
 }

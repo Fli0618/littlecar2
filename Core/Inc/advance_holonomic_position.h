@@ -150,16 +150,29 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_GetStatus(
 AdvanceHolonomic_Status_t AdvanceHolonomic_GetDebugSnapshot(
     AdvanceHolonomic_DebugSnapshot_t *snapshot);
 
-/** @brief 获取当前生效的运行时参数。 */
+/**
+ * @brief 获取当前生效的运行时参数与活动修订号。
+ * @param config 输出 12 项参数。
+ * @param revision 输出当前 active 修订号。
+ */
 AdvanceHolonomic_Status_t AdvanceHolonomic_GetConfig(
-    AdvanceHolonomic_Config_t *config);
+    AdvanceHolonomic_Config_t *config,
+    uint32_t *revision);
 
-/** @brief 校验并设置运行时参数；仅允许在非活动状态执行。 */
-AdvanceHolonomic_Status_t AdvanceHolonomic_SetConfig(
-    const AdvanceHolonomic_Config_t *config);
+/**
+ * @brief 校验并整组提交运行时参数，在下一次 20 ms 周期边界原子生效。
+ * @param config 输入 12 项参数。
+ * @param revision 输出本次提交的 pending 修订号。
+ * @note 运行期间允许提交；Kp/Kv/scale 下一控制周期生效，
+ *       已预计算的 accel/decel 轮廓不重建，下一次 Start 才使用新值。
+ */
+AdvanceHolonomic_Status_t AdvanceHolonomic_RequestConfig(
+    const AdvanceHolonomic_Config_t *config,
+    uint32_t *revision);
 
-/** @brief 恢复保守默认参数。 */
-AdvanceHolonomic_Status_t AdvanceHolonomic_RestoreDefaultConfig(void);
+/** @brief 恢复保守默认参数，同样走 pending/revision 流程。 */
+AdvanceHolonomic_Status_t AdvanceHolonomic_RestoreDefaultConfig(
+    uint32_t *revision);
 
 #ifdef __cplusplus
 }

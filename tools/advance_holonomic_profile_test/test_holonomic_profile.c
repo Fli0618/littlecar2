@@ -103,6 +103,14 @@ uint8_t AdvanceControl_ReleaseMode(void)
   return 1U;
 }
 
+void AdvanceControl_CancelActive(void)
+{
+  if (g_test_mode == ADVANCE_CONTROL_HOLONOMIC)
+  {
+    AdvanceHolonomic_Cancel();
+  }
+}
+
 AdvanceWorld_Status_t AdvanceWorld_GetPoseCopy(WorldPose2D_t *pose)
 {
   if (pose == NULL)
@@ -453,6 +461,116 @@ static void TestBodyToWorldForward(void)
         "yaw=-90 时车体前方为世界 +X");
 }
 
+static void TestConfigHotload(void)
+{
+  AdvanceHolonomic_Config_t config;
+  AdvanceHolonomic_Config_t active;
+  uint32_t revision = 0U;
+  uint32_t active_revision = 0U;
+  float profile_acceleration;
+  WorldGoalPose2D_t goal;
+
+  AdvanceHolonomic_Init();
+  (void)AdvanceControl_ReleaseMode();
+  Check(AdvanceHolonomic_GetConfig(&active, &active_revision) == ADVANCE_HOLONOMIC_STATUS_OK,
+        "读取初始全向配置成功");
+  Check(active_revision == 0U, "初始 active revision = 0");
+  config = active;
+  config.linear_accel_mm_s2 = 1200.0f;
+  config.linear_decel_mm_s2 = 1400.0f;
+  config.kp_forward = 1.6f;
+  config.forward_scale = 1.4f;
+  Check(AdvanceHolonomic_RequestConfig(&config, &revision) == ADVANCE_HOLONOMIC_STATUS_OK,
+        "提交 pending 全向配置成功");
+  Check(revision == 1U, "pending revision = 1");
+  (void)AdvanceHolonomic_GetConfig(&active, &active_revision);
+  Check(active_revision == 0U && FloatNear(active.kp_forward, 0.8f, 1e-6f),
+        "周期边界前仍保持旧 active 配置");
+
+  AdvanceHolonomic_Update();
+  (void)AdvanceHolonomic_GetConfig(&active, &active_revision);
+  Check(active_revision == revision && FloatNear(active.kp_forward, 1.6f, 1e-6f),
+        "20 ms 周期边界切换 active 配置");
+
+  g_test_tick = 2000U;
+  SetupFreshPose(0.0f, 0.0f, 0.0f);
+  goal = MakeForwardGoal(0.0f, 600.0f, 0.0f);
+  Check(AdvanceHolonomic_Start(&goal, 30U) == ADVANCE_HOLONOMIC_STATUS_OK,
+        "热加载配置后 Start 成功");
+  profile_acceleration = g_holonomic.linear_profile.acceleration;
+  config.linear_accel_mm_s2 = 2400.0f;
+  config.linear_decel_mm_s2 = 2600.0f;
+  config.kp_forward = 2.0f;
+  config.forward_scale = 1.8f;
+  Check(AdvanceHolonomic_RequestConfig(&config, &revision) == ADVANCE_HOLONOMIC_STATUS_OK,
+        "运行中提交第二组配置成功");
+  g_test_tick += 20U;
+  SetupFreshPose(0.0f, 0.0f, 0.0f);
+  AdvanceHolonomic_Update();
+  Check(FloatNear(g_holonomic.linear_profile.acceleration, profile_acceleration, 1e-6f),
+        "运行中修改 accel 不重建当前轮廓");
+  (void)AdvanceHolonomic_GetConfig(&active, &active_revision);
+  Check(active_revision == revision && FloatNear(active.kp_forward, 2.0f, 1e-6f),
+        "运行中修改 Kp 在下一周期生效");
+  AdvanceHolonomic_Cancel();
+}
+
+static void TestScaleFinalLimit(void)
+{
+  AdvanceHolonomic_Reference_t reference = {0};
+  AdvanceHolonomic_BodyVelocity_t measured = {0};
+  AdvanceHolonomic_BodyVelocity_t command = {0};
+  WorldPose2D_t actual = {0};
+  AdvanceHolonomic_Config_t config;
+  uint32_t revision;
+  float norm;
+
+  AdvanceHolonomic_Init();
+  (void)AdvanceHolonomic_GetConfig(&config, &revision);
+  config.kp_forward = 20.0f;
+  config.kp_lateral = 20.0f;
+  config.kp_yaw = 20.0f;
+  config.forward_scale = 2.0f;
+  config.lateral_scale = 2.0f;
+  config.yaw_scale = 2.0f;
+  (void)AdvanceHolonomic_RequestConfig(&config, &revision);
+  AdvanceHolonomic_Update();
+
+  g_holonomic.position_required = 1U;
+  g_holonomic.yaw_required = 1U;
+  g_holonomic.goal.vmax_mm_s = 100.0f;
+  g_holonomic.goal.wmax_deg_s = 30.0f;
+  reference.x_mm = 100.0f;
+  reference.y_mm = 100.0f;
+  reference.yaw_deg = 90.0f;
+  actual.origin_ready = 1U;
+  actual.valid = 1U;
+  AdvanceHolonomic_ComputeBodyCommand(&reference, &actual, &measured, &command);
+  norm = sqrtf((command.right_mm_s * command.right_mm_s) +
+               (command.forward_mm_s * command.forward_mm_s));
+  Check(norm <= 100.0f + 1e-4f, "scale 后平移命令仍受最终 vmax 限幅");
+  Check(fabsf(command.wz_deg_s) <= 30.0f + 1e-4f,
+        "scale 后航向命令仍受最终 wmax 限幅");
+}
+
+static void TestControlCancelRoute(void)
+{
+  WorldGoalPose2D_t goal;
+
+  AdvanceHolonomic_Init();
+  (void)AdvanceControl_ReleaseMode();
+  g_test_tick = 3000U;
+  SetupFreshPose(0.0f, 0.0f, 0.0f);
+  goal = MakeForwardGoal(0.0f, 200.0f, 0.0f);
+  Check(AdvanceHolonomic_Start(&goal, 30U) == ADVANCE_HOLONOMIC_STATUS_OK,
+        "取消路由测试 Start 成功");
+  AdvanceControl_CancelActive();
+  Check(g_holonomic_state == ADVANCE_HOLONOMIC_STATE_CANCELED,
+        "AdvanceControl_CancelActive 路由到全向取消");
+  Check(g_test_mode == ADVANCE_CONTROL_NONE,
+        "全向取消后释放控制权");
+}
+
 int main(void)
 {
   printf("=== advance_holonomic_position host test ===\n");
@@ -465,6 +583,9 @@ int main(void)
   TestProfileYaw();
   TestDtZeroAndSnapshotClear();
   TestBodyToWorldForward();
+  TestConfigHotload();
+  TestScaleFinalLimit();
+  TestControlCancelRoute();
 
   if (g_failures == 0)
   {

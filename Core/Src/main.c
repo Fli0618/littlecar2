@@ -247,15 +247,13 @@ static void App_TimerUpdate(void)
 
     /* PID pending 配置必须在每个 20 ms 周期边界检查一次。 */
     AdvanceMotion_Update();
+    /* 全向 pending 配置与控制轮廓也在固定 20 ms 边界推进。 */
+    AdvanceHolonomic_Update();
 
     switch (AdvanceControl_GetMode())
     {
     case ADVANCE_CONTROL_VISUAL:
       AdvanceVisual_Update();
-      break;
-
-    case ADVANCE_CONTROL_HOLONOMIC:
-      AdvanceHolonomic_Update();
       break;
 
     default:

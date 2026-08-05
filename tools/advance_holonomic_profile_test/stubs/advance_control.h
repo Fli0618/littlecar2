@@ -18,5 +18,6 @@ typedef enum
 uint8_t AdvanceControl_SetMode(AdvanceControl_Mode_t mode);
 uint8_t AdvanceControl_ReleaseMode(void);
 AdvanceControl_Mode_t AdvanceControl_GetMode(void);
+void AdvanceControl_CancelActive(void);
 
 #endif

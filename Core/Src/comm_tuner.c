@@ -5,6 +5,7 @@
 
 #include "advance_chassis.h"
 #include "advance_motion.h"
+#include "advance_holonomic_position.h"
 
 #define COMM_TUNER_RX_DMA_SIZE ((uint16_t)128U)
 #define COMM_TUNER_QUEUE_DEPTH ((uint8_t)4U)
@@ -15,6 +16,7 @@
 #define COMM_TUNER_HEARTBEAT_TIMEOUT_MS ((uint32_t)1500U)
 #define COMM_TUNER_TELEMETRY_PERIOD_MS ((uint32_t)40U)
 #define COMM_TUNER_PATH_TELEMETRY_PERIOD_MS ((uint32_t)50U)
+#define COMM_TUNER_HOLONOMIC_TELEMETRY_PERIOD_MS ((uint32_t)40U)
 #define COMM_TUNER_GOTO_VMAX_MM_S (1500.0f)
 #define COMM_TUNER_GOTO_WMAX_DEG_S (120.0f)
 #define COMM_TUNER_GOTO_TIMEOUT_MS ((uint32_t)15000U)
@@ -37,6 +39,7 @@
 #define COMM_TUNER_CMD_RESET_ORIGIN ((uint8_t)0x14U)
 #define COMM_TUNER_CMD_GET_GOTO_STRATEGY ((uint8_t)0x15U)
 #define COMM_TUNER_CMD_SET_GOTO_STRATEGY ((uint8_t)0x16U)
+#define COMM_TUNER_CMD_HOLONOMIC_GOTO_POSE ((uint8_t)0x17U)
 #define COMM_TUNER_CMD_PATH_BEGIN ((uint8_t)0x20U)
 #define COMM_TUNER_CMD_PATH_CHUNK ((uint8_t)0x21U)
 #define COMM_TUNER_CMD_PATH_COMMIT ((uint8_t)0x22U)
@@ -46,6 +49,9 @@
 #define COMM_TUNER_CMD_GET_PATH_CONFIG ((uint8_t)0x26U)
 #define COMM_TUNER_CMD_SET_PATH_CONFIG ((uint8_t)0x27U)
 #define COMM_TUNER_CMD_RESTORE_PATH_CONFIG ((uint8_t)0x28U)
+#define COMM_TUNER_CMD_GET_HOLONOMIC_CONFIG ((uint8_t)0x29U)
+#define COMM_TUNER_CMD_SET_HOLONOMIC_CONFIG ((uint8_t)0x2AU)
+#define COMM_TUNER_CMD_RESTORE_HOLONOMIC_CONFIG ((uint8_t)0x2BU)
 #define COMM_TUNER_CMD_ACK ((uint8_t)0x80U)
 #define COMM_TUNER_CMD_PID ((uint8_t)0x81U)
 #define COMM_TUNER_CMD_TELEMETRY ((uint8_t)0x82U)
@@ -53,6 +59,8 @@
 #define COMM_TUNER_CMD_PATH_STATUS_RESPONSE ((uint8_t)0x84U)
 #define COMM_TUNER_CMD_PATH_TELEMETRY ((uint8_t)0x85U)
 #define COMM_TUNER_CMD_PATH_CONFIG ((uint8_t)0x86U)
+#define COMM_TUNER_CMD_HOLONOMIC_CONFIG ((uint8_t)0x87U)
+#define COMM_TUNER_CMD_HOLONOMIC_TELEMETRY ((uint8_t)0x88U)
 #define COMM_TUNER_CMD_ERROR ((uint8_t)0xE0U)
 
 #define COMM_TUNER_ERROR_BAD_CRC ((uint8_t)0x01U)
@@ -66,6 +74,7 @@
 #define COMM_TUNER_ERROR_NO_POSE ((uint8_t)0x09U)
 #define COMM_TUNER_ERROR_POSE_TIMEOUT ((uint8_t)0x0AU)
 #define COMM_TUNER_ERROR_BAD_PATH_CONFIG ((uint8_t)0x0BU)
+#define COMM_TUNER_ERROR_BAD_HOLONOMIC_CONFIG ((uint8_t)0x0CU)
 
 #define COMM_TUNER_SET_PID_PAYLOAD_SIZE ((uint16_t)24U)
 #define COMM_TUNER_PID_PAYLOAD_SIZE ((uint16_t)28U)
@@ -78,6 +87,14 @@
 #define COMM_TUNER_PATH_TELEMETRY_PAYLOAD_SIZE ((uint16_t)94U)
 #define COMM_TUNER_SET_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)80U)
 #define COMM_TUNER_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)84U)
+#define COMM_TUNER_SET_HOLONOMIC_CONFIG_PAYLOAD_SIZE ((uint16_t)48U)
+#define COMM_TUNER_HOLONOMIC_CONFIG_PAYLOAD_SIZE ((uint16_t)52U)
+#define COMM_TUNER_HOLONOMIC_TELEMETRY_PAYLOAD_SIZE ((uint16_t)96U)
+
+/* 全向遥测 flags：bit0 位置约束启用，bit1 航向约束启用，bit2 控制器活跃 */
+#define COMM_TUNER_HOLONOMIC_FLAG_POSITION ((uint8_t)0x01U)
+#define COMM_TUNER_HOLONOMIC_FLAG_YAW ((uint8_t)0x02U)
+#define COMM_TUNER_HOLONOMIC_FLAG_ACTIVE ((uint8_t)0x04U)
 
 typedef enum
 {
@@ -120,6 +137,9 @@ static CommTuner_TxFrame_t g_telemetry_frame;
 static volatile uint8_t g_telemetry_pending;
 static CommTuner_TxFrame_t g_path_telemetry_frame;
 static volatile uint8_t g_path_telemetry_pending;
+static CommTuner_TxFrame_t g_holonomic_telemetry_frame;
+static volatile uint8_t g_holonomic_telemetry_pending;
+static volatile uint8_t g_holonomic_telemetry_was_active;
 static uint8_t g_telemetry_sequence;
 static volatile uint32_t g_telemetry_dropped_count;
 static volatile uint8_t g_remote_goal_active;
@@ -127,6 +147,7 @@ static volatile uint8_t g_remote_heartbeat_timeout;
 static volatile uint32_t g_last_heartbeat_tick;
 static volatile uint32_t g_last_telemetry_tick;
 static volatile uint32_t g_last_path_telemetry_tick;
+static volatile uint32_t g_last_holonomic_telemetry_tick;
 static volatile uint32_t g_rx_dropped_count;
 static AdvanceMotion_PathPoint_t g_path_buffer_a[ADVANCE_MOTION_PATH_MAX_POINTS];
 static AdvanceMotion_PathPoint_t g_path_buffer_b[ADVANCE_MOTION_PATH_MAX_POINTS];
@@ -248,12 +269,15 @@ static void CommTuner_ClearTransmitState(void)
   g_tx_busy = 0U;
   g_telemetry_pending = 0U;
   g_path_telemetry_pending = 0U;
+  g_holonomic_telemetry_pending = 0U;
+  g_holonomic_telemetry_was_active = 0U;
 }
 
 static void CommTuner_ClearTelemetry(void)
 {
   g_telemetry_pending = 0U;
   g_path_telemetry_pending = 0U;
+  g_holonomic_telemetry_pending = 0U;
 }
 
 static uint8_t CommTuner_QueueTransmit(const uint8_t *data, uint16_t length)
@@ -620,6 +644,201 @@ static void CommTuner_HandleGoto(uint8_t sequence, const uint8_t *payload)
   CommTuner_SendAck(COMM_TUNER_CMD_GOTO_POSE, sequence, 0U, 0U);
 }
 
+static uint8_t CommTuner_MapHolonomicError(AdvanceHolonomic_Status_t status)
+{
+  switch (status)
+  {
+  case ADVANCE_HOLONOMIC_STATUS_BUSY:
+    return COMM_TUNER_ERROR_BUSY;
+  case ADVANCE_HOLONOMIC_STATUS_NO_ORIGIN:
+    return COMM_TUNER_ERROR_NO_ORIGIN;
+  case ADVANCE_HOLONOMIC_STATUS_NO_POSE:
+    return COMM_TUNER_ERROR_NO_POSE;
+  case ADVANCE_HOLONOMIC_STATUS_POSE_TIMEOUT:
+    return COMM_TUNER_ERROR_POSE_TIMEOUT;
+  default:
+    return COMM_TUNER_ERROR_BAD_GOAL;
+  }
+}
+
+static void CommTuner_SendHolonomicConfig(uint8_t request_command, uint8_t request_sequence)
+{
+  AdvanceHolonomic_Config_t config;
+  uint32_t revision;
+  uint8_t payload[COMM_TUNER_HOLONOMIC_CONFIG_PAYLOAD_SIZE];
+
+  if (AdvanceHolonomic_GetConfig(&config, &revision) != ADVANCE_HOLONOMIC_STATUS_OK)
+  {
+    CommTuner_SendError(request_command, request_sequence,
+                        COMM_TUNER_ERROR_BAD_HOLONOMIC_CONFIG, 1U);
+    return;
+  }
+  CommTuner_WriteU32(&payload[0], revision);
+  CommTuner_WriteFloat(&payload[4], config.linear_accel_mm_s2);
+  CommTuner_WriteFloat(&payload[8], config.linear_decel_mm_s2);
+  CommTuner_WriteFloat(&payload[12], config.yaw_accel_deg_s2);
+  CommTuner_WriteFloat(&payload[16], config.kp_forward);
+  CommTuner_WriteFloat(&payload[20], config.kv_forward);
+  CommTuner_WriteFloat(&payload[24], config.kp_lateral);
+  CommTuner_WriteFloat(&payload[28], config.kv_lateral);
+  CommTuner_WriteFloat(&payload[32], config.kp_yaw);
+  CommTuner_WriteFloat(&payload[36], config.kv_yaw);
+  CommTuner_WriteFloat(&payload[40], config.forward_scale);
+  CommTuner_WriteFloat(&payload[44], config.lateral_scale);
+  CommTuner_WriteFloat(&payload[48], config.yaw_scale);
+  CommTuner_SendResponse(request_command, request_sequence, COMM_TUNER_CMD_HOLONOMIC_CONFIG,
+                         payload, sizeof(payload), 1U);
+}
+
+static void CommTuner_HandleHolonomicGoto(uint8_t sequence, const uint8_t *payload)
+{
+  WorldGoalPose2D_t goal;
+  AdvanceHolonomic_Status_t status;
+
+  goal.x_mm = CommTuner_ReadFloat(&payload[0]);
+  goal.y_mm = CommTuner_ReadFloat(&payload[4]);
+  goal.yaw_deg = CommTuner_ReadFloat(&payload[8]);
+  goal.vmax_mm_s = CommTuner_ReadFloat(&payload[12]);
+  goal.wmax_deg_s = CommTuner_ReadFloat(&payload[16]);
+  goal.timeout_ms = CommTuner_ReadU32(&payload[20]);
+  goal.goal_flags = payload[24];
+
+  /* 协议层复用经典 GOTO 的上限校验；控制器内部仍按自身上限兜底。 */
+  if (((goal.goal_flags & (ADVANCE_MOTION_GOAL_USE_POSITION | ADVANCE_MOTION_GOAL_USE_YAW)) == 0U) ||
+      (((goal.goal_flags & ADVANCE_MOTION_GOAL_USE_POSITION) != 0U) &&
+       ((goal.vmax_mm_s <= 0.0f) || (goal.vmax_mm_s > COMM_TUNER_GOTO_VMAX_MM_S))) ||
+      (((goal.goal_flags & ADVANCE_MOTION_GOAL_USE_YAW) != 0U) &&
+       ((goal.wmax_deg_s <= 0.0f) || (goal.wmax_deg_s > COMM_TUNER_GOTO_WMAX_DEG_S))) ||
+      (goal.timeout_ms == 0U) || (goal.timeout_ms > COMM_TUNER_GOTO_TIMEOUT_MS))
+  {
+    CommTuner_SendError(COMM_TUNER_CMD_HOLONOMIC_GOTO_POSE, sequence,
+                        COMM_TUNER_ERROR_BAD_GOAL, 1U);
+    return;
+  }
+
+  status = AdvanceHolonomic_Start(&goal, CHASSIS_DEFAULT_ACC);
+  if (status != ADVANCE_HOLONOMIC_STATUS_OK)
+  {
+    CommTuner_SendError(COMM_TUNER_CMD_HOLONOMIC_GOTO_POSE, sequence,
+                        CommTuner_MapHolonomicError(status), 1U);
+    return;
+  }
+
+  g_remote_goal_active = 1U;
+  g_remote_heartbeat_timeout = 0U;
+  g_last_heartbeat_tick = HAL_GetTick();
+  g_last_telemetry_tick = g_last_heartbeat_tick;
+  CommTuner_SendAck(COMM_TUNER_CMD_HOLONOMIC_GOTO_POSE, sequence, 0U, 0U);
+}
+
+static void CommTuner_HandleHolonomicSetConfig(uint8_t sequence, const uint8_t *payload)
+{
+  AdvanceHolonomic_Config_t config;
+  AdvanceHolonomic_Status_t status;
+  uint32_t revision;
+
+  config.linear_accel_mm_s2 = CommTuner_ReadFloat(&payload[0]);
+  config.linear_decel_mm_s2 = CommTuner_ReadFloat(&payload[4]);
+  config.yaw_accel_deg_s2 = CommTuner_ReadFloat(&payload[8]);
+  config.kp_forward = CommTuner_ReadFloat(&payload[12]);
+  config.kv_forward = CommTuner_ReadFloat(&payload[16]);
+  config.kp_lateral = CommTuner_ReadFloat(&payload[20]);
+  config.kv_lateral = CommTuner_ReadFloat(&payload[24]);
+  config.kp_yaw = CommTuner_ReadFloat(&payload[28]);
+  config.kv_yaw = CommTuner_ReadFloat(&payload[32]);
+  config.forward_scale = CommTuner_ReadFloat(&payload[36]);
+  config.lateral_scale = CommTuner_ReadFloat(&payload[40]);
+  config.yaw_scale = CommTuner_ReadFloat(&payload[44]);
+  status = AdvanceHolonomic_RequestConfig(&config, &revision);
+  if (status != ADVANCE_HOLONOMIC_STATUS_OK)
+  {
+    CommTuner_SendError(COMM_TUNER_CMD_SET_HOLONOMIC_CONFIG, sequence,
+                        COMM_TUNER_ERROR_BAD_HOLONOMIC_CONFIG, 1U);
+    return;
+  }
+  CommTuner_SendAck(COMM_TUNER_CMD_SET_HOLONOMIC_CONFIG, sequence, revision, 1U);
+}
+
+static void CommTuner_HandleHolonomicRestoreConfig(uint8_t sequence)
+{
+  AdvanceHolonomic_Status_t status;
+  uint32_t revision;
+
+  status = AdvanceHolonomic_RestoreDefaultConfig(&revision);
+  if (status != ADVANCE_HOLONOMIC_STATUS_OK)
+  {
+    CommTuner_SendError(COMM_TUNER_CMD_RESTORE_HOLONOMIC_CONFIG, sequence,
+                        COMM_TUNER_ERROR_BAD_HOLONOMIC_CONFIG, 1U);
+    return;
+  }
+  CommTuner_SendAck(COMM_TUNER_CMD_RESTORE_HOLONOMIC_CONFIG, sequence, revision, 1U);
+}
+
+static void CommTuner_QueueHolonomicTelemetry(void)
+{
+  AdvanceHolonomic_DebugSnapshot_t snapshot;
+  AdvanceHolonomic_Config_t config;
+  uint32_t config_revision;
+  uint8_t payload[COMM_TUNER_HOLONOMIC_TELEMETRY_PAYLOAD_SIZE];
+  uint16_t frame_length;
+  uint8_t flags = 0U;
+
+  if ((AdvanceHolonomic_GetDebugSnapshot(&snapshot) != ADVANCE_HOLONOMIC_STATUS_OK) ||
+      (AdvanceHolonomic_GetConfig(&config, &config_revision) != ADVANCE_HOLONOMIC_STATUS_OK))
+  {
+    return;
+  }
+  if ((snapshot.goal.goal_flags & ADVANCE_HOLONOMIC_GOAL_USE_POSITION) != 0U)
+  {
+    flags |= COMM_TUNER_HOLONOMIC_FLAG_POSITION;
+  }
+  if ((snapshot.goal.goal_flags & ADVANCE_HOLONOMIC_GOAL_USE_YAW) != 0U)
+  {
+    flags |= COMM_TUNER_HOLONOMIC_FLAG_YAW;
+  }
+  if (AdvanceHolonomic_IsActive() != 0U)
+  {
+    flags |= COMM_TUNER_HOLONOMIC_FLAG_ACTIVE;
+  }
+
+  CommTuner_WriteU32(&payload[0], snapshot.tick);
+  CommTuner_WriteU32(&payload[4], config_revision);
+  payload[8] = (uint8_t)snapshot.state;
+  payload[9] = flags;
+  CommTuner_WriteU16(&payload[10], CommTuner_GetRemoteLinkStatus(HAL_GetTick()));
+  CommTuner_WriteFloat(&payload[12], snapshot.goal.x_mm);
+  CommTuner_WriteFloat(&payload[16], snapshot.goal.y_mm);
+  CommTuner_WriteFloat(&payload[20], snapshot.goal.yaw_deg);
+  CommTuner_WriteFloat(&payload[24], snapshot.actual_pose.x_mm);
+  CommTuner_WriteFloat(&payload[28], snapshot.actual_pose.y_mm);
+  CommTuner_WriteFloat(&payload[32], snapshot.actual_pose.yaw_deg);
+  CommTuner_WriteFloat(&payload[36], snapshot.reference_x_mm);
+  CommTuner_WriteFloat(&payload[40], snapshot.reference_y_mm);
+  CommTuner_WriteFloat(&payload[44], snapshot.reference_yaw_deg);
+  CommTuner_WriteFloat(&payload[48], snapshot.error_forward_mm);
+  CommTuner_WriteFloat(&payload[52], snapshot.error_lateral_mm);
+  CommTuner_WriteFloat(&payload[56], snapshot.error_yaw_deg);
+  CommTuner_WriteFloat(&payload[60], snapshot.measured_forward_mm_s);
+  CommTuner_WriteFloat(&payload[64], snapshot.measured_lateral_mm_s);
+  CommTuner_WriteFloat(&payload[68], snapshot.measured_wz_deg_s);
+  CommTuner_WriteFloat(&payload[72], snapshot.drive_forward_mm_s);
+  CommTuner_WriteFloat(&payload[76], snapshot.drive_lateral_mm_s);
+  CommTuner_WriteFloat(&payload[80], snapshot.drive_wz_deg_s);
+  CommTuner_WriteFloat(&payload[84], snapshot.profile_progress_mm);
+  CommTuner_WriteFloat(&payload[88], snapshot.profile_remaining_mm);
+  CommTuner_WriteFloat(&payload[92], snapshot.profile_reference_speed_mm_s);
+
+  frame_length = CommTuner_BuildFrame(COMM_TUNER_CMD_HOLONOMIC_TELEMETRY,
+                                      g_telemetry_sequence++, payload, sizeof(payload),
+                                      g_holonomic_telemetry_frame.data);
+  g_holonomic_telemetry_frame.length = frame_length;
+  if (g_holonomic_telemetry_pending != 0U)
+  {
+    ++g_telemetry_dropped_count;
+  }
+  g_holonomic_telemetry_pending = 1U;
+}
+
 static void CommTuner_HandlePathBegin(uint8_t sequence, const uint8_t *payload)
 {
   uint16_t count = (uint16_t)payload[4] | ((uint16_t)payload[5] << 8U);
@@ -684,14 +903,12 @@ static void CommTuner_HandlePathChunk(uint8_t sequence, const uint8_t *payload,
 static void CommTuner_HandlePathCommit(uint8_t sequence, const uint8_t *payload)
 {
   AdvanceMotion_PathPoint_t *old_active;
-  AdvanceMotion_RuntimeStatus_t motion_status;
   uint32_t path_id = CommTuner_ReadU32(payload);
   uint16_t index;
   const float minimum_segment_squared = ADVANCE_MOTION_PATH_MIN_SEGMENT_MM *
                                         ADVANCE_MOTION_PATH_MIN_SEGMENT_MM;
 
-  (void)AdvanceMotion_GetStatus(&motion_status);
-  if (motion_status.state == ADVANCE_MOTION_STATE_RUNNING)
+  if (AdvanceControl_IsBusy() != 0U)
   {
     CommTuner_SendError(COMM_TUNER_CMD_PATH_COMMIT, sequence, COMM_TUNER_ERROR_BUSY, 1U);
     return;
@@ -840,6 +1057,42 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
     CommTuner_HandleGoto(sequence, payload);
     break;
 
+  case COMM_TUNER_CMD_HOLONOMIC_GOTO_POSE:
+    if (payload_length != COMM_TUNER_GOTO_PAYLOAD_SIZE)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
+      return;
+    }
+    CommTuner_HandleHolonomicGoto(sequence, payload);
+    break;
+
+  case COMM_TUNER_CMD_GET_HOLONOMIC_CONFIG:
+    if (payload_length != 0U)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
+      return;
+    }
+    CommTuner_SendHolonomicConfig(command, sequence);
+    break;
+
+  case COMM_TUNER_CMD_SET_HOLONOMIC_CONFIG:
+    if (payload_length != COMM_TUNER_SET_HOLONOMIC_CONFIG_PAYLOAD_SIZE)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
+      return;
+    }
+    CommTuner_HandleHolonomicSetConfig(sequence, payload);
+    break;
+
+  case COMM_TUNER_CMD_RESTORE_HOLONOMIC_CONFIG:
+    if (payload_length != 0U)
+    {
+      CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
+      return;
+    }
+    CommTuner_HandleHolonomicRestoreConfig(sequence);
+    break;
+
   case COMM_TUNER_CMD_PATH_BEGIN:
     if (payload_length != 8U)
     {
@@ -977,7 +1230,7 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
       CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
       return;
     }
-    AdvanceMotion_Cancel();
+    AdvanceControl_CancelActive();
     g_remote_goal_active = 0U;
     g_remote_heartbeat_timeout = 0U;
     CommTuner_ClearTelemetry();
@@ -1015,14 +1268,12 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
 
   case COMM_TUNER_CMD_RESET_ORIGIN:
   {
-    AdvanceMotion_RuntimeStatus_t status;
     if (payload_length != 0U)
     {
       CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
       return;
     }
-    (void)AdvanceMotion_GetStatus(&status);
-    if (status.state == ADVANCE_MOTION_STATE_RUNNING)
+    if (AdvanceControl_IsBusy() != 0U)
     {
       CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BUSY, 1U);
       return;
@@ -1143,7 +1394,7 @@ static void CommTuner_StartTransmit(void)
 
   if ((g_uart == NULL) || (g_tx_busy != 0U) ||
       ((g_tx_queue_count == 0U) && (g_telemetry_pending == 0U) &&
-       (g_path_telemetry_pending == 0U)))
+       (g_path_telemetry_pending == 0U) && (g_holonomic_telemetry_pending == 0U)))
   {
     return;
   }
@@ -1158,7 +1409,8 @@ static void CommTuner_StartTransmit(void)
   {
     primask = __get_PRIMASK();
     __disable_irq();
-    if ((g_telemetry_pending == 0U) && (g_path_telemetry_pending == 0U))
+    if ((g_telemetry_pending == 0U) && (g_path_telemetry_pending == 0U) &&
+        (g_holonomic_telemetry_pending == 0U))
     {
       if (primask == 0U)
       {
@@ -1170,6 +1422,11 @@ static void CommTuner_StartTransmit(void)
     {
       frame = &g_path_telemetry_frame;
       g_path_telemetry_pending = 0U;
+    }
+    else if (g_holonomic_telemetry_pending != 0U)
+    {
+      frame = &g_holonomic_telemetry_frame;
+      g_holonomic_telemetry_pending = 0U;
     }
     else
     {
@@ -1263,6 +1520,8 @@ HAL_StatusTypeDef CommTuner_Init(UART_HandleTypeDef *huart)
   g_last_heartbeat_tick = 0U;
   g_last_telemetry_tick = 0U;
   g_last_path_telemetry_tick = 0U;
+  g_last_holonomic_telemetry_tick = 0U;
+  g_holonomic_telemetry_was_active = 0U;
   g_path_active_points = g_path_buffer_a;
   g_path_staging_points = g_path_buffer_b;
   g_path_active_id = 0U;
@@ -1289,7 +1548,6 @@ void CommTuner_Process(void)
 
 void CommTuner_Update(void)
 {
-  AdvanceMotion_RuntimeStatus_t status;
   uint32_t now_tick;
 
   now_tick = HAL_GetTick();
@@ -1303,21 +1561,35 @@ void CommTuner_Update(void)
     g_last_path_telemetry_tick = now_tick;
     CommTuner_QueuePathTelemetry();
   }
+  if ((now_tick - g_last_holonomic_telemetry_tick) >= COMM_TUNER_HOLONOMIC_TELEMETRY_PERIOD_MS)
+  {
+    g_last_holonomic_telemetry_tick = now_tick;
+    if (AdvanceHolonomic_IsActive() != 0U)
+    {
+      g_holonomic_telemetry_was_active = 1U;
+      CommTuner_QueueHolonomicTelemetry();
+    }
+    else if (g_holonomic_telemetry_was_active != 0U)
+    {
+      /* 进入终态：补发一帧最终状态 */
+      g_holonomic_telemetry_was_active = 0U;
+      CommTuner_QueueHolonomicTelemetry();
+    }
+  }
 
   /* Telemetry is available in every motion state; only motion safety needs an active goal. */
   if (g_remote_goal_active == 0U)
   {
     return;
   }
-  if ((AdvanceMotion_GetStatus(&status) != ADVANCE_MOTION_STATUS_OK) ||
-      (status.state != ADVANCE_MOTION_STATE_RUNNING))
+  if (AdvanceControl_IsBusy() == 0U)
   {
     g_remote_goal_active = 0U;
     return;
   }
   if ((now_tick - g_last_heartbeat_tick) >= COMM_TUNER_HEARTBEAT_TIMEOUT_MS)
   {
-    AdvanceMotion_Cancel();
+    AdvanceControl_CancelActive();
     g_remote_goal_active = 0U;
     g_remote_heartbeat_timeout = 1U;
   }

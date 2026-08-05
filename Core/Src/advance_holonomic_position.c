@@ -82,7 +82,6 @@ typedef struct
   uint32_t arrive_hold_start_tick;
   uint8_t stopping;
 
-  AdvanceHolonomic_Config_t config;
   AdvanceHolonomic_DebugSnapshot_t debug;
 } AdvanceHolonomic_Module_t;
 
@@ -91,6 +90,16 @@ static AdvanceHolonomic_Module_t g_holonomic = {
 
 /* 运行状态由 TIM6 中断写入、阻塞任务读取，独立声明为 volatile。 */
 static volatile AdvanceHolonomic_RunState_t g_holonomic_state = ADVANCE_HOLONOMIC_STATE_IDLE;
+
+/* 运行时参数 active/pending 双缓冲：20 ms 周期边界整体原子切换。 */
+static AdvanceHolonomic_Config_t g_holonomic_config_active;
+static AdvanceHolonomic_Config_t g_holonomic_config_pending;
+static volatile uint8_t g_holonomic_config_pending_valid;
+static volatile uint32_t g_holonomic_config_active_revision;
+static volatile uint32_t g_holonomic_config_pending_revision;
+static volatile uint32_t g_holonomic_config_next_revision;
+
+static void AdvanceHolonomic_ApplyPendingConfig(void);
 
 static const AdvanceHolonomic_Config_t g_holonomic_default = {
     .linear_accel_mm_s2 = ADVANCE_HOLONOMIC_DEFAULT_LINEAR_ACCEL_MM_S2,
@@ -507,18 +516,18 @@ static void AdvanceHolonomic_ComputeBodyCommand(
                                      actual_pose->yaw_deg,
                                      &ref_right_mm_s, &ref_forward_mm_s);
 
-    forward_position_correction = g_holonomic.config.kp_forward * error_forward_mm;
+    forward_position_correction = g_holonomic_config_active.kp_forward * error_forward_mm;
     forward_velocity_correction =
-        g_holonomic.config.kv_forward * (ref_forward_mm_s - actual_velocity->forward_mm_s);
+        g_holonomic_config_active.kv_forward * (ref_forward_mm_s - actual_velocity->forward_mm_s);
     forward_correction = AdvanceWorld_LimitFloat(
         forward_position_correction + forward_velocity_correction,
         -ADVANCE_HOLONOMIC_MAX_FORWARD_CORRECTION_MM_S,
         ADVANCE_HOLONOMIC_MAX_FORWARD_CORRECTION_MM_S);
     command_forward_mm_s = ref_forward_mm_s + forward_correction;
 
-    lateral_position_correction = g_holonomic.config.kp_lateral * error_right_mm;
+    lateral_position_correction = g_holonomic_config_active.kp_lateral * error_right_mm;
     lateral_velocity_correction =
-        g_holonomic.config.kv_lateral * (ref_right_mm_s - actual_velocity->right_mm_s);
+        g_holonomic_config_active.kv_lateral * (ref_right_mm_s - actual_velocity->right_mm_s);
     lateral_correction = AdvanceWorld_LimitFloat(
         lateral_position_correction + lateral_velocity_correction,
         -ADVANCE_HOLONOMIC_MAX_LATERAL_CORRECTION_MM_S,
@@ -557,9 +566,9 @@ static void AdvanceHolonomic_ComputeBodyCommand(
   if (g_holonomic.yaw_required != 0U)
   {
     error_yaw_deg = AdvanceWorld_WrapAngleDeg(reference->yaw_deg - actual_pose->yaw_deg);
-    yaw_position_correction = g_holonomic.config.kp_yaw * error_yaw_deg;
+    yaw_position_correction = g_holonomic_config_active.kp_yaw * error_yaw_deg;
     yaw_velocity_correction =
-        g_holonomic.config.kv_yaw * (reference->wz_deg_s - actual_velocity->wz_deg_s);
+        g_holonomic_config_active.kv_yaw * (reference->wz_deg_s - actual_velocity->wz_deg_s);
     yaw_correction = AdvanceWorld_LimitFloat(
         yaw_position_correction + yaw_velocity_correction,
         -ADVANCE_HOLONOMIC_MAX_YAW_CORRECTION_DEG_S,
@@ -585,10 +594,27 @@ static void AdvanceHolonomic_ComputeBodyCommand(
     g_holonomic.debug.yaw_velocity_correction_deg_s = 0.0f;
   }
 
-  /* 驱动比例校准层：三个对角比例，底盘层负责麦轮解算与四轮同步 */
-  command->right_mm_s = g_holonomic.config.lateral_scale * command_right_mm_s;
-  command->forward_mm_s = g_holonomic.config.forward_scale * command_forward_mm_s;
-  command->wz_deg_s = g_holonomic.config.yaw_scale * command_wz_deg_s;
+  /* 驱动比例校准层：先乘三个对角比例，再执行最终物理限幅 */
+  command->right_mm_s = g_holonomic_config_active.lateral_scale * command_right_mm_s;
+  command->forward_mm_s = g_holonomic_config_active.forward_scale * command_forward_mm_s;
+  command->wz_deg_s = g_holonomic_config_active.yaw_scale * command_wz_deg_s;
+
+  /* 最终安全限幅：平移按二维向量模限制到目标 vmax，保持两轴比例与方向 */
+  linear_norm = sqrtf((command->right_mm_s * command->right_mm_s) +
+                      (command->forward_mm_s * command->forward_mm_s));
+  if ((g_holonomic.goal.vmax_mm_s > 0.0f) && (linear_norm > g_holonomic.goal.vmax_mm_s))
+  {
+    scale = g_holonomic.goal.vmax_mm_s / linear_norm;
+    command->right_mm_s *= scale;
+    command->forward_mm_s *= scale;
+  }
+  if (g_holonomic.goal.wmax_deg_s > 0.0f)
+  {
+    command->wz_deg_s = AdvanceWorld_LimitFloat(
+        command->wz_deg_s,
+        -g_holonomic.goal.wmax_deg_s,
+        g_holonomic.goal.wmax_deg_s);
+  }
 
   g_holonomic.debug.command_forward_mm_s = command_forward_mm_s;
   g_holonomic.debug.command_lateral_mm_s = command_right_mm_s;
@@ -782,7 +808,12 @@ void AdvanceHolonomic_Init(void)
 {
   g_holonomic = (AdvanceHolonomic_Module_t){
       .pending_terminal_state = ADVANCE_HOLONOMIC_STATE_IDLE};
-  g_holonomic.config = g_holonomic_default;
+  g_holonomic_config_active = g_holonomic_default;
+  g_holonomic_config_pending = g_holonomic_default;
+  g_holonomic_config_pending_valid = 0U;
+  g_holonomic_config_active_revision = 0U;
+  g_holonomic_config_pending_revision = 0U;
+  g_holonomic_config_next_revision = 0U;
   g_holonomic_state = ADVANCE_HOLONOMIC_STATE_IDLE;
   AdvanceHolonomic_UpdateDebugSnapshot(HAL_GetTick());
 }
@@ -861,8 +892,8 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_Start(const WorldGoalPose2D_t *goal,
     AdvanceHolonomic_Profile1D_Init(&g_holonomic.linear_profile,
                                     g_holonomic.path_length_mm,
                                     goal->vmax_mm_s,
-                                    g_holonomic.config.linear_accel_mm_s2,
-                                    g_holonomic.config.linear_decel_mm_s2);
+                                    g_holonomic_config_active.linear_accel_mm_s2,
+                                    g_holonomic_config_active.linear_decel_mm_s2);
   }
   else
   {
@@ -874,8 +905,8 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_Start(const WorldGoalPose2D_t *goal,
     AdvanceHolonomic_Profile1D_Init(&g_holonomic.linear_profile,
                                     0.0f,
                                     0.0f,
-                                    g_holonomic.config.linear_accel_mm_s2,
-                                    g_holonomic.config.linear_decel_mm_s2);
+                                    g_holonomic_config_active.linear_accel_mm_s2,
+                                    g_holonomic_config_active.linear_decel_mm_s2);
   }
 
   if (g_holonomic.yaw_required != 0U)
@@ -886,8 +917,8 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_Start(const WorldGoalPose2D_t *goal,
     AdvanceHolonomic_Profile1D_Init(&g_holonomic.yaw_profile,
                                     yaw_delta,
                                     goal->wmax_deg_s,
-                                    g_holonomic.config.yaw_accel_deg_s2,
-                                    g_holonomic.config.yaw_accel_deg_s2);
+                                    g_holonomic_config_active.yaw_accel_deg_s2,
+                                    g_holonomic_config_active.yaw_accel_deg_s2);
   }
   else
   {
@@ -895,8 +926,8 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_Start(const WorldGoalPose2D_t *goal,
     AdvanceHolonomic_Profile1D_Init(&g_holonomic.yaw_profile,
                                     0.0f,
                                     0.0f,
-                                    g_holonomic.config.yaw_accel_deg_s2,
-                                    g_holonomic.config.yaw_accel_deg_s2);
+                                    g_holonomic_config_active.yaw_accel_deg_s2,
+                                    g_holonomic_config_active.yaw_accel_deg_s2);
   }
 
   g_holonomic.started_tick = now_tick;
@@ -922,6 +953,9 @@ void AdvanceHolonomic_Update(void)
   uint32_t dt_ms;
   float dt_s;
   uint8_t profiles_done;
+
+  /* 待生效配置在 20 ms 周期边界整体切换，不重建已预计算的轮廓 */
+  AdvanceHolonomic_ApplyPendingConfig();
 
   /* 终态停车未送达时继续重试，保持控制权直至停车成功 */
   if (g_holonomic.stopping != 0U)
@@ -1184,17 +1218,38 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_GetDebugSnapshot(
   return ADVANCE_HOLONOMIC_STATUS_OK;
 }
 
-AdvanceHolonomic_Status_t AdvanceHolonomic_GetConfig(AdvanceHolonomic_Config_t *config)
+/* 在 20 ms 控制周期边界应用待生效配置；只替换参数，不重置目标/轮廓/速度估计/调试快照。 */
+static void AdvanceHolonomic_ApplyPendingConfig(void)
 {
   uint32_t primask;
 
-  if (config == NULL)
+  primask = __get_PRIMASK();
+  __disable_irq();
+  if (g_holonomic_config_pending_valid != 0U)
+  {
+    g_holonomic_config_active = g_holonomic_config_pending;
+    g_holonomic_config_active_revision = g_holonomic_config_pending_revision;
+    g_holonomic_config_pending_valid = 0U;
+  }
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+}
+
+AdvanceHolonomic_Status_t AdvanceHolonomic_GetConfig(AdvanceHolonomic_Config_t *config,
+                                                      uint32_t *revision)
+{
+  uint32_t primask;
+
+  if ((config == NULL) || (revision == NULL))
   {
     return ADVANCE_HOLONOMIC_STATUS_INVALID_PARAM;
   }
   primask = __get_PRIMASK();
   __disable_irq();
-  *config = g_holonomic.config;
+  *config = g_holonomic_config_active;
+  *revision = g_holonomic_config_active_revision;
   if (primask == 0U)
   {
     __enable_irq();
@@ -1202,22 +1257,26 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_GetConfig(AdvanceHolonomic_Config_t *
   return ADVANCE_HOLONOMIC_STATUS_OK;
 }
 
-AdvanceHolonomic_Status_t AdvanceHolonomic_SetConfig(const AdvanceHolonomic_Config_t *config)
+AdvanceHolonomic_Status_t AdvanceHolonomic_RequestConfig(const AdvanceHolonomic_Config_t *config,
+                                                          uint32_t *revision)
 {
   uint32_t primask;
 
-  if (AdvanceHolonomic_IsConfigValid(config) == 0U)
+  if ((revision == NULL) || (AdvanceHolonomic_IsConfigValid(config) == 0U))
   {
     return ADVANCE_HOLONOMIC_STATUS_INVALID_PARAM;
   }
-  if ((g_holonomic_state == ADVANCE_HOLONOMIC_STATE_RUNNING) ||
-      (g_holonomic_state == ADVANCE_HOLONOMIC_STATE_SETTLING))
-  {
-    return ADVANCE_HOLONOMIC_STATUS_BUSY;
-  }
   primask = __get_PRIMASK();
   __disable_irq();
-  g_holonomic.config = *config;
+  ++g_holonomic_config_next_revision;
+  if (g_holonomic_config_next_revision == 0U)
+  {
+    ++g_holonomic_config_next_revision;
+  }
+  g_holonomic_config_pending = *config;
+  g_holonomic_config_pending_revision = g_holonomic_config_next_revision;
+  g_holonomic_config_pending_valid = 1U;
+  *revision = g_holonomic_config_pending_revision;
   if (primask == 0U)
   {
     __enable_irq();
@@ -1225,7 +1284,7 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_SetConfig(const AdvanceHolonomic_Conf
   return ADVANCE_HOLONOMIC_STATUS_OK;
 }
 
-AdvanceHolonomic_Status_t AdvanceHolonomic_RestoreDefaultConfig(void)
+AdvanceHolonomic_Status_t AdvanceHolonomic_RestoreDefaultConfig(uint32_t *revision)
 {
-  return AdvanceHolonomic_SetConfig(&g_holonomic_default);
+  return AdvanceHolonomic_RequestConfig(&g_holonomic_default, revision);
 }
