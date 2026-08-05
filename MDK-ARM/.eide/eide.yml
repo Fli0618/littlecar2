@@ -31,6 +31,7 @@ virtualFolder:
                 - path: ../Core/Inc/advance_visual.h
                 - path: ../Core/Src/advance_world.c
                 - path: ../Core/Src/advance_motion.c
+                - path: ../Core/Src/advance_holonomic_position.c
                 - path: ../Core/Src/car_pose.c
                 - path: ../Core/Src/sensor_ops.c
                 - path: ../Core/Src/sensor_wit.c
@@ -60,6 +61,8 @@ virtualFolder:
                 - path: ../Core/Inc/stm32f4xx_hal_conf.h
                 - path: ../Core/Inc/stm32f4xx_it.h
                 - path: ../Core/Inc/advance_motion_config.h
+                - path: ../Core/Inc/advance_holonomic_position.h
+                - path: ../Core/Inc/advance_holonomic_position_config.h
               folders: []
     - name: Drivers
       files: []

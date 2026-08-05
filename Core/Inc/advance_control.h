@@ -13,7 +13,8 @@ typedef enum
 {
   ADVANCE_CONTROL_NONE = 0U, /**< 无底盘控制器持有控制权。 */
   ADVANCE_CONTROL_WORLD,      /**< 世界坐标运动控制器持有控制权。 */
-  ADVANCE_CONTROL_VISUAL      /**< 视觉控制预留模式。 */
+  ADVANCE_CONTROL_VISUAL,     /**< 视觉控制预留模式。 */
+  ADVANCE_CONTROL_HOLONOMIC   /**< 轻量全向位置控制器持有控制权。 */
 } AdvanceControl_Mode_t;
 
 /** @brief 将控制权初始化为 NONE，不发送底盘命令。 */
