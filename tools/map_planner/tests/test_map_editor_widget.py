@@ -38,7 +38,7 @@ class MapEditorWidgetTests(unittest.TestCase):
         widget = MapEditorWidget()
         try:
             widget.set_plan(Plan(), calibrated=True)
-            widget.create_auto_path(QPointF(1200, 150))
+            widget.create_auto_path(QPointF(1200, 300))
 
             step = widget.plan.steps[-1]
             self.assertIsInstance(step, ContinuousPathSegment)
@@ -46,8 +46,6 @@ class MapEditorWidgetTests(unittest.TestCase):
             self.assertGreater(len(step.points), 2)
             self.assertLessEqual(len(step.points), 256)
             self.assertIn("自动规划完成", widget.status.text())
-            self.assertTrue(any(item.data(0) == "inflated_forbidden"
-                                for item in widget.scene.items()))
             self.assertEqual(widget.mode, "auto_plan")
             self.assertTrue(any(item.data(0) == "boundary_cost_band"
                                 for item in widget.scene.items()))
@@ -61,7 +59,7 @@ class MapEditorWidgetTests(unittest.TestCase):
             self.assertEqual(
                 [widget.editor_tabs.tabText(index)
                  for index in range(widget.editor_tabs.count())],
-                ["1 代价地图", "2 点位与航点", "3 方案与输出"],
+                ["1 自动导航", "2 路径制作", "3 实时运行", "4 方案与输出"],
             )
         finally:
             widget.close()
@@ -70,12 +68,12 @@ class MapEditorWidgetTests(unittest.TestCase):
         widget = MapEditorWidget()
         try:
             widget.set_plan(Plan(), calibrated=True)
-            widget.create_auto_path(QPointF(1200, 150))
+            widget.create_auto_path(QPointF(1200, 300))
             self.assertFalse(widget._auto_paths_stale)
-            widget.boundary_safety.setValue(20)
+            widget.boundary_safety.setValue(25)
 
             self.assertTrue(widget._auto_paths_stale)
-            self.assertEqual(widget.plan.layout.costmap.boundary_safety_margin_mm, 20)
+            self.assertEqual(widget.plan.layout.costmap.boundary_safety_margin_mm, 25)
             with self.assertRaisesRegex(ValueError, "重新规划"):
                 widget.selected_step_path_points()
 
@@ -94,11 +92,11 @@ class MapEditorWidgetTests(unittest.TestCase):
             widget.vehicle_width.setValue(240)
 
             self.assertEqual(widget.plan.layout.costmap.vehicle_length_mm, 360)
-            self.assertEqual(widget.plan.layout.costmap.vehicle_width_mm, 240)
+            self.assertEqual(widget.plan.layout.costmap.vehicle_width_mm, 300)
             outline = next(item for item in widget.scene.items()
                            if item.data(0) == "start_pose_preview")
             self.assertAlmostEqual(outline.rect().width(), 360)
-            self.assertAlmostEqual(outline.rect().height(), 240)
+            self.assertAlmostEqual(outline.rect().height(), 300)
         finally:
             widget.close()
 
@@ -217,7 +215,7 @@ class MapEditorWidgetTests(unittest.TestCase):
         widget = MapEditorWidget()
         try:
             widget.set_plan(Plan(), calibrated=True)
-            widget.create_auto_path(QPointF(1800, 150), yaw_mode="fixed")
+            widget.create_auto_path(QPointF(1800, 300), yaw_mode="fixed")
             sentinel = Waypoint(999, 888, 12)
             widget.plan.steps.append(sentinel)
             widget.active_index = 0
@@ -306,8 +304,13 @@ class MapEditorWidgetTests(unittest.TestCase):
             self.assertFalse(widget.execution_step_button.isEnabled())
 
             widget.set_execution_enabled(True)
-            widget.plan.steps = [Waypoint(100, 200, 30)]
-            widget.active_index = 0
+            widget.plan.steps = [Waypoint(100, 200, 30),
+                                 Waypoint(300, 400, 50)]
+            widget.refresh_waypoints()
+            self.assertEqual(widget.runtime_waypoint_list.count(), 2)
+            widget.runtime_waypoint_list.setCurrentRow(0)
+            self.assertEqual(widget.active_index, 0)
+            self.assertEqual(widget.waypoint_list.currentRow(), 0)
             widget.execution_step_button.click()
             widget.execution_run_button.click()
             widget.apply_runtime_snapshot(SimpleNamespace(
@@ -324,6 +327,13 @@ class MapEditorWidgetTests(unittest.TestCase):
             self.assertIn("runtime_car", markers)
             self.assertIn("runtime_trace", markers)
             self.assertIn("误差 X=10.0 mm", widget.execution_status_label.text())
+            trace = next(item for item in widget.scene.items()
+                         if item.data(0) == "runtime_trace")
+            self.assertEqual(trace.pen().color().name(), "#8e24aa")
+            self.assertEqual(trace.pen().style(), Qt.PenStyle.SolidLine)
+            self.assertIn("X=110.0 mm", widget.runtime_position_label.text())
+            self.assertIs(widget.execution_status_label.parentWidget(),
+                          widget.runtime_page)
 
             widget.set_execution_enabled(False)
             self.assertFalse(widget.execution_step_button.isEnabled())
@@ -390,39 +400,113 @@ class MapEditorWidgetTests(unittest.TestCase):
         finally:
             widget.close()
 
-    def test_yellow_zone_passage_defaults_forbidden_and_can_be_overridden(self):
+    def test_yellow_zone_passage_defaults_allowed_and_can_be_forbidden(self):
         widget = MapEditorWidget()
         try:
             platform_center = QPointF(775, 775)
             start = QPointF(400, 775)
             end = QPointF(1100, 775)
 
-            self.assertFalse(widget.allow_yellow_zone.isChecked())
-            self.assertFalse(widget._is_valid_start_candidate(775, 775))
-            self.assertFalse(widget.is_valid_route_segment(start, end))
-            self.assertFalse(widget.is_valid_continuous_segment(start, end))
-            self.assertFalse(widget.is_valid_rotation(platform_center, 0, 90))
-            self.assertFalse(widget._is_valid_start_candidate(50, 50))
-            self.assertIn("黄色区限制已启用", widget.yellow_zone_status_label.text())
-
-            widget.begin_start("自定义")
-            widget.update_preview(775, 775)
-            allowed_preview = next(
-                item for item in widget.scene.items()
-                if item.data(0) == "start_pose_preview")
-            self.assertEqual(allowed_preview.pen().color().name(), "#c62828")
-
-            widget.allow_yellow_zone.setChecked(True)
+            self.assertTrue(widget.allow_yellow_zone.isChecked())
             self.assertTrue(widget._is_valid_start_candidate(775, 775))
             self.assertTrue(widget.is_valid_route_segment(start, end))
             self.assertTrue(widget.is_valid_continuous_segment(start, end))
             self.assertTrue(widget.is_valid_rotation(platform_center, 0, 90))
             self.assertFalse(widget._is_valid_start_candidate(50, 50))
             self.assertIn("黄色区限制已关闭", widget.yellow_zone_status_label.text())
+
+            widget.begin_start("自定义")
+            widget.update_preview(775, 775)
+            allowed_preview = next(
+                item for item in widget.scene.items()
+                if item.data(0) == "start_pose_preview")
+            self.assertEqual(allowed_preview.pen().color().name(), "#1565c0")
+
+            widget.allow_yellow_zone.setChecked(False)
+            self.assertFalse(widget._is_valid_start_candidate(775, 775))
+            self.assertFalse(widget.is_valid_route_segment(start, end))
+            self.assertFalse(widget.is_valid_continuous_segment(start, end))
+            self.assertFalse(widget.is_valid_rotation(platform_center, 0, 90))
+            self.assertFalse(widget._is_valid_start_candidate(50, 50))
+            self.assertIn("黄色区限制已启用", widget.yellow_zone_status_label.text())
             blocked_preview = next(
                 item for item in widget.scene.items()
                 if item.data(0) == "start_pose_preview")
-            self.assertEqual(blocked_preview.pen().color().name(), "#1565c0")
+            self.assertEqual(blocked_preview.pen().color().name(), "#c62828")
+        finally:
+            widget.close()
+
+    def test_platform_soft_cost_overlay_is_split_at_outer_corner_boundary(self):
+        widget = MapEditorWidget()
+        try:
+            widget.redraw()
+            regions = {item.data(1) for item in widget.scene.items()
+                       if item.data(0) == "soft_cost_zone"}
+            self.assertIn("inner", regions)
+            self.assertIn("outer", regions)
+            inner = [item for item in widget.scene.items()
+                     if item.data(0) == "soft_cost_zone" and
+                     item.data(1) == "inner"]
+            outer = [item for item in widget.scene.items()
+                     if item.data(0) == "soft_cost_zone" and
+                     item.data(1) == "outer"]
+            self.assertEqual(len(inner), 4)
+            self.assertEqual(len(outer), 1)
+            self.assertTrue(any(item.path().contains(QPointF(1180, 775))
+                                for item in inner))
+            self.assertTrue(outer[0].path().contains(QPointF(500, 1200)))
+            body_clearances = [item for item in widget.scene.items()
+                               if item.data(0) == "platform_body_clearance"]
+            safety_clearances = [item for item in widget.scene.items()
+                                 if item.data(0) == "platform_safety_clearance"]
+            self.assertEqual(len(body_clearances), 4)
+            self.assertEqual(len(safety_clearances), 4)
+            self.assertTrue(all(item.pen().color().name() == "#ec407a"
+                                for item in body_clearances + safety_clearances))
+            self.assertTrue(all(item.pen().style() == Qt.PenStyle.DashLine
+                                for item in safety_clearances))
+            self.assertTrue(any(
+                item.data(0) == "platform_cost_split_boundary"
+                for item in widget.scene.items()))
+        finally:
+            widget.close()
+
+    def test_saved_default_costmap_and_editable_boundary_indent_controls(self):
+        widget = MapEditorWidget()
+        try:
+            config = widget.current_costmap_settings()
+            self.assertEqual(config.boundary_safety_margin_mm, 20)
+            self.assertEqual(config.platform_inflation_mm, 20)
+            self.assertEqual(config.platform_outer_inflation_mm, 240)
+            self.assertEqual(config.platform_outer_cost_weight, 3.8)
+            self.assertEqual(config.boundary_zone_half_width_mm, 200)
+            self.assertEqual(config.boundary_zone_depth_mm, 85)
+            self.assertEqual(config.side_zone_half_length_mm, 290)
+            self.assertEqual(config.side_zone_depth_mm, 150)
+            self.assertEqual(config.boundary_zone_inflation_mm, 35)
+            self.assertEqual(len([item for item in widget.scene.items()
+                                  if item.data(0) == "boundary_inset_zone"]), 3)
+            body_line = next(item for item in widget.scene.items()
+                             if item.data(0) == "boundary_inset_body_clearance")
+            safety_line = next(item for item in widget.scene.items()
+                               if item.data(0) == "boundary_inset_safety_clearance")
+            self.assertEqual(body_line.pen().style(), Qt.PenStyle.SolidLine)
+            self.assertEqual(safety_line.pen().style(), Qt.PenStyle.DashLine)
+            self.assertEqual(body_line.pen().color().name(), "#d32f2f")
+            self.assertEqual(safety_line.pen().color().name(), "#d32f2f")
+            widget.boundary_zone_half_width.setValue(225)
+            widget.boundary_zone_depth.setValue(95)
+            self.assertEqual(widget.plan.layout.costmap.boundary_zone_half_width_mm,
+                             225)
+            self.assertEqual(widget.plan.layout.costmap.boundary_zone_depth_mm, 95)
+            widget.side_zone_half_length.setValue(275)
+            widget.side_zone_depth.setValue(145)
+            self.assertEqual(widget.plan.layout.costmap.side_zone_half_length_mm,
+                             275)
+            self.assertEqual(widget.plan.layout.costmap.side_zone_depth_mm, 145)
+            widget.boundary_zone_inflation.setValue(160)
+            self.assertEqual(
+                widget.plan.layout.costmap.boundary_zone_inflation_mm, 160)
         finally:
             widget.close()
 

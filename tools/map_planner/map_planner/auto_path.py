@@ -18,6 +18,12 @@ FIXED_PLATFORM_RECTS = (
     (550.0, 1400.0, 1000.0, 1850.0),
     (1400.0, 1400.0, 1850.0, 1850.0),
 )
+PLATFORM_GROUP_BOUNDS = (
+    min(rect[0] for rect in FIXED_PLATFORM_RECTS),
+    min(rect[1] for rect in FIXED_PLATFORM_RECTS),
+    max(rect[2] for rect in FIXED_PLATFORM_RECTS),
+    max(rect[3] for rect in FIXED_PLATFORM_RECTS),
+)
 VISIBILITY_CORNER_EPSILON_MM = 1.0
 
 
@@ -33,6 +39,7 @@ class InflatedRect:
     bottom: float
     source: str
     corner_radius: float = 0.0
+    hard: bool = True
 
 
 @dataclass(frozen=True)
@@ -51,9 +58,16 @@ class AutoPathSettings:
                   costmap.vehicle_length_mm, costmap.vehicle_width_mm,
                   costmap.boundary_inflation_mm,
                   costmap.boundary_cost_weight,
+                  costmap.boundary_zone_half_width_mm,
+                  costmap.boundary_zone_depth_mm,
+                  costmap.side_zone_half_length_mm,
+                  costmap.side_zone_depth_mm,
+                  costmap.boundary_zone_inflation_mm,
                   costmap.platform_safety_margin_mm,
                   costmap.platform_inflation_mm,
                   costmap.platform_cost_weight,
+                  costmap.platform_outer_inflation_mm,
+                  costmap.platform_outer_cost_weight,
                   costmap.obstacle_radius_mm,
                   costmap.obstacle_safety_margin_mm,
                   costmap.obstacle_inflation_mm,
@@ -69,8 +83,14 @@ class AutoPathSettings:
         for label, value, maximum in (
             ("场地边线安全距离", costmap.boundary_safety_margin_mm, 150.0),
             ("场地边线软膨胀距离", costmap.boundary_inflation_mm, 500.0),
+            ("边界功能区半宽", costmap.boundary_zone_half_width_mm, 600.0),
+            ("边界功能区内突深度", costmap.boundary_zone_depth_mm, 300.0),
+            ("暂存/粗加工区半长", costmap.side_zone_half_length_mm, 600.0),
+            ("暂存/粗加工区宽度", costmap.side_zone_depth_mm, 300.0),
+            ("边界功能区软膨胀距离", costmap.boundary_zone_inflation_mm, 500.0),
             ("平台安全距离", costmap.platform_safety_margin_mm, 150.0),
             ("平台软膨胀距离", costmap.platform_inflation_mm, 500.0),
+            ("平台组外侧软膨胀距离", costmap.platform_outer_inflation_mm, 500.0),
             ("障碍物半径", costmap.obstacle_radius_mm, 100.0),
             ("障碍物安全距离", costmap.obstacle_safety_margin_mm, 150.0),
             ("障碍物软膨胀距离", costmap.obstacle_inflation_mm, 500.0),
@@ -78,7 +98,8 @@ class AutoPathSettings:
             if not 0.0 <= value <= maximum:
                 raise AutoPathError(f"{label}必须在 0~{maximum:g} mm")
         for label, value in (("场地边线", costmap.boundary_cost_weight),
-                             ("平台", costmap.platform_cost_weight),
+                             ("平台组内侧", costmap.platform_cost_weight),
+                             ("平台组外侧", costmap.platform_outer_cost_weight),
                              ("障碍物", costmap.obstacle_cost_weight)):
             if not 0.0 <= value <= 20.0:
                 raise AutoPathError(f"{label}软代价权重必须在 0~20")
@@ -101,6 +122,25 @@ class AutoPathResult:
     world_points: tuple[PathPosePoint, ...]
     inflated_rects: tuple[InflatedRect, ...]
     length_mm: float
+
+
+def boundary_inset_rects(costmap: CostmapSettings) -> tuple[tuple[float, float, float, float], ...]:
+    """Physical top/left/bottom work zones that replace the outer boundary."""
+    half_width = costmap.boundary_zone_half_width_mm
+    depth = costmap.boundary_zone_depth_mm
+    side_half = costmap.side_zone_half_length_mm
+    side_depth = costmap.side_zone_depth_mm
+    center = FIELD_SIZE_MM / 2.0
+    result = []
+    if half_width > 0.0 and depth > 0.0:
+        result.append((center - half_width, 0.0,
+                       center + half_width, depth))
+    if side_half > 0.0 and side_depth > 0.0:
+        result.extend(((0.0, center - side_half,
+                        side_depth, center + side_half),
+                       (center - side_half, FIELD_SIZE_MM - side_depth,
+                        center + side_half, FIELD_SIZE_MM)))
+    return tuple(result)
 
 
 def build_inflated_obstacles(
@@ -141,14 +181,21 @@ def build_inflated_obstacles(
         ]
     else:
         result = []
+    boundary_clearance = body_half + boundary_safety
+    result.extend(
+        InflatedRect(left - boundary_clearance, top - boundary_clearance,
+                     right + boundary_clearance, bottom + boundary_clearance,
+                     "boundary_zone", boundary_clearance)
+        for left, top, right, bottom in boundary_inset_rects(costmap)
+    )
     platform_clearance = body_half + costmap.platform_safety_margin_mm
-    if settings.include_fixed_platforms:
-        result.extend(
-            InflatedRect(left - platform_clearance, top - platform_clearance,
-                         right + platform_clearance, bottom + platform_clearance,
-                         "platform", platform_clearance)
-            for left, top, right, bottom in FIXED_PLATFORM_RECTS
-        )
+    result.extend(
+        InflatedRect(left - platform_clearance, top - platform_clearance,
+                     right + platform_clearance, bottom + platform_clearance,
+                     "platform", platform_clearance,
+                     hard=settings.include_fixed_platforms)
+        for left, top, right, bottom in FIXED_PLATFORM_RECTS
+    )
     custom_clearance = (body_half + costmap.obstacle_radius_mm +
                         costmap.obstacle_safety_margin_mm)
     result.extend(
@@ -175,7 +222,7 @@ def _point_is_free(point: tuple[float, float], rects: tuple[InflatedRect, ...],
     left, top, right, bottom = bounds
     if not (left <= x <= right and top <= y <= bottom):
         return False
-    return not any(_shape_contains(point, rect) for rect in rects)
+    return not any(rect.hard and _shape_contains(point, rect) for rect in rects)
 
 
 def _shape_contains(point: tuple[float, float], shape: InflatedRect) -> bool:
@@ -293,7 +340,8 @@ def _segment_is_free(start: tuple[float, float], end: tuple[float, float],
                      bounds: tuple[float, float, float, float]) -> bool:
     return (_point_is_free(start, rects, bounds) and
             _point_is_free(end, rects, bounds) and
-            not any(_segment_hits_rect(start, end, rect) for rect in rects))
+            not any(rect.hard and _segment_hits_rect(start, end, rect)
+                    for rect in rects))
 
 
 def _visibility_nodes(start: tuple[float, float], goal: tuple[float, float],
@@ -302,13 +350,21 @@ def _visibility_nodes(start: tuple[float, float], goal: tuple[float, float],
                       settings: AutoPathSettings) -> list[tuple[float, float]]:
     nodes = [start, goal]
     for rect in rects:
-        nodes.extend(_shape_boundary_nodes(rect))
-        if rect.source in ("platform", "custom"):
-            soft = (settings.costmap.platform_inflation_mm
-                    if rect.source == "platform"
-                    else settings.costmap.obstacle_inflation_mm)
-            if soft > 0.0:
-                nodes.extend(_shape_boundary_nodes(rect, soft))
+        if rect.hard:
+            nodes.extend(_shape_boundary_nodes(rect))
+        if (rect.source == "platform" and
+                settings.costmap.platform_inflation_mm > 0.0):
+            nodes.extend(_shape_boundary_nodes(
+                rect, settings.costmap.platform_inflation_mm))
+        if rect.source == "custom" and settings.costmap.obstacle_inflation_mm > 0.0:
+            nodes.extend(_shape_boundary_nodes(
+                rect, settings.costmap.obstacle_inflation_mm))
+    group_left, group_top, group_right, group_bottom = PLATFORM_GROUP_BOUNDS
+    outer = settings.costmap.platform_outer_inflation_mm
+    if outer > 0.0:
+        group = InflatedRect(group_left, group_top, group_right, group_bottom,
+                             "platform_group")
+        nodes.extend(_shape_boundary_nodes(group, outer))
     # Add candidates on the inner edge of the soft boundary-cost band. Without
     # these nodes a visibility graph containing only start/goal cannot choose a
     # slightly longer route away from a field edge.
@@ -372,6 +428,18 @@ def _point_to_rect_distance(point: tuple[float, float], rect: InflatedRect) -> f
     return max(0.0, math.hypot(dx, dy) - radius)
 
 
+def _platform_group_boundary_distance(point: tuple[float, float]) -> tuple[bool, float]:
+    """Return side and distance to the rectangle joining platform outer corners."""
+    left, top, right, bottom = PLATFORM_GROUP_BOUNDS
+    x, y = point
+    inside = left <= x <= right and top <= y <= bottom
+    if inside:
+        return True, min(x - left, right - x, y - top, bottom - y)
+    dx = max(left - x, 0.0, x - right)
+    dy = max(top - y, 0.0, y - bottom)
+    return False, math.hypot(dx, dy)
+
+
 def _weighted_edge_cost(start: tuple[float, float], end: tuple[float, float],
                         bounds: tuple[float, float, float, float],
                         rects: tuple[InflatedRect, ...],
@@ -395,13 +463,41 @@ def _weighted_edge_cost(start: tuple[float, float], end: tuple[float, float],
             normalized = max(0.0, 1.0 - edge_distance /
                              costmap.boundary_inflation_mm)
             penalty += costmap.boundary_cost_weight * normalized * normalized
+        inside_group, platform_distance = _platform_group_boundary_distance((x, y))
+        if inside_group:
+            platform_penalty = 0.0
+            for rect in rects:
+                if rect.source != "platform":
+                    continue
+                influence = costmap.platform_inflation_mm
+                if influence <= 0.0 or costmap.platform_cost_weight <= 0.0:
+                    continue
+                normalized = max(
+                    0.0, 1.0 - _point_to_rect_distance((x, y), rect) / influence)
+                platform_penalty = max(
+                    platform_penalty,
+                    costmap.platform_cost_weight * normalized * normalized)
+            penalty += platform_penalty
+        elif (costmap.platform_outer_inflation_mm > 0.0 and
+              costmap.platform_outer_cost_weight > 0.0):
+            normalized = max(
+                0.0, 1.0 - platform_distance /
+                costmap.platform_outer_inflation_mm)
+            penalty += costmap.platform_outer_cost_weight * normalized * normalized
         for rect in rects:
-            if rect.source == "boundary":
+            if rect.source == "boundary_zone":
+                influence = costmap.boundary_zone_inflation_mm
+                weight = costmap.boundary_cost_weight
+                if influence > 0.0 and weight > 0.0:
+                    normalized = max(
+                        0.0, 1.0 - _point_to_rect_distance((x, y), rect) /
+                        influence)
+                    penalty += weight * normalized * normalized
                 continue
-            influence = (costmap.platform_inflation_mm if rect.source == "platform"
-                         else costmap.obstacle_inflation_mm)
-            weight = (costmap.platform_cost_weight if rect.source == "platform"
-                      else costmap.obstacle_cost_weight)
+            if rect.source in ("boundary", "platform"):
+                continue
+            influence = costmap.obstacle_inflation_mm
+            weight = costmap.obstacle_cost_weight
             if influence <= 0.0 or weight <= 0.0:
                 continue
             normalized = max(0.0, 1.0 - _point_to_rect_distance((x, y), rect) /

@@ -152,9 +152,21 @@ class MotionWorkbenchController(QObject):
             self._set_coordinate_sync_state(CoordinateSyncState.BOARD_ORIGIN_UNKNOWN)
 
     def can_execute_map(self) -> bool:
-        return (self.session.connected and not self.session.motion_active and
-                self._coordinate_sync_state == CoordinateSyncState.SYNCED and
-                self._upload.state not in (PathUploadState.UPLOADING, PathUploadState.STARTING))
+        return self.map_execution_block_reason() is None
+
+    def map_execution_block_reason(self) -> str | None:
+        """Return the shared interlock reason for every map execution entry."""
+        if not self.session.connected:
+            return "请先连接串口"
+        if self.session.motion_active:
+            return "当前运动尚未停止，请先 STOP"
+        if (self._map_calibration_known and
+                self._coordinate_sync_state != CoordinateSyncState.SYNCED):
+            return "地图坐标尚未同步，请先重置零点并等待零点遥测"
+        if self._upload.state in (PathUploadState.UPLOADING,
+                                  PathUploadState.STARTING):
+            return "路径通信尚未完成，请稍候"
+        return None
 
     def _set_coordinate_sync_state(self, state: CoordinateSyncState) -> None:
         if self._coordinate_sync_state == state:
@@ -195,6 +207,10 @@ class MotionWorkbenchController(QObject):
     def start_continuous(self, step_index: int) -> bool:
         """Execute from the explicitly selected step through the remaining workflow."""
         return self._start_plan(continuous=True, start_index=step_index)
+
+    def start_full_plan(self) -> bool:
+        """Execute the complete workflow from its first action."""
+        return self._start_plan(continuous=True, start_index=0)
 
     def select_candidate(self, pose: TargetPose) -> None:
         self.candidate = pose
@@ -372,8 +388,9 @@ class MotionWorkbenchController(QObject):
             abs(((pose.yaw_deg - last.yaw_deg + 180.0) % 360.0) - 180.0) >= 2.0
 
     def _start_plan(self, continuous: bool, start_index: int) -> bool:
-        if self._map_calibration_known and self._coordinate_sync_state != CoordinateSyncState.SYNCED:
-            self.status_changed.emit("地图坐标尚未同步，请先 ResetOrigin 并等待零点遥测")
+        blocked = self.map_execution_block_reason()
+        if blocked is not None:
+            self.status_changed.emit(blocked)
             return False
         if self._plan is None:
             self.status_changed.emit("请先选择流程方案")

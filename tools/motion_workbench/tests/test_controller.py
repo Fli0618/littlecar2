@@ -86,6 +86,20 @@ class ControllerTests(unittest.TestCase):
         session.telemetry.emit(self._telemetry(2))
         self.assertEqual(controller.plan_execution.state, PlanExecutionState.COMPLETED)
 
+    def test_full_plan_uses_shared_workflow_and_motion_interlock(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        controller.set_plan(Plan(steps=[Waypoint(10, 20, 30),
+                                        Waypoint(40, 50, 60)]))
+
+        session.motion_active = True
+        self.assertFalse(controller.start_full_plan())
+        self.assertEqual(session.started, [])
+
+        session.motion_active = False
+        self.assertTrue(controller.start_full_plan())
+        self.assertEqual(session.started[0].x_mm, 10)
+        self.assertEqual(controller.plan_execution.cursor, 0)
+
     def test_continuous_path_and_bezier_use_session_path_operations(self) -> None:
         session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
         controller.set_plan(Plan(steps=[

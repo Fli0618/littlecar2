@@ -4,12 +4,15 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
+from map_planner.models import Plan, Waypoint
 from motion_workbench.app import MotionConfigExportDialog, MotionWorkbenchWindow
+from motion_workbench.models import CoordinateSyncState
 from pid_tuner.models import (GotoStrategySnapshot, PathConfigSnapshot, PathConfigState, PidConfig,
                                PidConfigState, Telemetry)
 
@@ -24,6 +27,23 @@ class ConnectionPageTests(unittest.TestCase):
         self.assertEqual(window.tabs.tabText(0), "连接")
         self.assertIsNotNone(window.connection_panel)
         window.close()
+
+    def test_left_path_buttons_drive_the_complete_plan_workflow(self) -> None:
+        window = MotionWorkbenchWindow()
+        try:
+            plan = Plan(steps=[Waypoint(10, 20, 0), Waypoint(30, 40, 0)])
+            window.map_editor.set_plan(plan, calibrated=True)
+            window.controller.session.connected = True
+            window.controller._set_coordinate_sync_state(CoordinateSyncState.SYNCED)
+
+            window.path_panel.upload.click()
+            self.assertIn("共 2 个动作", window.path_panel.status.text())
+            with patch.object(window.controller, "start_full_plan",
+                              return_value=True) as start_full_plan:
+                window.path_panel.start.click()
+                start_full_plan.assert_called_once_with()
+        finally:
+            window.close()
 
     def test_none_heading_mode_is_not_overwritten_by_ops_telemetry(self) -> None:
         window = MotionWorkbenchWindow()
