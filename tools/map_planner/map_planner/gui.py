@@ -25,6 +25,7 @@ from .bezier import bezier_tangent_yaw, generate_bezier_path_points
 from .auto_path import (AutoPathError, AutoPathSettings,
                         build_inflated_obstacles, plan_auto_path)
 from .models import (AutoSegmentSettings, BezierPathSegment, FIELD_SIZE_MM,
+                     VEHICLE_WIDTH_MM,
                      ContinuousPathSegment, CostmapSettings, Obstacle,
                      PathPosePoint, Plan, Pose, RotateInPlace, Waypoint)
 from .sim import SimulationFrame, build_plan_timeline
@@ -246,7 +247,8 @@ class DraggableRectItem(QGraphicsRectItem):
 
 
 class CarOutlineItem(QGraphicsRectItem):
-    def __init__(self, rotated, vehicle_length_mm=300.0, vehicle_width_mm=300.0):  # type: ignore[no-untyped-def]
+    def __init__(self, rotated, vehicle_length_mm=300.0,
+                 vehicle_width_mm=VEHICLE_WIDTH_MM):  # type: ignore[no-untyped-def]
         super().__init__(-vehicle_length_mm / 2.0, -vehicle_width_mm / 2.0,
                          vehicle_length_mm, vehicle_width_mm)
         self.rotated = rotated
@@ -532,6 +534,15 @@ class MapEditorWidget(QWidget):
             self.editor_tabs.addTab(cost_page, "1 代价地图")
             self.editor_tabs.addTab(waypoint_page, "2 点位与航点")
             self.editor_tabs.addTab(output_page, "3 方案与输出")
+            self.navigation_page = cost_page
+            self.basic_actions_page = waypoint_page
+            self.runtime_page = QWidget()
+            self.output_page = output_page
+            self.editor_tabs.insertTab(2, self.runtime_page, "3 位姿与运行")
+            self.editor_tabs.setTabText(0, "1 自动导航")
+            self.editor_tabs.setTabText(1, "2 基础动作")
+            self.editor_tabs.setTabText(3, "4 方案与输出")
+            self.editor_tabs.currentChanged.connect(self._on_editor_tab_changed)
             outer_box.addWidget(self.editor_tabs)
             box = waypoint_box
             toolbar = QHBoxLayout(); self.tool_group = QButtonGroup(self); self.tool_group.setExclusive(True)
@@ -773,6 +784,18 @@ class MapEditorWidget(QWidget):
             layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.addWidget(root)
             self.update_calibration_ui()
             self._refresh_execution_controls()
+
+    def _on_editor_tab_changed(self, _index: int) -> None:
+            if self.editor_tabs.currentWidget() is not self.navigation_page:
+                if self.mode in ("mark_pose", "obstacle"):
+                    self.set_mode("select")
+                elif self.mode == "add" and self.bezier_draft is None:
+                    self.set_mode("select")
+            self.redraw()
+
+    def _costmap_overlay_visible(self) -> bool:
+            return (self.editor_tabs.currentWidget() is self.navigation_page
+                    and self.show_inflated_zones.isChecked())
 
     def set_mode(self, mode, source_button=None):
             if mode != "add": self._discard_bezier_draft(); self.clear_preview()
@@ -1062,14 +1085,14 @@ class MapEditorWidget(QWidget):
                 corner_radius_mm=self.auto_corner_radius.value(),
                 sample_spacing_mm=self.auto_sample_spacing.value(),
                 terminal_straight_mm=self.auto_terminal_straight.value(),
-                yaw_mode=str(self.auto_yaw_mode.currentData()),
+                yaw_mode="fixed",
                 include_fixed_platforms=not self.allow_yellow_zone.isChecked(),
             )
 
     def current_costmap_settings(self) -> CostmapSettings:
             return CostmapSettings(
                 vehicle_length_mm=self.vehicle_length.value(),
-                vehicle_width_mm=self.vehicle_width.value(),
+                vehicle_width_mm=VEHICLE_WIDTH_MM,
                 boundary_safety_margin_mm=self.boundary_safety.value(),
                 boundary_inflation_mm=self.boundary_inflation.value(),
                 boundary_cost_weight=self.boundary_weight.value(),
@@ -1088,7 +1111,7 @@ class MapEditorWidget(QWidget):
             config = (self.current_costmap_settings()
                       if hasattr(self, "vehicle_length")
                       else self.plan.layout.costmap)
-            return config.vehicle_length_mm, config.vehicle_width_mm
+            return config.vehicle_length_mm, VEHICLE_WIDTH_MM
 
     def _load_costmap_controls(self) -> None:
             if not hasattr(self, "boundary_safety"):
@@ -1096,7 +1119,6 @@ class MapEditorWidget(QWidget):
             config = self.plan.layout.costmap
             mapping = (
                 (self.vehicle_length, config.vehicle_length_mm),
-                (self.vehicle_width, config.vehicle_width_mm),
                 (self.boundary_safety, config.boundary_safety_margin_mm),
                 (self.boundary_inflation, config.boundary_inflation_mm),
                 (self.boundary_weight, config.boundary_cost_weight),
@@ -1446,7 +1468,9 @@ class MapEditorWidget(QWidget):
             self._runtime_trace_path_point_count = 0
             self._runtime_projection_item = None
             self._runtime_lookahead_item = None
-            self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field(); self.draw_inflated_forbidden_zones(); self.draw_start(); self.draw_route(); self.draw_pending_navigation_goal(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None); self.draw_runtime_overlay(); self.position_layout_sliders()
+            self.scene.clear(); self.scene.setSceneRect(-360,-300,3100,3100); self.draw_field()
+            if self._costmap_overlay_visible(): self.draw_inflated_forbidden_zones()
+            self.draw_start(); self.draw_route(); self.draw_pending_navigation_goal(); self.draw_measurement(); self.draw_preview(); self.draw_car(self.current_frame.actual if self.current_frame else None); self.draw_runtime_overlay(); self.position_layout_sliders()
 
     def draw_pending_navigation_goal(self) -> None:
             if (self._pending_navigation_goal_paper is None or
