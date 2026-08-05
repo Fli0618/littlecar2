@@ -65,6 +65,70 @@ class PathConfigState:
 
 
 @dataclass(frozen=True)
+class HolonomicConfig:
+    """轻量全向位置控制器的 12 项运行时参数。"""
+
+    linear_accel_mm_s2: float
+    linear_decel_mm_s2: float
+    yaw_accel_deg_s2: float
+    kp_forward: float
+    kv_forward: float
+    kp_lateral: float
+    kv_lateral: float
+    kp_yaw: float
+    kv_yaw: float
+    forward_scale: float
+    lateral_scale: float
+    yaw_scale: float
+
+    def to_dict(self) -> dict[str, float]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class HolonomicConfigState:
+    """One holonomic configuration revision reported by the controller."""
+
+    revision: int
+    config: HolonomicConfig
+
+
+@dataclass(frozen=True)
+class HolonomicTelemetry:
+    """96-byte 全向位置控制器遥测快照。"""
+
+    tick: int
+    config_revision: int
+    state: int
+    flags: int
+    remote_link_status: int
+    goal: tuple[float, float, float]
+    actual: tuple[float, float, float]
+    reference: tuple[float, float, float]
+    error: tuple[float, float, float]
+    measured: tuple[float, float, float]
+    drive: tuple[float, float, float]
+    profile_progress_mm: float
+    profile_remaining_mm: float
+    profile_reference_speed_mm_s: float
+
+    @property
+    def position_constraint_enabled(self) -> bool:
+        return bool(self.flags & 0x01)
+
+    @property
+    def yaw_constraint_enabled(self) -> bool:
+        return bool(self.flags & 0x02)
+
+    @property
+    def controller_active(self) -> bool:
+        return bool(self.flags & 0x04)
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class MotionGoal:
     x_mm: float
     y_mm: float

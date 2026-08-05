@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -17,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pid_tuner.models import MotionGoal, PidConfig, PidConfigState
+from pid_tuner.models import HolonomicConfig, HolonomicConfigState, MotionGoal, PidConfig, PidConfigState
 
 from .models import TargetPose
 
@@ -143,6 +145,114 @@ class WorkbenchPidControlPanel(QWidget):
         self.large_yaw_align.setEnabled(self._connected and not active)
 
 
+HOLONOMIC_FIELD_GROUPS = (
+    ("运动轮廓", (
+        ("linear_accel_mm_s2", "平移加速度 mm/s²", 600.0),
+        ("linear_decel_mm_s2", "平移减速度 mm/s²", 800.0),
+        ("yaw_accel_deg_s2", "航向角加速度 deg/s²", 150.0),
+    )),
+    ("前向反馈", (
+        ("kp_forward", "前向位置 Kp (1/s)", 0.8),
+        ("kv_forward", "前向速度 Kv", 0.3),
+    )),
+    ("横向反馈", (
+        ("kp_lateral", "横向位置 Kp (1/s)", 0.8),
+        ("kv_lateral", "横向速度 Kv", 0.3),
+    )),
+    ("航向反馈", (
+        ("kp_yaw", "航向位置 Kp (1/s)", 2.0),
+        ("kv_yaw", "航向速度 Kv", 0.3),
+    )),
+    ("驱动比例校准", (
+        ("forward_scale", "前向 scale", 1.0),
+        ("lateral_scale", "横向 scale", 1.0),
+        ("yaw_scale", "旋转 scale", 1.0),
+    )),
+)
+
+
+class HolonomicControlPanel(QWidget):
+    """全向位置控制器 12 项参数页；数值仅允许双击输入或使用步进按钮修改。"""
+
+    read_requested = Signal()
+    apply_requested = Signal(object)
+    restore_requested = Signal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.inputs: dict[str, ProtectedDoubleSpinBox] = {}
+        layout = QVBoxLayout(self)
+        for title, fields in HOLONOMIC_FIELD_GROUPS:
+            group = QGroupBox(title)
+            form = QFormLayout(group)
+            for name, label, value in fields:
+                if name in ("linear_accel_mm_s2", "linear_decel_mm_s2", "yaw_accel_deg_s2"):
+                    box = protected_number(value, 0.01, 5000.0, 10.0)
+                elif name.endswith("_scale"):
+                    box = protected_number(value, 0.5, 2.0, 0.01)
+                else:
+                    box = protected_number(value, 0.0, 20.0, 0.01)
+                self.inputs[name] = box
+                form.addRow(label, box)
+            layout.addWidget(group)
+        self.read_button = QPushButton("读取参数")
+        self.apply_button = QPushButton("应用参数")
+        self.restore_button = QPushButton("恢复默认")
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.read_button)
+        buttons.addWidget(self.apply_button)
+        buttons.addWidget(self.restore_button)
+        layout.addLayout(buttons)
+        self.revision_label = QLabel("当前修订号：-")
+        self.status = QLabel("全向参数：未读取")
+        self.status.setWordWrap(True)
+        layout.addWidget(self.revision_label)
+        layout.addWidget(self.status)
+        layout.addStretch()
+        self.read_button.clicked.connect(self.read_requested)
+        self.apply_button.clicked.connect(
+            lambda: self.apply_requested.emit(self.current_config()))
+        self.restore_button.clicked.connect(self.restore_requested)
+        self._connected = False
+        self._unsupported = False
+        self.set_connected(False)
+
+    def current_config(self) -> HolonomicConfig:
+        return HolonomicConfig(*(box.value() for box in self.inputs.values()))
+
+    def set_config(self, state: HolonomicConfigState) -> None:
+        for name, box in self.inputs.items():
+            box.setValue(getattr(state.config, name))
+        self.revision_label.setText(f"当前修订号：{state.revision}")
+        self.status.setText(f"全向参数 r{state.revision} 已同步")
+
+    def set_connected(self, connected: bool) -> None:
+        self._connected = connected
+        enabled = connected and not self._unsupported
+        self.read_button.setEnabled(enabled)
+        self.apply_button.setEnabled(enabled)
+        self.restore_button.setEnabled(enabled)
+        self.setEnabled(not self._unsupported)
+        if not connected:
+            self.revision_label.setText("当前修订号：-")
+            self.status.setText("全向参数：未读取")
+
+    def set_unsupported(self, unsupported: bool) -> None:
+        self._unsupported = unsupported
+        self.set_connected(self._connected)
+        if unsupported:
+            self.status.setText("当前固件不支持全向调参")
+
+    def set_applying(self) -> None:
+        self.status.setText("全向参数：等待下位机应用…")
+
+    def set_applied(self, state: HolonomicConfigState) -> None:
+        self.set_config(state)
+        self.status.setText(
+            f"已生效 r{state.revision}；Kp/Kv/scale 下一控制周期生效，"
+            "accel/decel 下一次 Start 生效（当前轮廓不重算）")
+
+
 def _number(value: float = 0.0, minimum: float = -5000.0, maximum: float = 5000.0) -> QDoubleSpinBox:
     box = QDoubleSpinBox()
     box.setRange(minimum, maximum)
@@ -158,6 +268,7 @@ class PointControlPanel(QWidget):
     stop_requested = Signal()
     clear_requested = Signal()
     heading_mode_requested = Signal(str)
+    controller_changed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -168,10 +279,14 @@ class PointControlPanel(QWidget):
         self.heading_mode.addItem("WIT yaw（用于航向控制）", HEADING_MODE_WIT)
         self.heading_mode.addItem("OPS yaw（用于航向控制）", HEADING_MODE_OPS)
         self.heading_mode.addItem("不使用航向（仅控制 X/Y）", HEADING_MODE_NONE)
+        self.controller = QComboBox()
+        self.controller.addItem("经典位置 PID", "classic")
+        self.controller.addItem("全向位置控制", "holonomic")
         self._motion_active = False
         form = QFormLayout(); form.addRow("X (mm)", self.x); form.addRow("Y (mm)", self.y); form.addRow("yaw (deg)", self.yaw)
         form.addRow("vmax (mm/s)", self.vmax); form.addRow("wmax (deg/s)", self.wmax); form.addRow("超时 (ms)", self.timeout)
         form.addRow("航向控制模式", self.heading_mode)
+        form.addRow("控制器", self.controller)
         self.goto = QPushButton("发送组合 GOTO")
         self.position = QPushButton("发送位置 GOTO")
         self.rotate = QPushButton("仅旋转")
@@ -187,6 +302,7 @@ class PointControlPanel(QWidget):
         self.clear.clicked.connect(self.clear_requested)
         self.stop.clicked.connect(self.stop_requested)
         self.heading_mode.currentIndexChanged.connect(self._heading_mode_changed)
+        self.controller.currentIndexChanged.connect(self._controller_mode_changed)
         self._update_heading_controls()
 
     def current_heading_mode(self) -> str:
@@ -194,6 +310,9 @@ class PointControlPanel(QWidget):
 
     def uses_yaw(self) -> bool:
         return self.current_heading_mode() != HEADING_MODE_NONE
+
+    def current_controller(self) -> str:
+        return str(self.controller.currentData())
 
     def set_heading_mode(self, mode: str) -> None:
         index = self.heading_mode.findData(mode.upper())
@@ -218,7 +337,11 @@ class PointControlPanel(QWidget):
         self.wmax.setEnabled(uses_yaw)
         self.rotate.setEnabled(uses_yaw)
         self.heading_mode.setEnabled(not self._motion_active)
+        self.controller.setEnabled(not self._motion_active)
         self.goto.setText("发送位置+航向 GOTO" if uses_yaw else "发送仅位置 GOTO")
+
+    def _controller_mode_changed(self, _index: int) -> None:
+        self.controller_changed.emit(self.current_controller())
 
     def set_candidate(self, pose: TargetPose | None) -> None:
         if pose is None:

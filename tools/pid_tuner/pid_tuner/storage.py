@@ -9,7 +9,8 @@ import math
 from pathlib import Path
 import re
 
-from .models import GotoStrategySnapshot, PathConfigState, PidConfig, PidConfigState, Telemetry
+from .models import (GotoStrategySnapshot, HolonomicConfigState, PathConfigState,
+                     PidConfig, PidConfigState, Telemetry)
 from .protocol import telemetry_csv_row
 
 DEFAULT_PROFILES_DIR = Path(__file__).resolve().parents[1] / "profiles"
@@ -46,6 +47,21 @@ PATH_C_MACROS = (
     ("ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM", "initial_lookahead_mm"),
     ("ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM", "final_capture_distance_mm"),
     ("ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S", "final_capture_speed_mm_s"),
+)
+
+HOLONOMIC_C_MACROS = (
+    ("ADVANCE_HOLONOMIC_DEFAULT_LINEAR_ACCEL_MM_S2", "linear_accel_mm_s2"),
+    ("ADVANCE_HOLONOMIC_DEFAULT_LINEAR_DECEL_MM_S2", "linear_decel_mm_s2"),
+    ("ADVANCE_HOLONOMIC_DEFAULT_YAW_ACCEL_DEG_S2", "yaw_accel_deg_s2"),
+    ("ADVANCE_HOLONOMIC_DEFAULT_KP_FORWARD", "kp_forward"),
+    ("ADVANCE_HOLONOMIC_DEFAULT_KV_FORWARD", "kv_forward"),
+    ("ADVANCE_HOLONOMIC_DEFAULT_KP_LATERAL", "kp_lateral"),
+    ("ADVANCE_HOLONOMIC_DEFAULT_KV_LATERAL", "kv_lateral"),
+    ("ADVANCE_HOLONOMIC_DEFAULT_KP_YAW", "kp_yaw"),
+    ("ADVANCE_HOLONOMIC_DEFAULT_KV_YAW", "kv_yaw"),
+    ("ADVANCE_HOLONOMIC_DEFAULT_FORWARD_SCALE", "forward_scale"),
+    ("ADVANCE_HOLONOMIC_DEFAULT_LATERAL_SCALE", "lateral_scale"),
+    ("ADVANCE_HOLONOMIC_DEFAULT_YAW_SCALE", "yaw_scale"),
 )
 
 
@@ -119,6 +135,7 @@ def export_motion_config_header(
     pid_state: PidConfigState,
     path_state: PathConfigState,
     goto_strategy: GotoStrategySnapshot,
+    holonomic_state: HolonomicConfigState,
 ) -> str:
     """Export board-confirmed motion values as a replaceable C configuration header."""
     strategy_value = "1U" if goto_strategy.large_yaw_align_enabled else "0U"
@@ -133,6 +150,7 @@ def export_motion_config_header(
         " *",
         f" * PID revision: {pid_state.revision}",
         f" * Path revision: {path_state.revision}",
+        f" * Holonomic revision: {holonomic_state.revision}",
         " *",
         " * 将本文件复制到 Core/Inc/advance_motion_config.h，",
         " * 然后重新编译并烧录 STM32。",
@@ -158,6 +176,9 @@ def export_motion_config_header(
         "",
         "/* 组合 GOTO 默认策略。 */",
         f"#define ADVANCE_MOTION_DEFAULT_LARGE_YAW_ALIGN_ENABLE ((uint8_t){strategy_value})",
+        "",
+        "/* Holonomic position controller runtime defaults. */",
+        *_macro_lines(holonomic_state.config, HOLONOMIC_C_MACROS),
         "",
         "#endif",
         "",

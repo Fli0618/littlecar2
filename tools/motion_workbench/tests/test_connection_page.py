@@ -13,8 +13,9 @@ from PySide6.QtWidgets import QApplication
 from map_planner.models import Plan, Waypoint
 from motion_workbench.app import MotionConfigExportDialog, MotionWorkbenchWindow
 from motion_workbench.models import CoordinateSyncState
-from pid_tuner.models import (GotoStrategySnapshot, PathConfigSnapshot, PathConfigState, PidConfig,
-                               PidConfigState, Telemetry)
+from pid_tuner.models import (GotoStrategySnapshot, HolonomicConfig, HolonomicConfigState,
+                               PathConfigSnapshot, PathConfigState, PidConfig, PidConfigState,
+                               Telemetry)
 
 
 class ConnectionPageTests(unittest.TestCase):
@@ -71,6 +72,10 @@ class ConnectionPageTests(unittest.TestCase):
             window._cache_path_state(path)
             self.assertFalse(window.export_motion_config.isEnabled())
             window._cache_goto_strategy(GotoStrategySnapshot(True))
+            self.assertFalse(window.export_motion_config.isEnabled())
+            window._cache_holonomic_state(HolonomicConfigState(
+                9, HolonomicConfig(600, 800, 150, 0.8, 0.3, 0.8, 0.3,
+                                   2.0, 0.3, 1.0, 1.0, 1.0)))
             self.assertTrue(window.export_motion_config.isEnabled())
 
             window.pid_panel.pid[0].setValue(19.0)

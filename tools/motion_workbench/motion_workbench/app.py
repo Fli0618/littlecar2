@@ -14,12 +14,13 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QF
 from map_planner.gui import MapEditorWidget
 from pid_tuner.gui.plots import TelemetryPlots
 from pid_tuner.gui.widgets import ConnectionPanel
-from pid_tuner.models import (GotoStrategySnapshot, MotionGoal, PathConfigState, PathControlConfig,
-                               PidConfigState, Telemetry)
+from pid_tuner.models import (GotoStrategySnapshot, HolonomicConfigState, MotionGoal,
+                               PathConfigState, PathControlConfig, PidConfigState, Telemetry)
 from pid_tuner.storage import export_motion_config_header
 
 from .control_panel import (
     HEADING_MODE_NONE,
+    HolonomicControlPanel,
     PointControlPanel,
     WorkbenchPidControlPanel,
     protected_number,
@@ -185,6 +186,7 @@ class MotionWorkbenchWindow(QMainWindow):
         self._active_pid_state: PidConfigState | None = None
         self._active_path_state: PathConfigState | None = None
         self._active_goto_strategy: GotoStrategySnapshot | None = None
+        self._active_holonomic_state: HolonomicConfigState | None = None
         self._build()
         self._wire()
         self.refresh_timer = QTimer(self); self.refresh_timer.setInterval(MOTION_WORKBENCH_REFRESH_MS); self.refresh_timer.timeout.connect(self._refresh); self.refresh_timer.start()
@@ -196,6 +198,7 @@ class MotionWorkbenchWindow(QMainWindow):
         self.connection = QLabel("未连接")
         self.pose_status = QLabel("位姿: 等待遥测")
         self.motion_status = QLabel("运动: NO_TARGET")
+        self.controller_status = QLabel("控制器: 经典位置 PID")
         self.upload_status = QLabel("路径: 未上传")
         self.heading_status = QLabel("航向控制: WIT")
         self.map_start_status = QLabel("地图起点: 未标定")
@@ -207,10 +210,10 @@ class MotionWorkbenchWindow(QMainWindow):
         self.return_origin_button.setEnabled(False)
         self.stop = QPushButton("STOP"); self.stop.setObjectName("stopButton")
         self.export_motion_config = QPushButton("导出固化参数")
-        self.export_motion_config.setToolTip("导出 STM32 当前已生效的 PID、路径控制参数和 GOTO 默认策略")
+        self.export_motion_config.setToolTip("导出 STM32 当前已生效的 PID、路径、GOTO 和全向参数")
         self.export_motion_config.setEnabled(False)
         for widget in (self.connection, self.pose_status, self.motion_status,
-                       self.upload_status, self.heading_status, self.map_start_status,
+                       self.controller_status, self.upload_status, self.heading_status, self.map_start_status,
                        self.board_origin_status, self.coordinate_sync_status):
             status_row.addWidget(widget)
         status_row.addStretch()
@@ -221,12 +224,14 @@ class MotionWorkbenchWindow(QMainWindow):
         root.addLayout(status_row)
 
         self.pid_panel = WorkbenchPidControlPanel()
+        self.holonomic_panel = HolonomicControlPanel()
         self.connection_panel = ConnectionPanel()
         self.point_panel = PointControlPanel()
         self.path_panel = PathControlPanel()
         self.tabs = QTabWidget()
         self.tabs.addTab(self.connection_panel, "连接")
         self.tabs.addTab(self.pid_panel, "PID")
+        self.tabs.addTab(self.holonomic_panel, "全向位置")
         self.tabs.addTab(self.point_panel, "单点")
         self.tabs.addTab(self.path_panel, "路径")
         left_scroll = QScrollArea(); left_scroll.setWidgetResizable(True); left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded); left_scroll.setWidget(self.tabs); left_scroll.setMinimumWidth(320)
@@ -256,6 +261,7 @@ class MotionWorkbenchWindow(QMainWindow):
         self.point_panel.candidate_edited.connect(self.controller.select_candidate)
         self.point_panel.send_requested.connect(self._start_point_goal)
         self.point_panel.heading_mode_requested.connect(self._request_heading_mode)
+        self.point_panel.controller_changed.connect(self._on_controller_changed)
         self.point_panel.stop_requested.connect(self.controller.stop)
         self.point_panel.clear_requested.connect(self.controller.clear_candidate)
         self.controller.candidate_changed.connect(self.point_panel.set_candidate)
@@ -275,6 +281,18 @@ class MotionWorkbenchWindow(QMainWindow):
         self.controller.session.pid_applied.connect(self.pid_panel.set_pid_state)
         self.controller.session.pid_applied.connect(self._cache_pid_state)
         self.controller.session.connection_changed.connect(self.pid_panel.set_connected)
+        self.controller.session.connection_changed.connect(self.holonomic_panel.set_connected)
+        self.holonomic_panel.read_requested.connect(self.controller.session.read_holonomic_config)
+        self.holonomic_panel.apply_requested.connect(self.controller.session.apply_holonomic_config)
+        self.holonomic_panel.apply_requested.connect(lambda _config: self.holonomic_panel.set_applying())
+        self.holonomic_panel.restore_requested.connect(self.controller.session.restore_holonomic_config)
+        self.holonomic_panel.restore_requested.connect(self.holonomic_panel.set_applying)
+        self.controller.session.holonomic_config_read.connect(self.holonomic_panel.set_config)
+        self.controller.session.holonomic_config_read.connect(self._cache_holonomic_state)
+        self.controller.session.holonomic_config_applied.connect(self.holonomic_panel.set_applied)
+        self.controller.session.holonomic_config_applied.connect(self._cache_holonomic_state)
+        self.controller.session.holonomic_unsupported.connect(
+            lambda: self.holonomic_panel.set_unsupported(True))
         self.pid_panel.goto_strategy_changed.connect(self.controller.session.set_goto_strategy)
         self.controller.session.goto_strategy_read.connect(
             lambda strategy: self.pid_panel.set_goto_strategy(strategy.large_yaw_align_enabled))
@@ -331,6 +349,7 @@ class MotionWorkbenchWindow(QMainWindow):
     def _on_connection_changed(self, connected: bool) -> None:
         if not connected:
             self._clear_motion_config_sync()
+            self._on_controller_changed("classic")
         self.connection_panel.set_connected(
             connected, "已连接，参数已同步" if connected else "已断开")
         self._refresh_origin_controls()
@@ -349,6 +368,8 @@ class MotionWorkbenchWindow(QMainWindow):
         self._active_pid_state = None
         self._active_path_state = None
         self._active_goto_strategy = None
+        self._active_holonomic_state = None
+        self.holonomic_panel.set_unsupported(False)
         self._refresh_motion_config_export()
 
     def _cache_pid_state(self, state: PidConfigState) -> None:
@@ -366,12 +387,19 @@ class MotionWorkbenchWindow(QMainWindow):
             self._active_goto_strategy = strategy
             self._refresh_motion_config_export()
 
+    def _cache_holonomic_state(self, state: HolonomicConfigState) -> None:
+        if self.controller.session.connected:
+            self.holonomic_panel.set_unsupported(False)
+            self._active_holonomic_state = state
+            self._refresh_motion_config_export()
+
     def _refresh_motion_config_export(self) -> None:
         self.export_motion_config.setEnabled(
             self.controller.session.connected
             and self._active_pid_state is not None
             and self._active_path_state is not None
-            and self._active_goto_strategy is not None)
+            and self._active_goto_strategy is not None
+            and self._active_holonomic_state is not None)
 
     def _export_motion_config(self) -> None:
         if not self.export_motion_config.isEnabled():
@@ -379,9 +407,11 @@ class MotionWorkbenchWindow(QMainWindow):
         assert self._active_pid_state is not None
         assert self._active_path_state is not None
         assert self._active_goto_strategy is not None
+        assert self._active_holonomic_state is not None
         try:
             header = export_motion_config_header(
-                self._active_pid_state, self._active_path_state, self._active_goto_strategy)
+                self._active_pid_state, self._active_path_state,
+                self._active_goto_strategy, self._active_holonomic_state)
         except ValueError as error:
             self.connection.setText(f"导出失败：{error}")
             return
@@ -447,7 +477,8 @@ class MotionWorkbenchWindow(QMainWindow):
             self.heading_status.setText(f"航向控制: {telemetry.yaw_source}")
 
     def _start_point_goal(self, goal: MotionGoal) -> None:
-        if not self.controller.start_goal(goal):
+        controller = self.point_panel.current_controller()
+        if not self.controller.start_goal(goal, controller):
             return
         self._active_heading_mode = (
             self.point_panel.current_heading_mode() if goal.use_yaw else HEADING_MODE_NONE
@@ -457,6 +488,10 @@ class MotionWorkbenchWindow(QMainWindow):
             self.heading_status.setText("航向控制: 关闭（WIT/OPS 仅观测）")
         else:
             self.heading_status.setText(f"航向控制: {self._active_heading_mode}")
+
+    def _on_controller_changed(self, controller: str) -> None:
+        self.controller_status.setText(
+            "控制器: 全向位置" if controller == "holonomic" else "控制器: 经典位置 PID")
 
     def _set_hardware_execution(self, enabled: bool) -> None:
         if enabled and not self.controller.session.connected:
@@ -488,7 +523,9 @@ class MotionWorkbenchWindow(QMainWindow):
 
     def _refresh(self) -> None:
         snapshot = self.controller.consume_runtime_ui_snapshot()
-        self.plots.refresh(self.controller.buffer)
+        self.plots.refresh(self.controller.buffer,
+                           self.controller.holonomic_telemetry_buffer,
+                           self.controller.path_telemetry_buffer)
         self.map_editor.apply_runtime_snapshot(snapshot)
         self.pose_status.setText("位姿: 有效" if snapshot.pose_valid else "位姿: 无效")
 

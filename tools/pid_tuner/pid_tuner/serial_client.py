@@ -9,19 +9,23 @@ import time
 from typing import Protocol
 
 from .models import (AckResponse, BoardError, GotoStrategySnapshot, MotionGoal,
+                     HolonomicConfig, HolonomicConfigState, HolonomicTelemetry,
                      PathBeginCommand, PathChunkCommand, PathCommitCommand,
                      PathConfigState, PathControlConfig, PathStartCommand, PathStatus,
                      PathTelemetry, PidConfig, PidConfigState, RequestTimeout, Telemetry)
 from .protocol import (
     CMD_ACK, CMD_ERROR, CMD_GET_GOTO_STRATEGY, CMD_GET_PID, CMD_GOTO_POSE,
-    CMD_GOTO_STRATEGY, CMD_HEARTBEAT, CMD_PATH_ABORT, CMD_PATH_BEGIN, CMD_PATH_CHUNK,
-    CMD_GET_PATH_CONFIG, CMD_PATH_COMMIT, CMD_PATH_CONFIG, CMD_PATH_START,
+    CMD_GOTO_STRATEGY, CMD_HEARTBEAT, CMD_HOLONOMIC_CONFIG, CMD_HOLONOMIC_GOTO_POSE,
+    CMD_HOLONOMIC_TELEMETRY, CMD_GET_HOLONOMIC_CONFIG, CMD_PATH_ABORT, CMD_PATH_BEGIN,
+    CMD_PATH_CHUNK, CMD_GET_PATH_CONFIG, CMD_PATH_COMMIT, CMD_PATH_CONFIG, CMD_PATH_START,
     CMD_PATH_TELEMETRY, CMD_PATH_STATUS, CMD_PATH_STATUS_RESPONSE, CMD_PID, CMD_RESET_ORIGIN, CMD_RESTORE_PATH_CONFIG,
-    CMD_RESTORE_PID,
+    CMD_RESTORE_HOLONOMIC_CONFIG, CMD_RESTORE_PID, CMD_SET_HOLONOMIC_CONFIG,
     CMD_SET_GOTO_STRATEGY, CMD_SET_PATH_CONFIG, CMD_SET_PID, CMD_SET_YAW_SOURCE,
     CMD_STOP, CMD_TELEMETRY, Frame, ProtocolError, StreamDecoder,
-    decode_ack, decode_goto_strategy, decode_path_config, decode_path_status, decode_pid,
+    decode_ack, decode_goto_strategy, decode_holonomic_config, decode_holonomic_telemetry,
+    decode_path_config, decode_path_status, decode_pid,
     decode_path_telemetry, decode_telemetry, encode_frame, encode_goal, encode_goto_strategy,
+    encode_holonomic_config,
     encode_path_begin, encode_path_chunk, encode_path_commit, encode_path_config,
     encode_path_start, encode_pid, encode_yaw_source,
 )
@@ -50,6 +54,7 @@ class SerialClient:
         self._telemetry: Queue[Telemetry] = Queue()
         self._callbacks: list[Callable[[Telemetry], None]] = []
         self._path_callbacks: list[Callable[[PathTelemetry], None]] = []
+        self._holonomic_callbacks: list[Callable[[HolonomicTelemetry], None]] = []
         self._stop_event = threading.Event()
         self._request_lock = threading.Lock()
         self._sequence_lock = threading.Lock()
@@ -100,6 +105,11 @@ class SerialClient:
         """Register a listener for the independent low-rate path diagnostics stream."""
         self._path_callbacks.append(callback)
 
+    def add_holonomic_telemetry_callback(
+            self, callback: Callable[[HolonomicTelemetry], None]) -> None:
+        """Register a listener for the holonomic controller diagnostics stream."""
+        self._holonomic_callbacks.append(callback)
+
     def get_telemetry(self, timeout_s: float | None = None) -> Telemetry:
         return self._telemetry.get(timeout=timeout_s)
 
@@ -124,6 +134,21 @@ class SerialClient:
 
     def restore_path_config(self) -> AckResponse:
         return self._request_ack(CMD_RESTORE_PATH_CONFIG)
+
+    def get_holonomic_config(self) -> HolonomicConfigState:
+        return decode_holonomic_config(
+            self._request_frame(CMD_GET_HOLONOMIC_CONFIG,
+                                expected_command=CMD_HOLONOMIC_CONFIG))
+
+    def set_holonomic_config(self, config: HolonomicConfig) -> AckResponse:
+        return self._request_ack(CMD_SET_HOLONOMIC_CONFIG,
+                                 encode_holonomic_config(config))
+
+    def restore_holonomic_config(self) -> AckResponse:
+        return self._request_ack(CMD_RESTORE_HOLONOMIC_CONFIG)
+
+    def holonomic_goto(self, goal: MotionGoal) -> AckResponse:
+        return self._request_ack(CMD_HOLONOMIC_GOTO_POSE, encode_goal(goal))
 
     def goto(self, goal: MotionGoal) -> AckResponse:
         return self._request_ack(CMD_GOTO_POSE, encode_goal(goal))
@@ -222,6 +247,13 @@ class SerialClient:
                     elif frame.command == CMD_PATH_TELEMETRY:
                         telemetry = decode_path_telemetry(frame)
                         for callback in tuple(self._path_callbacks):
+                            try:
+                                callback(telemetry)
+                            except Exception:
+                                pass
+                    elif frame.command == CMD_HOLONOMIC_TELEMETRY:
+                        telemetry = decode_holonomic_telemetry(frame)
+                        for callback in tuple(self._holonomic_callbacks):
                             try:
                                 callback(telemetry)
                             except Exception:

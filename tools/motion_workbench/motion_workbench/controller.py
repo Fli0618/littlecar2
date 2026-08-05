@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, Signal
 
 from pid_tuner.gui.buffer import TelemetryBuffer
 from pid_tuner.gui.session import SessionController
-from pid_tuner.models import MotionGoal, Telemetry
+from pid_tuner.models import HolonomicTelemetry, MotionGoal, Telemetry
 from map_planner.bezier import generate_bezier_path_points
 from map_planner.models import (BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan, Pose, RotateInPlace,
                                 Waypoint)
@@ -44,8 +44,10 @@ class MotionWorkbenchController(QObject):
         self.buffer = TelemetryBuffer()
         self.telemetry_buffer = self.buffer
         self.path_telemetry_buffer: deque[PathTelemetry] = deque(maxlen=256)
+        self.holonomic_telemetry_buffer: deque[HolonomicTelemetry] = deque(maxlen=256)
         self.latest_telemetry: Telemetry | None = None
         self.latest_path_telemetry: PathTelemetry | None = None
+        self.latest_holonomic_telemetry: HolonomicTelemetry | None = None
         self.candidate: TargetPose | None = None
         self.execution: TargetPose | None = None
         self.actual: TargetPose | None = None
@@ -53,6 +55,8 @@ class MotionWorkbenchController(QObject):
         self._new_trace_points: list[TargetPose] = []
         self._trace_reset = True
         self._pose_valid = False
+        self._last_error: tuple[float, float, float] | None = None
+        self._active_controller = "classic"
         self._started_at: float | None = None
         self._pid_revision = 0
         self._last_state = SinglePointState.NO_TARGET
@@ -74,6 +78,8 @@ class MotionWorkbenchController(QObject):
         self.session.telemetry.connect(self.on_telemetry)
         self.session.motion_changed.connect(self._on_motion_changed)
         self.session.status.connect(self.status_changed)
+        if hasattr(self.session, "holonomic_telemetry"):
+            self.session.holonomic_telemetry.connect(self.on_holonomic_telemetry)
         if hasattr(self.session, "operation_failed"):
             self.session.operation_failed.connect(self._on_failure)
         else:
@@ -114,7 +120,7 @@ class MotionWorkbenchController(QObject):
         snapshot = RuntimeUiSnapshot(
             self.actual,
             self.execution,
-            (tuple(self.latest_telemetry.error) if self.latest_telemetry is not None else None),
+            self._last_error,
             self.latest_path_telemetry,
             tuple(self._new_trace_points),
             self._trace_reset,
@@ -224,10 +230,11 @@ class MotionWorkbenchController(QObject):
         self.candidate_changed.emit(None)
         self.motion_state_changed.emit(self._last_state.value)
 
-    def start_goal(self, goal: MotionGoal) -> bool:
+    def start_goal(self, goal: MotionGoal, controller: str = "classic") -> bool:
         if self.candidate is None:
             self.status_changed.emit("请先选择目标位姿")
             return False
+        self._active_controller = controller
         self.execution = replace(self.candidate)
         self.execution_changed.emit(self.execution)
         self._trace.clear()
@@ -236,7 +243,10 @@ class MotionWorkbenchController(QObject):
         self._started_at = time.monotonic()
         self._last_state = SinglePointState.RUNNING
         self.motion_state_changed.emit(self._last_state.value)
-        self.session.start_motion(goal)
+        if controller == "holonomic":
+            self.session.start_holonomic_motion(goal)
+        else:
+            self.session.start_motion(goal)
         return True
 
     def stop(self) -> None:
@@ -261,10 +271,13 @@ class MotionWorkbenchController(QObject):
         self.latest_telemetry = item
         self.buffer.append(item)
         self._pid_revision = item.pid_revision
+        if self._active_controller != "classic":
+            return
         pose = TargetPose(*item.actual)
         valid = bool(item.flags & 0x01) and bool(item.flags & 0x02)
         self.actual = pose if valid else None
         self._pose_valid = valid
+        self._last_error = tuple(item.error)
         if valid and self._should_append_trace(pose):
             self._trace.append(pose)
             self._new_trace_points.append(pose)
@@ -280,6 +293,27 @@ class MotionWorkbenchController(QObject):
                       7: (SinglePointState.OFF_PATH, "偏离路径")}
             state, reason = states.get(item.state, (SinglePointState.CANCELED, "结束"))
             self._finish(state, reason)
+
+    def on_holonomic_telemetry(self, item: HolonomicTelemetry) -> None:
+        self.latest_holonomic_telemetry = item
+        self.holonomic_telemetry_buffer.append(item)
+        if self._active_controller != "holonomic":
+            return
+        self.actual = TargetPose(*item.actual)
+        self._pose_valid = True
+        self._last_error = tuple(item.error)
+        if self._should_append_trace(self.actual):
+            self._trace.append(self.actual)
+            self._new_trace_points.append(self.actual)
+            if len(self._trace) > 2000:
+                del self._trace[:len(self._trace) - 2000]
+        if self.execution is not None and self._last_state == SinglePointState.RUNNING:
+            states = {3: (SinglePointState.ARRIVED, "到达"), 4: (SinglePointState.TIMEOUT, "超时"),
+                      5: (SinglePointState.NO_POSE, "位姿无效"), 6: (SinglePointState.NO_ORIGIN, "原点无效"),
+                      7: (SinglePointState.CANCELED, "取消")}
+            if item.state in states:
+                state, reason = states[item.state]
+                self._finish(state, reason)
 
     def on_path_telemetry(self, item: PathTelemetry) -> None:
         self.latest_path_telemetry = item

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QPushButton, QSizePolicy,
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 from .buffer import TelemetryBuffer
 
@@ -30,11 +31,16 @@ class TelemetryPlots(QWidget):
         self.window_s = 30.0
         self.follow_latest = True
         self.heading_mode = "WIT"
+        self.source = QComboBox()
+        self.source.addItem("经典单点", "classic")
+        self.source.addItem("连续路径", "path")
+        self.source.addItem("全向位置", "holonomic")
         self.mode = QComboBox()
         self.mode.addItems(["误差", "积分累计"])
         self.follow = QPushButton("跟随最新")
         self.fit = QPushButton("适配纵轴")
         controls = QHBoxLayout()
+        controls.addWidget(self.source)
         controls.addWidget(self.mode)
         controls.addWidget(self.follow)
         controls.addWidget(self.fit)
@@ -90,10 +96,82 @@ class TelemetryPlots(QWidget):
         for plot, line in zip(self.diag_plots, self.zero_lines):
             plot.addItem(line)
 
+        self.holonomic_graphics = pg.GraphicsLayoutWidget()
+        self.holonomic_graphics.setMinimumSize(self._MINIMUM_WIDTH, self._MINIMUM_HEIGHT - 56)
+        self.holonomic_graphics.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.holo_position = self.holonomic_graphics.addPlot(
+            row=0, col=0, title="全向参考与实际位置 (mm)")
+        self.holo_error = self.holonomic_graphics.addPlot(
+            row=1, col=0, title="全向误差 (mm / deg)")
+        self.holo_speed = self.holonomic_graphics.addPlot(
+            row=2, col=0, title="全向平移速度 (mm/s)")
+        self.holo_wz = self.holonomic_graphics.addPlot(
+            row=3, col=0, title="全向角速度 (deg/s)")
+        self.holo_profile = self.holonomic_graphics.addPlot(
+            row=4, col=0, title="全向运动轮廓")
+        for plot in (self.holo_position, self.holo_error, self.holo_speed,
+                     self.holo_wz, self.holo_profile):
+            plot.setXLink(self.holo_position)
+            plot.showGrid(x=True, y=True, alpha=0.25)
+            plot.addLegend()
+            plot.setLabel("bottom", "时间", units="s")
+        self.holo_curves = {
+            "ref_x": self.holo_position.plot(pen=pg.mkPen("#f6c85f", width=2), name="参考 X"),
+            "actual_x": self.holo_position.plot(pen=pg.mkPen("#4ecdc4", width=2), name="实际 X"),
+            "ref_y": self.holo_position.plot(pen=pg.mkPen("#c792ea", width=2), name="参考 Y"),
+            "actual_y": self.holo_position.plot(pen=pg.mkPen("#82aaff", width=2), name="实际 Y"),
+            "error_forward": self.holo_error.plot(pen=pg.mkPen("#ff6b6b", width=2), name="前向误差"),
+            "error_lateral": self.holo_error.plot(pen=pg.mkPen("#ffd166", width=2), name="横向误差"),
+            "error_yaw": self.holo_error.plot(pen=pg.mkPen("#c792ea", width=2), name="航向误差"),
+            "measured_forward": self.holo_speed.plot(pen=pg.mkPen("#f6c85f", width=2), name="实测前向"),
+            "drive_forward": self.holo_speed.plot(pen=pg.mkPen("#4ecdc4", width=2), name="驱动前向"),
+            "measured_lateral": self.holo_speed.plot(pen=pg.mkPen("#c792ea", width=2), name="实测横向"),
+            "drive_lateral": self.holo_speed.plot(pen=pg.mkPen("#82aaff", width=2), name="驱动横向"),
+            "measured_wz": self.holo_wz.plot(pen=pg.mkPen("#f6c85f", width=2), name="实测角速度"),
+            "drive_wz": self.holo_wz.plot(pen=pg.mkPen("#4ecdc4", width=2), name="驱动角速度"),
+            "profile_speed": self.holo_profile.plot(pen=pg.mkPen("#f6c85f", width=2), name="参考速度"),
+            "profile_progress": self.holo_profile.plot(pen=pg.mkPen("#4ecdc4", width=2), name="轮廓进度"),
+            "profile_remaining": self.holo_profile.plot(pen=pg.mkPen("#82aaff", width=2), name="轮廓剩余"),
+        }
+
+        self.path_graphics = pg.GraphicsLayoutWidget()
+        self.path_graphics.setMinimumSize(self._MINIMUM_WIDTH, self._MINIMUM_HEIGHT - 56)
+        self.path_graphics.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.path_progress = self.path_graphics.addPlot(
+            row=0, col=0, title="路径进度 (mm)")
+        self.path_speed = self.path_graphics.addPlot(
+            row=1, col=0, title="路径参考速度 (mm/s)")
+        self.path_cross = self.path_graphics.addPlot(
+            row=2, col=0, title="横向误差 (mm)")
+        self.path_wz = self.path_graphics.addPlot(
+            row=3, col=0, title="角速度命令 (deg/s)")
+        for plot in (self.path_progress, self.path_speed, self.path_cross, self.path_wz):
+            plot.setXLink(self.path_progress)
+            plot.showGrid(x=True, y=True, alpha=0.25)
+            plot.addLegend()
+            plot.setLabel("bottom", "时间", units="s")
+        self.path_curves = {
+            "progress": self.path_progress.plot(pen=pg.mkPen("#4ecdc4", width=2), name="进度"),
+            "remaining": self.path_progress.plot(pen=pg.mkPen("#82aaff", width=2), name="剩余"),
+            "reference_speed": self.path_speed.plot(pen=pg.mkPen("#f6c85f", width=2), name="参考速度"),
+            "cross_track": self.path_cross.plot(pen=pg.mkPen("#ff6b6b", width=2), name="横向误差"),
+            "command_wz": self.path_wz.plot(pen=pg.mkPen("#c792ea", width=2), name="角速度命令"),
+        }
+
+        self.graphics_stack = QStackedWidget()
+        self.graphics_stack.addWidget(self.graphics)
+        self.graphics_stack.addWidget(self.path_graphics)
+        self.graphics_stack.addWidget(self.holonomic_graphics)
+
         layout = QVBoxLayout(self)
         layout.addLayout(controls)
-        layout.addWidget(self.graphics)
+        layout.addWidget(self.graphics_stack)
         self.mode.currentIndexChanged.connect(
+            lambda _: self.refresh(self._buffer if hasattr(self, "_buffer") else TelemetryBuffer())
+        )
+        self.source.currentIndexChanged.connect(
             lambda _: self.refresh(self._buffer if hasattr(self, "_buffer") else TelemetryBuffer())
         )
         self.follow.clicked.connect(self.enable_follow)
@@ -119,8 +197,23 @@ class TelemetryPlots(QWidget):
         if hasattr(self, "_buffer"):
             self.refresh(self._buffer)
 
-    def refresh(self, buffer: TelemetryBuffer) -> None:
+    def refresh(self, buffer: TelemetryBuffer,
+                holonomic=None, path=None) -> None:
+        """按数据源选择渲染；隐藏 Dock 时调用方跳过本方法，数据采集不受影响。"""
         self._buffer = buffer
+        source = str(self.source.currentData())
+        if source == "holonomic":
+            self.graphics_stack.setCurrentWidget(self.holonomic_graphics)
+            self._refresh_holonomic(list(holonomic) if holonomic else [])
+            return
+        if source == "path":
+            self.graphics_stack.setCurrentWidget(self.path_graphics)
+            self._refresh_path(list(path) if path else [])
+            return
+        self.graphics_stack.setCurrentWidget(self.graphics)
+        self._refresh_classic(buffer)
+
+    def _refresh_classic(self, buffer: TelemetryBuffer) -> None:
         rows = buffer.visible(self.window_s)
         if not rows:
             return
@@ -164,6 +257,50 @@ class TelemetryPlots(QWidget):
         if self.follow_latest:
             self.position_x.setXRange(max(0.0, times[-1] - self.window_s), max(self.window_s, times[-1]), padding=0)
         self._update_y_ranges(samples, data)
+
+    def _refresh_holonomic(self, samples: list) -> None:
+        if not samples:
+            return
+        times = [sample.tick / 1000.0 for sample in samples]
+        curves = self.holo_curves
+        curves["ref_x"].setData(times, [sample.reference[0] for sample in samples])
+        curves["actual_x"].setData(times, [sample.actual[0] for sample in samples])
+        curves["ref_y"].setData(times, [sample.reference[1] for sample in samples])
+        curves["actual_y"].setData(times, [sample.actual[1] for sample in samples])
+        curves["error_forward"].setData(times, [sample.error[0] for sample in samples])
+        curves["error_lateral"].setData(times, [sample.error[1] for sample in samples])
+        curves["error_yaw"].setData(times, [sample.error[2] for sample in samples])
+        curves["measured_forward"].setData(times, [sample.measured[0] for sample in samples])
+        curves["drive_forward"].setData(times, [sample.drive[0] for sample in samples])
+        curves["measured_lateral"].setData(times, [sample.measured[1] for sample in samples])
+        curves["drive_lateral"].setData(times, [sample.drive[1] for sample in samples])
+        curves["measured_wz"].setData(times, [sample.measured[2] for sample in samples])
+        curves["drive_wz"].setData(times, [sample.drive[2] for sample in samples])
+        curves["profile_speed"].setData(
+            times, [sample.profile_reference_speed_mm_s for sample in samples])
+        curves["profile_progress"].setData(
+            times, [sample.profile_progress_mm for sample in samples])
+        curves["profile_remaining"].setData(
+            times, [sample.profile_remaining_mm for sample in samples])
+        if self.follow_latest:
+            self.holo_position.setXRange(
+                max(0.0, times[-1] - self.window_s), max(self.window_s, times[-1]), padding=0)
+
+    def _refresh_path(self, samples: list) -> None:
+        if not samples:
+            return
+        times = [sample.tick / 1000.0 for sample in samples]
+        curves = self.path_curves
+        curves["progress"].setData(times, [sample.progress_mm for sample in samples])
+        curves["remaining"].setData(times, [sample.remaining_mm for sample in samples])
+        curves["reference_speed"].setData(
+            times, [sample.reference_speed_mm_s for sample in samples])
+        curves["cross_track"].setData(times, [sample.cross_track_mm for sample in samples])
+        curves["command_wz"].setData(
+            times, [sample.command_wz_deg_s for sample in samples])
+        if self.follow_latest:
+            self.path_progress.setXRange(
+                max(0.0, times[-1] - self.window_s), max(self.window_s, times[-1]), padding=0)
 
     def _yaw_error_title(self, source: str, value: float) -> str:
         if self.heading_mode == "NONE":

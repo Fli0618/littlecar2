@@ -9,6 +9,9 @@ from typing import Iterable
 from .models import (
     AckResponse,
     GotoStrategySnapshot,
+    HolonomicConfig,
+    HolonomicConfigState,
+    HolonomicTelemetry,
     PathConfigState,
     PathConfigSnapshot,
     PathControlConfig,
@@ -39,6 +42,7 @@ CMD_SET_YAW_SOURCE = 0x13
 CMD_RESET_ORIGIN = 0x14
 CMD_GET_GOTO_STRATEGY = 0x15
 CMD_SET_GOTO_STRATEGY = 0x16
+CMD_HOLONOMIC_GOTO_POSE = 0x17
 CMD_PATH_BEGIN = 0x20
 CMD_PATH_CHUNK = 0x21
 CMD_PATH_COMMIT = 0x22
@@ -48,6 +52,9 @@ CMD_PATH_STATUS = 0x25
 CMD_GET_PATH_CONFIG = 0x26
 CMD_SET_PATH_CONFIG = 0x27
 CMD_RESTORE_PATH_CONFIG = 0x28
+CMD_GET_HOLONOMIC_CONFIG = 0x29
+CMD_SET_HOLONOMIC_CONFIG = 0x2A
+CMD_RESTORE_HOLONOMIC_CONFIG = 0x2B
 CMD_ACK = 0x80
 CMD_PID = 0x81
 CMD_TELEMETRY = 0x82
@@ -55,10 +62,18 @@ CMD_GOTO_STRATEGY = 0x83
 CMD_PATH_STATUS_RESPONSE = 0x84
 CMD_PATH_TELEMETRY = 0x85
 CMD_PATH_CONFIG = 0x86
+CMD_HOLONOMIC_CONFIG = 0x87
+CMD_HOLONOMIC_TELEMETRY = 0x88
 CMD_ERROR = 0xE0
+
+ERROR_BAD_COMMAND = 0x04
+ERROR_BAD_HOLONOMIC_CONFIG = 0x0C
 
 TELEMETRY_PAYLOAD_SIZE = 96
 PATH_TELEMETRY_PAYLOAD_SIZE = 94
+SET_HOLONOMIC_CONFIG_PAYLOAD_SIZE = 48
+HOLONOMIC_CONFIG_PAYLOAD_SIZE = 52
+HOLONOMIC_TELEMETRY_PAYLOAD_SIZE = 96
 PATH_CONFIG_FIELDS = (
     "kp_cross_track", "kd_cross_track_velocity", "kp_yaw", "kd_yaw_rate",
     "cruise_speed_mm_s", "max_yaw_rate_deg_s", "accel_mm_s2", "decel_mm_s2",
@@ -69,6 +84,11 @@ PATH_CONFIG_FIELDS = (
 )
 PATH_MAX_POINTS = 256
 PATH_CHUNK_MAX_POINTS = 7
+HOLONOMIC_CONFIG_FIELDS = (
+    "linear_accel_mm_s2", "linear_decel_mm_s2", "yaw_accel_deg_s2",
+    "kp_forward", "kv_forward", "kp_lateral", "kv_lateral",
+    "kp_yaw", "kv_yaw", "forward_scale", "lateral_scale", "yaw_scale",
+)
 
 
 class ProtocolError(ValueError):
@@ -207,6 +227,58 @@ def encode_yaw_source(source: str) -> bytes:
 
 def encode_goto_strategy(large_yaw_align_enabled: bool) -> bytes:
     return bytes([1 if large_yaw_align_enabled else 0])
+
+
+def _validate_holonomic_values(values: tuple[float, ...]) -> None:
+    """校验与 STM32 AdvanceHolonomic_IsConfigValid 完全一致。"""
+    if not all(math.isfinite(value) for value in values):
+        raise ProtocolError("holonomic config values must be finite")
+    if not all(0.0 < value <= 5000.0 for value in values[:2]):
+        raise ProtocolError("holonomic accel/decel must be in (0, 5000] mm/s^2")
+    if not 0.0 < values[2] <= 5000.0:
+        raise ProtocolError("holonomic yaw accel must be in (0, 5000] deg/s^2")
+    if not all(0.0 <= value <= 20.0 for value in values[3:9]):
+        raise ProtocolError("holonomic gains must be in [0, 20]")
+    if not all(0.5 <= value <= 2.0 for value in values[9:12]):
+        raise ProtocolError("holonomic scales must be in [0.5, 2]")
+
+
+def encode_holonomic_config(config: HolonomicConfig) -> bytes:
+    values = tuple(getattr(config, field) for field in HOLONOMIC_CONFIG_FIELDS)
+    _validate_holonomic_values(values)
+    return struct.pack("<12f", *values)
+
+
+def decode_holonomic_config(frame: Frame) -> HolonomicConfigState:
+    if (frame.version != VERSION or frame.command != CMD_HOLONOMIC_CONFIG or
+            len(frame.payload) != HOLONOMIC_CONFIG_PAYLOAD_SIZE):
+        raise ProtocolError("invalid holonomic config frame")
+    revision, *values = struct.unpack("<I12f", frame.payload)
+    _validate_holonomic_values(tuple(values))
+    return HolonomicConfigState(revision, HolonomicConfig(*values))
+
+
+def decode_holonomic_telemetry(frame: Frame) -> HolonomicTelemetry:
+    if (frame.version != VERSION or frame.command != CMD_HOLONOMIC_TELEMETRY or
+            len(frame.payload) != HOLONOMIC_TELEMETRY_PAYLOAD_SIZE):
+        raise ProtocolError("invalid holonomic telemetry frame")
+    values = struct.unpack("<IIBBH21f", frame.payload)
+    return HolonomicTelemetry(
+        tick=values[0],
+        config_revision=values[1],
+        state=values[2],
+        flags=values[3],
+        remote_link_status=values[4],
+        goal=values[5:8],
+        actual=values[8:11],
+        reference=values[11:14],
+        error=values[14:17],
+        measured=values[17:20],
+        drive=values[20:23],
+        profile_progress_mm=values[23],
+        profile_remaining_mm=values[24],
+        profile_reference_speed_mm_s=values[25],
+    )
 
 
 def decode_goto_strategy(frame: Frame) -> GotoStrategySnapshot:

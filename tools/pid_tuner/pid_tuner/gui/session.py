@@ -6,13 +6,16 @@ from typing import Callable, TypeVar
 
 from PySide6.QtCore import QObject, Signal
 
-from ..models import (AckResponse, GotoStrategySnapshot, MotionGoal, PathBeginCommand, PathChunkCommand,
-                      PathCommitCommand, PathConfigState, PathControlConfig, PathStartCommand,
+from ..models import (AckResponse, BoardError, GotoStrategySnapshot, HolonomicConfig,
+                      HolonomicConfigState, HolonomicTelemetry, MotionGoal,
+                      PathBeginCommand, PathChunkCommand, PathCommitCommand,
+                      PathConfigState, PathControlConfig, PathStartCommand,
                       PathTelemetry, PidConfig, PidConfigState, Telemetry)
+from ..protocol import CMD_GET_HOLONOMIC_CONFIG, ERROR_BAD_COMMAND
 from ..serial_client import SerialClient
 
 
-ConfigState = TypeVar("ConfigState", PidConfigState, PathConfigState)
+ConfigState = TypeVar("ConfigState", PidConfigState, PathConfigState, HolonomicConfigState)
 
 
 class SessionController(QObject):
@@ -33,6 +36,10 @@ class SessionController(QObject):
     path_started = Signal(int)
     path_config_read = Signal(object)
     path_config_applied = Signal(object)
+    holonomic_config_read = Signal(object)
+    holonomic_config_applied = Signal(object)
+    holonomic_telemetry = Signal(object)
+    holonomic_unsupported = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -44,30 +51,53 @@ class SessionController(QObject):
         self._motion_generation = 0
 
     def connect_port(self, port: str, baud: int) -> None:
-        def action() -> tuple[SerialClient, PidConfigState, PathConfigState, GotoStrategySnapshot]:
+        def action() -> tuple[SerialClient, PidConfigState, PathConfigState,
+                              GotoStrategySnapshot, HolonomicConfigState | None]:
             client = SerialClient.open_port(port, baud)
             try:
                 client.start()
                 client.add_telemetry_callback(self._handle_telemetry)
                 client.add_path_telemetry_callback(self._handle_path_telemetry)
-                return client, client.get_pid(), client.get_path_config(), client.get_goto_strategy()
+                client.add_holonomic_telemetry_callback(self._handle_holonomic_telemetry)
+                pid = client.get_pid()
+                path_config = client.get_path_config()
+                goto_strategy = client.get_goto_strategy()
             except Exception:
                 client.close()
                 raise
+            try:
+                holonomic = client.get_holonomic_config()
+            except BoardError as error:
+                if (error.command == CMD_GET_HOLONOMIC_CONFIG and
+                        error.code == ERROR_BAD_COMMAND):
+                    # 固件不支持全向调参：保留串口连接，仅禁用全向页。
+                    holonomic = None
+                else:
+                    client.close()
+                    raise
+            except Exception:
+                client.close()
+                raise
+            return client, pid, path_config, goto_strategy, holonomic
 
         future = self._executor.submit(action)
         future.add_done_callback(self._connected)
 
     def _connected(self, future: object) -> None:
         try:
-            client, pid, path_config, goto_strategy = future.result()  # type: ignore[attr-defined]
+            client, pid, path_config, goto_strategy, holonomic = future.result()  # type: ignore[attr-defined]
             self._client = client
             self.connected = True
             self.pid_read.emit(pid)
             self.path_config_read.emit(path_config)
             self.goto_strategy_read.emit(goto_strategy)
+            if holonomic is None:
+                self.holonomic_unsupported.emit()
+                self.status.emit("已连接；当前固件不支持全向调参")
+            else:
+                self.holonomic_config_read.emit(holonomic)
+                self.status.emit("已连接，参数已同步")
             self.connection_changed.emit(True)
-            self.status.emit("已连接，参数已同步")
         except Exception as error:
             self._client = None
             self.connected = False
@@ -168,6 +198,25 @@ class SessionController(QObject):
         self._submit(lambda client: self._wait_for_revision(
             client.restore_path_config(), client.get_path_config, "路径参数"), restored)
 
+    def read_holonomic_config(self) -> None:
+        self._submit(lambda client: client.get_holonomic_config(),
+                     self.holonomic_config_read.emit)
+
+    def apply_holonomic_config(self, config: HolonomicConfig) -> None:
+        self._submit(lambda client: self._wait_for_revision(
+            client.set_holonomic_config(config), client.get_holonomic_config,
+            "全向参数"), self.holonomic_config_applied.emit)
+
+    def restore_holonomic_config(self) -> None:
+        def restored(value: object) -> None:
+            assert isinstance(value, HolonomicConfigState)
+            self.status.emit(f"全向参数已恢复默认，修订号 {value.revision}")
+            self.holonomic_config_applied.emit(value)
+
+        self._submit(lambda client: self._wait_for_revision(
+            client.restore_holonomic_config(), client.get_holonomic_config,
+            "全向参数"), restored)
+
     def set_yaw_source(self, source: str) -> None:
         self._submit(lambda client: client.set_yaw_source(source),
                      lambda _: self.yaw_source_changed.emit(source))
@@ -193,6 +242,20 @@ class SessionController(QObject):
             self.status.emit("远程运动中")
 
         self._submit(lambda client: client.goto(goal), done)
+
+    def start_holonomic_motion(self, goal: MotionGoal) -> None:
+        self._motion_generation += 1
+        generation = self._motion_generation
+        self._set_motion_active(False)
+
+        def done(_: object) -> None:
+            if generation != self._motion_generation or not self.connected:
+                return
+            self.motion_active = True
+            self.motion_changed.emit(True)
+            self.status.emit("全向远程运动中")
+
+        self._submit(lambda client: client.holonomic_goto(goal), done)
 
     def _handle_telemetry(self, item: Telemetry) -> None:
         self.telemetry.emit(item)
@@ -266,6 +329,12 @@ class SessionController(QObject):
 
     def _handle_path_telemetry(self, telemetry: PathTelemetry) -> None:
         self.path_telemetry.emit(telemetry)
+
+    def _handle_holonomic_telemetry(self, telemetry: HolonomicTelemetry) -> None:
+        self.holonomic_telemetry.emit(telemetry)
+        if self.motion_active and (telemetry.state not in (0, 1, 2) or
+                                   telemetry.remote_link_status & 0x4000):
+            self._set_motion_active(False)
 
     def shutdown(self) -> None:
         self.disconnect()
