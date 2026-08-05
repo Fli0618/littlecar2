@@ -1,6 +1,6 @@
 # PID 在线调参验证工具
 
-该目录是独立的 PC 侧最小协议工具，不依赖 Jetson 比赛服务。当前仅提供协议编解码和上板验证脚本，后续 CLI/GUI 将复用 `pid_tuner.protocol`。
+该目录是独立的 PC 侧协议、串口客户端、会话和 GUI 工具，不依赖 Jetson 比赛服务。协议 V3 保持现有命令号、载荷顺序、CRC 和 revision 语义。
 
 ## 环境
 
@@ -79,3 +79,11 @@ conda run -n low_numpy python verify_board.py --port COM5 --exercise-motion --x 
 遥测在固件启动后以 40 ms 周期持续发送，默认监听窗口为 30 秒。若任务提前到达、超时或失联，脚本会如实报告实际收到的帧数、CRC 错误、序号缺失和固件侧遥测覆盖计数。位置环隔离测试可在 `goto` 后添加 `--no-yaw`；当前 PID 调试使用 `1200 mm/s`、`120 deg/s` 作为最高限速。
 
 现场测试前须确保机械急停、断电能力和人员监护可用。GUI STOP 及串口 STOP 都不是物理急停。
+
+## 全向参数与统一导出
+
+GUI 的“全向位置”页对应 `AdvanceHolonomic_Config_t` 的 12 项字段，使用 `GET/SET/RESTORE_HOLONOMIC_CONFIG`（`0x29` 至 `0x2B`）读写。`SET` 和 `RESTORE` 收到 ACK 后会轮询 active revision；只有板端在周期边界报告目标 revision，界面才显示“已生效”。
+
+工作台导出函数 `export_motion_config_header` 接收 PID、路径、GOTO 策略和全向四类已确认状态，一次生成 `advance_motion_config.h`。导出内容包含四类 revision、6 项 PID、20 项路径、1 项 GOTO 策略和 12 项全向默认宏；不再生成或读取 `advance_holonomic_position_defaults.h`。
+
+旧固件对 `GET_HOLONOMIC_CONFIG` 返回 `BAD_COMMAND` 时，Session 保留串口连接并仅禁用全向页面，PID、路径和地图功能继续可用。

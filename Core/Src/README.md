@@ -17,3 +17,5 @@ GOTO 仅需由上位机发送一次，STM32 的 `AdvanceMotion_Update()` 会在�
 路径中段不复用到点平移 PID：前视段切向前馈负责前进，当前投影段法向 PD 负责回到路径，投影进度插值 yaw 与航向变化率前馈共同产生角速度。横向误差超过 20 mm 后参考速度连续下降；横向误差达到 50 mm 并持续 60 ms 时进入 `OFF_PATH` 终态并平滑停车，对应 400 mm 车道与 300 mm 车宽的理论极限。剩余距离不大于 60 mm 且参考、实测平移速度均不大于 150 mm/s 后，控制器才进入最终 Goto PID 捕获。路径超时按总弧长估算，无进展保护按累计弧长判断。
 
 `advance_holonomic_position.c` 实现轻量全向位置控制器：平移按起点到终点的标量路径规划，航向按最短有符号角度差独立规划，二者复用同一离散梯形/三角轮廓；每个 20 ms 周期生成连续参考位姿与速度后，按 `v_cmd = v_ref + Kp*e_pose + Kv*e_velocity` 做前向/横向/航向独立反馈（无积分项），修正量单独限幅，再经三个对角 scale 校准后调用 `Chassis_SetBodyVelocityEx()`。速度估计使用 OPS/WIT 位姿增量加一阶低通（alpha=0.2）。控制器仅在 `ADVANCE_CONTROL_HOLONOMIC` 控制权下输出速度；到达、超时、位姿异常或取消时先停车再释放控制权。调试入口见 `Test_Holonomic_GotoPoseBlocking()`，实车调试顺序见 `Core/Src/advance_holonomic_position.md`。
+
+全向配置使用 active/pending 双缓冲和 revision：`AdvanceHolonomic_RequestConfig()` 提交后由固定 20 ms 周期应用，`AdvanceHolonomic_GetConfig()` 只返回 active 值。运行中修改 Kp/Kv/scale 在下一周期生效，accel/decel 不重建当前轮廓；scale 后仍执行最终 `vmax/wmax` 限幅。`AdvanceControl_CancelActive()` 会按控制权路由到 WORLD 或 HOLONOMIC，STOP、心跳超时和断链清理保持同一安全路径。
