@@ -19,7 +19,7 @@ extern "C"
 
 /* 路径数据与投影搜索。 */
 #define ADVANCE_MOTION_PATH_MIN_SEGMENT_MM (1.0f) /*!< 最小有效线段长度，单位为 mm。 */
-#define ADVANCE_MOTION_PATH_SEARCH_SEGMENTS ((uint16_t)12U) /*!< 每周期前向搜索上限，单位为段。 */
+#define ADVANCE_MOTION_PATH_SEARCH_SEGMENTS ((uint16_t)30U) /*!< 每周期前向搜索上限，单位为段。 */
 
 /* 曲率预览与法向前馈。 */
 #define ADVANCE_MOTION_PATH_CURVATURE_EPSILON_1_MM (0.00001f) /*!< 曲率除数下限，单位为 1/mm。 */
@@ -28,7 +28,7 @@ extern "C"
 
 /* 400 mm 窄车道偏离保护；车宽 300 mm，中心线到禁区的理论余量仅 50 mm。 */
 #define ADVANCE_MOTION_PATH_CROSS_TRACK_SLOWDOWN_MM (20.0f) /*!< 超过该横向误差后连续降低参考速度。 */
-#define ADVANCE_MOTION_PATH_CROSS_TRACK_ABORT_MM (50.0f) /*!< 横向误差持续达到该值时安全终止路径。 */
+#define ADVANCE_MOTION_PATH_CROSS_TRACK_ABORT_MM (1000.0f) /*!< 横向误差持续达到该值时安全终止路径。 */
 #define ADVANCE_MOTION_PATH_OFF_PATH_HOLD_MS ((uint32_t)60U) /*!< 严重偏离必须持续的时间，过滤单帧 OPS 跳点。 */
 
 /* 路径超时与底盘驱动。 */
