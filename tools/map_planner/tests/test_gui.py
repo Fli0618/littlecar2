@@ -162,7 +162,8 @@ class GuiTests(unittest.TestCase):
             window.begin_goto_add(); window.update_preview(1900, 200)
             markers = [item.data(0) for item in window.scene.items()]
             self.assertIsNone(window.bezier_draft)
-            self.assertIn("preview_sweep", markers)
+            self.assertIn("preview_car", markers)
+            self.assertNotIn("preview_sweep", markers)
             self.assertNotIn("bezier_sample", markers)
         finally:
             window.close()
@@ -193,16 +194,22 @@ class GuiTests(unittest.TestCase):
         finally:
             window.close()
 
-    def test_preview_draws_direction_and_reports_blocked_simulation(self):
+    def test_point_preview_draws_only_target_pose_without_sweep_calculation(self):
         window = self.window()
         try:
             window.add_continuous_segment()
             window.play()
             self.assertIn("至少需要", window.path_check.text())
             window.begin_goto_add()
+            original_sweep_violations = window.sweep_violations
+            window.sweep_violations = lambda sweep: self.fail(
+                "Point hover preview must not calculate swept area")
             window.update_preview(2200, 300)
+            window.sweep_violations = original_sweep_violations
             markers = [item.data(0) for item in window.scene.items()]
-            self.assertIn("preview_sweep", markers)
+            self.assertIn("preview_car", markers)
+            self.assertNotIn("preview_sweep", markers)
+            self.assertNotIn("preview_platform_collision", markers)
             self.assertIn("preview_direction", markers)
             self.assertIn("car_direction", markers)
         finally:

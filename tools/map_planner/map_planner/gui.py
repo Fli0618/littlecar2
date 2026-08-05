@@ -2308,22 +2308,15 @@ class MapEditorWidget(QWidget):
                 self._set_path_check("曲线预览", "仅供观察，不进行区域合法性检查")
                 self.confirm_bezier_button.setEnabled(not self.calibration_pending and self.bezier_draft is not None)
                 return
-            step = self._selected_step()
-            anchor, anchor_yaw = self._step_anchor(self.active_index + 1 if isinstance(step, ContinuousPathSegment) else len(self.plan.steps))
-            if isinstance(step, ContinuousPathSegment) and step.points:
-                last = self.paper_of(step.points[-1]); anchor, anchor_yaw = QPointF(last.x_mm, last.y_mm), step.points[-1].yaw_deg
-            sweep = self.continuous_sweep(anchor, self.preview_paper, anchor_yaw, self.preview_yaw_deg) if isinstance(step, ContinuousPathSegment) else self.route_sweep(anchor, self.preview_paper, anchor_yaw, self.preview_yaw_deg)
-            out_of_bounds, hit_platform = self.sweep_violations(sweep)
-            color = QColor("#c62828") if out_of_bounds or not hit_platform.isEmpty() else QColor("#1565c0")
-            path = self.scene.addPath(self.sweep_path(sweep), QPen(Qt.PenStyle.NoPen), QColor(color.red(), color.green(), color.blue(), 70)); path.setData(0, "preview_sweep"); path.setZValue(2)
-            if not hit_platform.isEmpty():
-                collision = self.scene.addPath(hit_platform, QPen(Qt.PenStyle.NoPen), QColor("#d32f2f")); collision.setData(0, "preview_platform_collision"); collision.setZValue(3)
-            item = CarOutlineItem(self.rotate_preview_clockwise, *self.vehicle_dimensions()); item.setPos(self.preview_paper); item.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, self.preview_yaw_deg)); item.setPen(QPen(color, 4)); item.setBrush(QColor(color.red(), color.green(), color.blue(), 42)); item.setZValue(17); self.scene.addItem(item)
+            # 鼠标悬停只预览目标姿态。车体扫掠仍在保存、播放和下发前统一校验，
+            # 避免每次 mouseMove 都生成大量多边形并把地图覆盖成密集曲线。
+            color = QColor("#1565c0")
+            item = CarOutlineItem(self.rotate_preview_clockwise, *self.vehicle_dimensions()); item.setPos(self.preview_paper); item.setRotation(qgraphics_rotation_deg(self.plan.start_heading_deg, self.preview_yaw_deg)); item.setPen(QPen(color, 4)); item.setBrush(QColor(color.red(), color.green(), color.blue(), 42)); item.setZValue(17); item.setData(0, "preview_car"); self.scene.addItem(item)
             if self.mode == "mark_pose":
                 self._draw_navigation_goal_guide(color)
             else:
                 self._draw_direction_arrow(self.preview_paper.x(), self.preview_paper.y(), self.preview_yaw_deg, color, "preview_direction")
-            self._set_path_check("预览", "可行" if not out_of_bounds and hit_platform.isEmpty() else ("越界" if out_of_bounds else "碰撞平台"))
+            self._set_path_check("预览", "仅显示目标姿态；保存、播放或执行前统一检查路径")
 
     def _draw_navigation_goal_guide(self, color: QColor) -> None:
             """RViz 风格目标位姿：当前位置参考线、拖动箭头和角度差。"""
