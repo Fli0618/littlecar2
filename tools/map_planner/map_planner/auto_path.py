@@ -8,7 +8,7 @@ import math
 
 from .geometry import (paper_heading_to_world_yaw, paper_to_world,
                        paper_vector_to_heading, wrap_deg)
-from .models import (CAR_SIZE_MM, FIELD_SIZE_MM, CostmapSettings, Obstacle,
+from .models import (FIELD_SIZE_MM, VEHICLE_WIDTH_MM, CostmapSettings, Obstacle,
                      PathPosePoint, Pose)
 
 
@@ -111,8 +111,7 @@ def build_inflated_obstacles(
 
     settings.validate()
     costmap = settings.costmap
-    body_half = max(costmap.vehicle_length_mm,
-                    costmap.vehicle_width_mm) / 2.0
+    body_half = max(costmap.vehicle_length_mm, VEHICLE_WIDTH_MM) / 2.0
     boundary_safety = costmap.boundary_safety_margin_mm
     if boundary_safety > 0.0:
         # Start zones occupy the top-right and bottom-right 300 mm squares.
@@ -166,8 +165,7 @@ def build_inflated_obstacles(
 def _center_bounds(settings: AutoPathSettings) -> tuple[float, float, float, float]:
     # Physical center bound. Extra hard boundary safety is represented as
     # rectangles with explicit openings for the two legal start zones.
-    clearance = max(settings.costmap.vehicle_length_mm,
-                    settings.costmap.vehicle_width_mm) / 2.0
+    clearance = max(settings.costmap.vehicle_length_mm, VEHICLE_WIDTH_MM) / 2.0
     return clearance, clearance, FIELD_SIZE_MM - clearance, FIELD_SIZE_MM - clearance
 
 

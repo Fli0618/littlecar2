@@ -8,7 +8,9 @@ from typing import Literal, Union
 
 
 FIELD_SIZE_MM = 2400.0
-CAR_SIZE_MM = 300.0
+VEHICLE_WIDTH_MM = 300.0
+# Compatibility name retained for existing imports.
+CAR_SIZE_MM = VEHICLE_WIDTH_MM
 MAP_VERSION = 10
 StartKind = Literal["zone_1", "zone_2", "custom"]
 # 仅用于旧调用方的类型兼容；v7 的持久化语义由 steps 决定。
@@ -121,7 +123,8 @@ class CostmapSettings:
     """Static-map hard clearance and soft inflation, grouped by object type."""
 
     vehicle_length_mm: float = 300.0
-    vehicle_width_mm: float = 300.0
+    # Retained in persisted plans; planning always uses the fixed 300 mm width.
+    vehicle_width_mm: float = VEHICLE_WIDTH_MM
     boundary_safety_margin_mm: float = 0.0
     boundary_inflation_mm: float = 120.0
     boundary_cost_weight: float = 3.0
@@ -132,6 +135,9 @@ class CostmapSettings:
     obstacle_safety_margin_mm: float = 20.0
     obstacle_inflation_mm: float = 80.0
     obstacle_cost_weight: float = 3.0
+
+    def __post_init__(self) -> None:
+        self.vehicle_width_mm = VEHICLE_WIDTH_MM
 
 
 @dataclass
