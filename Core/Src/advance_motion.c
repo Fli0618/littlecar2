@@ -40,6 +40,7 @@ typedef struct
   float command_wz_ccw_deg_s;
   float no_progress_reference_error_mm;
   uint8_t arrival_stop_sent;
+  uint8_t arrival_hard_stop_sent;
   uint8_t terminal_stop_pending;
   uint8_t pid_history_valid;
   uint8_t large_yaw_align_enabled;
@@ -1133,6 +1134,7 @@ static void AdvanceMotion_SetTerminalState(AdvanceMotion_RunState_t state)
   g_motion.updated_tick = HAL_GetTick();
   g_motion_control.arrive_hold_start_tick = 0U;
   g_motion_control.arrival_stop_sent = 0U;
+  g_motion_control.arrival_hard_stop_sent = 0U;
   AdvanceMotion_ResetPidAndProgress();
   AdvanceMotion_ClearPathContext();
   (void)AdvanceControl_ReleaseMode();
@@ -1218,6 +1220,7 @@ AdvanceMotion_Status_t AdvanceMotion_SetWorldVelocityEx(float vx_world_mm_s, flo
     g_motion.updated_tick = HAL_GetTick();
     g_motion_control.arrive_hold_start_tick = 0U;
     g_motion_control.arrival_stop_sent = 0U;
+    g_motion_control.arrival_hard_stop_sent = 0U;
     AdvanceMotion_ResetPidAndProgress();
     AdvanceMotion_ClearPathContext();
   }
@@ -1258,6 +1261,7 @@ AdvanceMotion_Status_t AdvanceMotion_GotoPoseEx(const WorldGoalPose2D_t *goal, u
   g_motion.updated_tick = g_motion.started_tick;
   g_motion_control.arrive_hold_start_tick = 0U;
   g_motion_control.arrival_stop_sent = 0U;
+  g_motion_control.arrival_hard_stop_sent = 0U;
   AdvanceMotion_ResetPidAndProgress();
   g_motion.error_x_mm = 0.0f;
   g_motion.error_y_mm = 0.0f;
@@ -1360,6 +1364,7 @@ AdvanceMotion_Status_t AdvanceMotion_FollowPathEx(const AdvanceMotion_PathPoint_
   g_motion.updated_tick = g_motion.started_tick;
   g_motion_control.arrive_hold_start_tick = 0U;
   g_motion_control.arrival_stop_sent = 0U;
+  g_motion_control.arrival_hard_stop_sent = 0U;
   AdvanceMotion_ResetPidAndProgress();
   AdvanceMotion_UpdatePathReference(g_path.progress_tick);
   g_motion.error_x_mm = 0.0f;
@@ -1600,6 +1605,17 @@ void AdvanceMotion_Update(void)
     }
     if ((now_tick - g_motion_control.arrive_hold_start_tick) >= ADVANCE_MOTION_ARRIVE_HOLD_MS)
     {
+      /* 先保持到达容差，再发送硬停止，清除平滑减速后的残余漂移。 */
+      if (g_motion_control.arrival_hard_stop_sent == 0U)
+      {
+        if (Chassis_Stop() == 0U)
+        {
+          AdvanceMotion_UpdateDebugSnapshot(now_tick,
+                                            0U);
+          return;
+        }
+        g_motion_control.arrival_hard_stop_sent = 1U;
+      }
       AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_ARRIVED);
     }
     else
@@ -1619,6 +1635,7 @@ void AdvanceMotion_Update(void)
   }
   g_motion_control.arrive_hold_start_tick = 0U;
   g_motion_control.arrival_stop_sent = 0U;
+  g_motion_control.arrival_hard_stop_sent = 0U;
 
   vx_world_mm_s = 0.0f;
   vy_world_mm_s = 0.0f;

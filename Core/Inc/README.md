@@ -9,6 +9,7 @@
 所有周期接口统一使用 `*_Update()` 命名并仅由 TIM6 调用。通信模块不控制底盘；二维码 Blocking 接口等待期间只检查状态并执行 `__WFI()`。
 `advance_motion.h` 提供 `AdvanceMotion_FollowPathEx()` 异步连续路径接口；调用方必须在任务结束前保持路径数组有效且不修改，中间采样点不会触发停车。
 `AdvanceMotion_FollowPathEx()` 强制关闭单点 Goto 的大航向先对准策略。路径中段使用动态前视切向前馈、投影横向 PD、插值航向 PD 和航向变化率前馈；接近终点且参考/实测速度均降到捕获阈值后，才切换到完整 Goto PID 精确停车。
+到达位置和航向容差后先保持 `ADVANCE_MOTION_ARRIVE_HOLD_MS`，再发送一次 `Chassis_Stop()` 硬停止，以清除平滑减速后的残余漂移；硬停止命令入队失败时由后续控制周期重试。
 连续路径的 14 项控制与速度规划参数由 `AdvanceMotion_PathControlConfig_t` 成组保存，可读取、提交或恢复默认；待应用组只在 20 ms 控制周期边界切换，活动路径仅约束当前前视范围，不重置路径进度。
 调试快照中的 `nearest_segment_index` 是投影点所在段，`target_segment_index` 是前视点所在段；路径进度与剩余量均为累计弧长，单位为 mm。
 
@@ -17,3 +18,5 @@
 `advance_motion_config.h` 保存由工作台导出的 6 项单点 PID、20 项路径控制参数和 1 项 GOTO 默认策略，供 `advance_motion.c` 构建编译期默认值。该文件可整体替换；`advance_motion.h` 仅保留公共类型、约束和接口。路径参数此前提到的 14 项已废止，当前结构与调参协议均为 20 项。
 
 单点 GOTO 的 21 项分阶段速度规划参数由 `AdvanceMotion_GotoControlConfig_t` 成组管理，使用 active/pending/revision 在 20 ms 控制周期边界原子切换。其只影响 `AdvanceMotion_GotoPoseEx()` 的平移、航向独立加减速与末段捕获，不改变 `AdvanceMotion_FollowPathEx()`、路径上下文或既有 GOTO 载荷。
+
+`advance_holonomic_position.h` 定义轻量全向位置控制器的公开接口：目标复用 `WorldGoalPose2D_t`，控制权使用新增的 `ADVANCE_CONTROL_HOLONOMIC`，运行时可调参数固定为 12 项。该模块与 `AdvanceMotion` 并行存在，不替换任何旧接口；固定安全参数与默认参数位于 `advance_holonomic_position_config.h`。

@@ -4,6 +4,7 @@
 
 #include "drive_emm.h"
 #include "main.h"
+#include "advance_holonomic_position.h"
 
 void AdvanceTest_BlockingMain(void)
 {
@@ -709,6 +710,49 @@ void Test_Motion_GotoPoseYawAndCancel(void)
   AdvanceMotion_CancelIfActive();
   status = AdvanceMotion_GetStatus(&motion_status);
   printf("[TEST] motion cancel status=%d state=%d\r\n", (int)status, (int)motion_status.state);
+  Chassis_Stop();
+  Chassis_Enable(false);
+}
+
+/**
+ * @brief 测试 AdvanceHolonomic_GotoPoseBlocking 的到点运动。
+ * @note 保守目标：相对当前位置前进 300 mm 并保持当前航向；
+ *       实车五步调试时在此临时修改目标与增益。
+ */
+void Test_Holonomic_GotoPoseBlocking(void)
+{
+  AdvanceWorld_Status_t world_status;
+  AdvanceHolonomic_RunState_t state;
+  WorldGoalPose2D_t goal;
+  WorldPose2D_t pose;
+  float delta_x_world;
+  float delta_y_world;
+
+  printf("[TEST] holonomic GotoPoseBlocking test\r\n");
+  Chassis_Enable(true);
+  HAL_Delay(1000);
+
+  world_status = AdvanceWorld_GetPoseCopy(&pose);
+  if (world_status != ADVANCE_WORLD_STATUS_OK)
+  {
+    printf("[TEST] holonomic pose unavailable status=%d\r\n", (int)world_status);
+    Chassis_Enable(false);
+    return;
+  }
+
+  // 预期：车体沿当前航向前进 300 mm，到达后自动停车并释放控制权；
+  // 车体前向位移经 BodyToWorldVelocity 转换为世界坐标增量
+  AdvanceWorld_BodyToWorldVelocity(0.0f, 300.0f, pose.yaw_deg,
+                                   &delta_x_world, &delta_y_world);
+  goal.x_mm = pose.x_mm + delta_x_world;
+  goal.y_mm = pose.y_mm + delta_y_world;
+  goal.yaw_deg = pose.yaw_deg;
+  goal.vmax_mm_s = 300.0f;
+  goal.wmax_deg_s = 60.0f;
+  goal.timeout_ms = 8000U;
+  goal.goal_flags = ADVANCE_HOLONOMIC_GOAL_USE_POSITION | ADVANCE_HOLONOMIC_GOAL_USE_YAW;
+  state = AdvanceHolonomic_GotoGoalBlocking(&goal, CHASSIS_DEFAULT_ACC);
+  printf("[TEST] holonomic result state=%d\r\n", (int)state);
   Chassis_Stop();
   Chassis_Enable(false);
 }

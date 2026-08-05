@@ -377,7 +377,11 @@ AdvanceVisual_RunBlockingInternal(AdvanceVisual_Mode_t mode, uint8_t target_type
   Detect_Status_t status;
   uint32_t now_tick;
 
-  if (AdvanceControl_GetMode() != ADVANCE_CONTROL_NONE)
+  /*
+   * 直接尝试获取控制权，不再采用
+   * GetMode() 检查后再 SetMode() 的分离流程。
+   */
+  if (AdvanceControl_SetMode(ADVANCE_CONTROL_VISUAL) == 0U)
   {
     return AdvanceVisual_ReturnStartError();
   }
@@ -385,12 +389,11 @@ AdvanceVisual_RunBlockingInternal(AdvanceVisual_Mode_t mode, uint8_t target_type
   status = AdvanceVisual_StartDetection(mode);
   if (status != DETECT_STATUS_OK)
   {
-    return AdvanceVisual_ReturnStartError();
-  }
-
-  if (AdvanceControl_SetMode(ADVANCE_CONTROL_VISUAL) == 0U)
-  {
-    (void)detect_stop();
+    /*
+     * Jetson 检测未成功启动，此时底盘尚未运动，
+     * 直接释放视觉控制权。
+     */
+    AdvanceControl_ReleaseMode();
     return AdvanceVisual_ReturnStartError();
   }
 

@@ -13,7 +13,8 @@ uint8_t AdvanceControl_SetMode(AdvanceControl_Mode_t mode)
 {
   if ((mode != ADVANCE_CONTROL_NONE) &&
       (mode != ADVANCE_CONTROL_WORLD) &&
-      (mode != ADVANCE_CONTROL_VISUAL))
+      (mode != ADVANCE_CONTROL_VISUAL) &&
+      (mode != ADVANCE_CONTROL_HOLONOMIC))
   {
     return 0U;
   }

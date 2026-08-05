@@ -90,6 +90,12 @@ void Test_Motion_GotoPoseBlocking(void);
 void Test_Motion_GotoPoseYawAndCancel(void);
 
 /**
+ * @brief 测试 AdvanceHolonomic 全向位置控制器的到点运动。
+ * @note 默认前进 300 mm 并保持当前航向；方向/距离按实车调试需要临时修改。
+ */
+void Test_Holonomic_GotoPoseBlocking(void);
+
+/**
  * @brief 现场观测 OPS/WIT 航向源切换后的位姿与遥测新鲜度标志。
  * @note 不发送底盘运动命令；仅在运动控制处于非活动状态时调用。
  */
