@@ -22,8 +22,9 @@ from .geometry import (StartFrame, paper_heading_to_world_yaw, paper_to_world, p
 from .codegen_c import CodeGenerationError, validate_plan_for_blocking_codegen
 from .codegen_dialog import CodeGenerationDialog
 from .bezier import bezier_tangent_yaw, generate_bezier_path_points
-from .auto_path import (AutoPathError, AutoPathSettings,
-                        build_inflated_obstacles, plan_auto_path)
+from .auto_path import (PLATFORM_GROUP_BOUNDS, AutoPathError, AutoPathSettings,
+                        boundary_inset_rects, build_inflated_obstacles,
+                        plan_auto_path)
 from .models import (AutoSegmentSettings, BezierPathSegment, FIELD_SIZE_MM,
                      VEHICLE_WIDTH_MM,
                      ContinuousPathSegment, CostmapSettings, Obstacle,
@@ -424,6 +425,19 @@ class MapEditorWidget(QWidget):
                     self.current_position_label.setText(
                         f"实车当前位置：世界 X={self._runtime_pose.x_mm:.1f}, Y={self._runtime_pose.y_mm:.1f}, "
                         f"航向={self._runtime_pose.yaw_deg:.1f}°；图纸 X={paper.x_mm:.1f}, Y={paper.y_mm:.1f} mm")
+            if hasattr(self, "runtime_position_label"):
+                self.runtime_position_label.setText(
+                    "实车位置：等待遥测" if self._runtime_pose is None else
+                    f"实车位置：X={self._runtime_pose.x_mm:.1f} mm，"
+                    f"Y={self._runtime_pose.y_mm:.1f} mm，航向={self._runtime_pose.yaw_deg:.1f}°")
+                if self._path_runtime is None:
+                    self.runtime_tracking_label.setText("局部跟踪：等待路径遥测")
+                else:
+                    self.runtime_tracking_label.setText(
+                        f"局部跟踪：剩余={self._path_runtime.remaining_mm:.1f} mm，"
+                        f"横向误差={self._path_runtime.cross_track_mm:.1f} mm，"
+                        f"前视={self._path_runtime.lookahead_mm:.1f} mm，"
+                        f"参考速度={self._path_runtime.reference_speed_mm_s:.1f} mm/s")
             if snapshot.trace_reset:
                 self._clear_runtime_trace()
             new_trace_points = [Pose(point.x_mm, point.y_mm, point.yaw_deg)
@@ -537,10 +551,14 @@ class MapEditorWidget(QWidget):
             self.navigation_page = cost_page
             self.basic_actions_page = waypoint_page
             self.runtime_page = QWidget()
+            runtime_box = QVBoxLayout(self.runtime_page)
+            runtime_box.setContentsMargins(6, 8, 6, 8)
+            runtime_box.setSpacing(8)
             self.output_page = output_page
             self.editor_tabs.insertTab(2, self.runtime_page, "3 位姿与运行")
             self.editor_tabs.setTabText(0, "1 自动导航")
-            self.editor_tabs.setTabText(1, "2 基础动作")
+            self.editor_tabs.setTabText(1, "2 路径制作")
+            self.editor_tabs.setTabText(2, "3 实时运行")
             self.editor_tabs.setTabText(3, "4 方案与输出")
             self.editor_tabs.currentChanged.connect(self._on_editor_tab_changed)
             outer_box.addWidget(self.editor_tabs)
@@ -679,8 +697,35 @@ class MapEditorWidget(QWidget):
                 controls.extend((safety_box, inflation_box, weight_box))
                 self._costmap_controls.extend(controls); auto_box.addWidget(group)
                 return controls
-            boundary = cost_group("场地边线（向场内膨胀）", 0.0, 120.0, 3.0)
-            platform = cost_group("四个黄色平台（向外膨胀）", 20.0, 80.0, 3.0)
+            boundary = cost_group("场地边线（向场内膨胀）", 20.0, 120.0, 3.0)
+            boundary_zone_group = QGroupBox("边界功能区内突")
+            boundary_zone_form = QFormLayout(boundary_zone_group)
+            self.boundary_zone_half_width = spin(200.0, 0.0, 600.0, 5.0)
+            self.boundary_zone_depth = spin(85.0, 0.0, 300.0, 5.0)
+            self.side_zone_half_length = spin(290.0, 0.0, 600.0, 5.0)
+            self.side_zone_depth = spin(150.0, 0.0, 300.0, 5.0)
+            self.boundary_zone_inflation = spin(35.0, 0.0, 500.0, 5.0)
+            boundary_zone_form.addRow("原料区半宽 (mm)", self.boundary_zone_half_width)
+            boundary_zone_form.addRow("原料区深度 (mm)", self.boundary_zone_depth)
+            boundary_zone_form.addRow("暂存/粗加工区半长 (mm)", self.side_zone_half_length)
+            boundary_zone_form.addRow("暂存/粗加工区宽度 (mm)", self.side_zone_depth)
+            boundary_zone_form.addRow("软膨胀距离 (mm)", self.boundary_zone_inflation)
+            self._costmap_controls.extend((self.boundary_zone_half_width,
+                                           self.boundary_zone_depth,
+                                           self.side_zone_half_length,
+                                           self.side_zone_depth,
+                                           self.boundary_zone_inflation))
+            auto_box.addWidget(boundary_zone_group)
+            platform = cost_group("四个黄色平台（组内侧）", 20.0, 20.0, 3.0)
+            platform_outer_group = QGroupBox("四个黄色平台（组外侧）")
+            platform_outer_form = QFormLayout(platform_outer_group)
+            self.platform_outer_inflation = spin(240.0, 0.0, 500.0, 10.0)
+            self.platform_outer_weight = spin(3.8, 0.0, 20.0, 0.1)
+            platform_outer_form.addRow("软膨胀距离 (mm)", self.platform_outer_inflation)
+            platform_outer_form.addRow("软代价权重", self.platform_outer_weight)
+            self._costmap_controls.extend((self.platform_outer_inflation,
+                                           self.platform_outer_weight))
+            auto_box.addWidget(platform_outer_group)
             obstacle = cost_group("黑色随机障碍物（向外膨胀）", 20.0, 80.0, 3.0, radius=25.0)
             self.boundary_safety, self.boundary_inflation, self.boundary_weight = boundary
             self.platform_safety, self.platform_inflation, self.platform_weight = platform
@@ -730,6 +775,24 @@ class MapEditorWidget(QWidget):
                 button=QPushButton(label); button.clicked.connect(fn); simrow.addWidget(button)
                 if label == "播放": self.play_button = button
             box.addLayout(simrow)
+            box = runtime_box
+            realtime_note = QLabel(
+                "地图同时显示原规划路径和实车运行轨迹。紫色实线为实车轨迹；"
+                "橙点为当前投影点，青点为动态前视点。F407 只做局部跟踪，不会实时重新规划路线。")
+            realtime_note.setWordWrap(True)
+            box.addWidget(realtime_note)
+            self.runtime_position_label = QLabel("实车位置：等待遥测")
+            self.runtime_tracking_label = QLabel("局部跟踪：等待路径遥测")
+            self.runtime_position_label.setWordWrap(True)
+            self.runtime_tracking_label.setWordWrap(True)
+            box.addWidget(self.runtime_position_label)
+            box.addWidget(self.runtime_tracking_label)
+            box.addWidget(QLabel("规划动作（选择连续执行的起始动作）"))
+            self.runtime_waypoint_list = QListWidget()
+            self.runtime_waypoint_list.setMinimumHeight(140)
+            self.runtime_waypoint_list.currentRowChanged.connect(
+                self.activate_list_row)
+            box.addWidget(self.runtime_waypoint_list)
             box.addWidget(QLabel("实机执行"))
             execution_row = QHBoxLayout()
             self.execution_enabled_switch = QCheckBox("实机运动")
@@ -748,6 +811,7 @@ class MapEditorWidget(QWidget):
             self.execution_status_label = QLabel("实机执行未启用")
             self.execution_status_label.setWordWrap(True)
             box.addWidget(self.execution_status_label)
+            box.addStretch()
             self.allow_yellow_zone = QCheckBox("允许通过黄色区")
             self.allow_yellow_zone.setChecked(True)
             self.allow_yellow_zone.toggled.connect(self._set_yellow_zone_passage)
@@ -757,6 +821,7 @@ class MapEditorWidget(QWidget):
             self.yellow_zone_status_label.setWordWrap(True)
             self.yellow_zone_status_label.setStyleSheet("color: #ef6c00;")
             cost_box.addWidget(self.yellow_zone_status_label)
+            box = output_box
             self.progress = QSlider(Qt.Orientation.Horizontal); self.progress.setRange(0, 0); self.progress.setEnabled(False)
             self.progress.sliderPressed.connect(self.pause); self.progress.valueChanged.connect(self.seek_timeline)
             box.addWidget(self.progress); self.progress_label = QLabel("进度：0.00 / 0.00 s"); box.addWidget(self.progress_label)
@@ -1096,9 +1161,16 @@ class MapEditorWidget(QWidget):
                 boundary_safety_margin_mm=self.boundary_safety.value(),
                 boundary_inflation_mm=self.boundary_inflation.value(),
                 boundary_cost_weight=self.boundary_weight.value(),
+                boundary_zone_half_width_mm=self.boundary_zone_half_width.value(),
+                boundary_zone_depth_mm=self.boundary_zone_depth.value(),
+                side_zone_half_length_mm=self.side_zone_half_length.value(),
+                side_zone_depth_mm=self.side_zone_depth.value(),
+                boundary_zone_inflation_mm=self.boundary_zone_inflation.value(),
                 platform_safety_margin_mm=self.platform_safety.value(),
                 platform_inflation_mm=self.platform_inflation.value(),
                 platform_cost_weight=self.platform_weight.value(),
+                platform_outer_inflation_mm=self.platform_outer_inflation.value(),
+                platform_outer_cost_weight=self.platform_outer_weight.value(),
                 obstacle_radius_mm=self.obstacle_radius.value(),
                 obstacle_safety_margin_mm=self.obstacle_safety.value(),
                 obstacle_inflation_mm=self.obstacle_inflation.value(),
@@ -1122,9 +1194,17 @@ class MapEditorWidget(QWidget):
                 (self.boundary_safety, config.boundary_safety_margin_mm),
                 (self.boundary_inflation, config.boundary_inflation_mm),
                 (self.boundary_weight, config.boundary_cost_weight),
+                (self.boundary_zone_half_width, config.boundary_zone_half_width_mm),
+                (self.boundary_zone_depth, config.boundary_zone_depth_mm),
+                (self.side_zone_half_length, config.side_zone_half_length_mm),
+                (self.side_zone_depth, config.side_zone_depth_mm),
+                (self.boundary_zone_inflation,
+                 config.boundary_zone_inflation_mm),
                 (self.platform_safety, config.platform_safety_margin_mm),
                 (self.platform_inflation, config.platform_inflation_mm),
                 (self.platform_weight, config.platform_cost_weight),
+                (self.platform_outer_inflation, config.platform_outer_inflation_mm),
+                (self.platform_outer_weight, config.platform_outer_cost_weight),
                 (self.obstacle_radius, config.obstacle_radius_mm),
                 (self.obstacle_safety, config.obstacle_safety_margin_mm),
                 (self.obstacle_inflation, config.obstacle_inflation_mm),
@@ -1364,6 +1444,11 @@ class MapEditorWidget(QWidget):
             yellow_brush = QColor(255, 213, 79, 62)
             pink_pen = QPen(QColor("#ec407a"), 3)
             pink_brush = QColor(236, 64, 122, 55)
+            group_left, group_top, group_right, group_bottom = PLATFORM_GROUP_BOUNDS
+            platform_group_path = QPainterPath()
+            platform_group_path.addRect(QRectF(
+                group_left, group_top, group_right - group_left,
+                group_bottom - group_top))
             if soft_end > hard_clearance and config.boundary_cost_weight > 0.0:
                 soft_width = soft_end - hard_clearance
                 for band_rect in (
@@ -1403,33 +1488,151 @@ class MapEditorWidget(QWidget):
                     QRectF(1490.0, FIELD_SIZE_MM - body_half - safety,
                            610.0, safety),
                 ))
-            for band_rect in hard_bands:
-                item = self.scene.addRect(band_rect, pink_pen, pink_brush)
-                item.setData(0, "boundary_hard_zone"); item.setZValue(2)
-                item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            field_path = QPainterPath()
+            field_path.addRect(QRectF(0, 0, FIELD_SIZE_MM, FIELD_SIZE_MM))
+            boundary_body = QPainterPath()
+            for band_rect in hard_bands[:4]:
+                band_path = QPainterPath(); band_path.addRect(band_rect)
+                boundary_body = boundary_body.united(band_path)
+            boundary_safe = boundary_body
+            for band_rect in hard_bands[4:]:
+                band_path = QPainterPath(); band_path.addRect(band_rect)
+                boundary_safe = boundary_safe.united(band_path)
+            for left, top, right, bottom in boundary_inset_rects(config):
+                body_zone = QPainterPath()
+                body_zone.addRoundedRect(
+                    QRectF(left - body_half, top - body_half,
+                           right - left + 2 * body_half,
+                           bottom - top + 2 * body_half),
+                    body_half, body_half, Qt.SizeMode.AbsoluteSize)
+                boundary_body = boundary_body.united(
+                    body_zone.intersected(field_path))
+                safe_clearance = body_half + config.boundary_safety_margin_mm
+                safe_zone = QPainterPath()
+                safe_zone.addRoundedRect(
+                    QRectF(left - safe_clearance, top - safe_clearance,
+                           right - left + 2 * safe_clearance,
+                           bottom - top + 2 * safe_clearance),
+                    safe_clearance, safe_clearance,
+                    Qt.SizeMode.AbsoluteSize)
+                boundary_safe = boundary_safe.united(
+                    safe_zone.intersected(field_path))
+            boundary_fill = self.scene.addPath(
+                boundary_safe, QPen(Qt.PenStyle.NoPen), pink_brush)
+            boundary_fill.setData(0, "boundary_hard_zone")
+            boundary_fill.setZValue(2)
+            boundary_fill.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            body_boundary_item = self.scene.addPath(
+                boundary_body, QPen(QColor("#d32f2f"), 2))
+            body_boundary_item.setData(0, "boundary_inset_body_clearance")
+            body_boundary_item.setZValue(2.4)
+            body_boundary_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            safety_boundary_item = self.scene.addPath(
+                boundary_safe,
+                QPen(QColor("#d32f2f"), 2, Qt.PenStyle.DashLine))
+            safety_boundary_item.setData(0, "boundary_inset_safety_clearance")
+            safety_boundary_item.setZValue(2.5)
+            safety_boundary_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            if (config.boundary_zone_inflation_mm > 0.0 and
+                    config.boundary_cost_weight > 0.0):
+                for rectangle in rectangles:
+                    if rectangle.source != "boundary_zone":
+                        continue
+                    soft_path = self._costmap_shape_path(
+                        rectangle, config.boundary_zone_inflation_mm)
+                    soft_path = soft_path.subtracted(
+                        self._costmap_shape_path(rectangle)).intersected(field_path)
+                    item = self.scene.addPath(soft_path, yellow_pen, yellow_brush)
+                    item.setData(0, "boundary_cost_band")
+                    item.setZValue(1)
+                    item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            platform_bands = []
+            if (config.platform_inflation_mm > 0.0 and
+                    config.platform_cost_weight > 0.0):
+                for rectangle in rectangles:
+                    if rectangle.source == "platform":
+                        platform_bands.append((
+                            "inner",
+                            self._costmap_shape_path(
+                                rectangle, config.platform_inflation_mm)
+                            .intersected(platform_group_path)))
+            if (config.platform_outer_inflation_mm > 0.0 and
+                    config.platform_outer_cost_weight > 0.0):
+                outset = config.platform_outer_inflation_mm
+                expanded = QPainterPath()
+                expanded.addRoundedRect(QRectF(
+                    group_left - outset, group_top - outset,
+                    group_right - group_left + 2 * outset,
+                    group_bottom - group_top + 2 * outset),
+                    outset, outset, Qt.SizeMode.AbsoluteSize)
+                platform_bands.append((
+                    "outer", expanded.subtracted(platform_group_path)
+                    .intersected(field_path)))
+            for region, soft_path in platform_bands:
+                soft_item = self.scene.addPath(soft_path, yellow_pen, yellow_brush)
+                soft_item.setData(0, "soft_cost_zone")
+                soft_item.setData(1, region)
+                soft_item.setZValue(1)
+                soft_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            platform_body_pen = QPen(QColor("#ec407a"), 3)
+            platform_safety_pen = QPen(
+                QColor("#ec407a"), 3, Qt.PenStyle.DashLine)
+            platform_clearance = body_half + config.platform_safety_margin_mm
+            for x, y in PLATFORMS:
+                body_path = QPainterPath()
+                body_path.addRoundedRect(
+                    QRectF(x - body_half, y - body_half,
+                           450 + 2 * body_half, 450 + 2 * body_half),
+                    body_half, body_half, Qt.SizeMode.AbsoluteSize)
+                body_item = self.scene.addPath(
+                    body_path, platform_body_pen, QColor(236, 64, 122, 24))
+                body_item.setData(0, "platform_body_clearance")
+                body_item.setZValue(2.6)
+                body_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                if config.platform_safety_margin_mm > 0.0:
+                    safety_path = QPainterPath()
+                    safety_path.addRoundedRect(
+                        QRectF(x - platform_clearance, y - platform_clearance,
+                               450 + 2 * platform_clearance,
+                               450 + 2 * platform_clearance),
+                        platform_clearance, platform_clearance,
+                        Qt.SizeMode.AbsoluteSize)
+                    safety_item = self.scene.addPath(
+                        safety_path, platform_safety_pen,
+                        QColor(236, 64, 122, 18))
+                    safety_item.setData(0, "platform_safety_clearance")
+                    safety_item.setZValue(2.5)
+                    safety_item.setAcceptedMouseButtons(
+                        Qt.MouseButton.NoButton)
             for rectangle in rectangles:
-                if rectangle.source == "boundary":
+                if rectangle.source in ("boundary", "boundary_zone", "platform"):
                     continue
-                soft_distance = (config.platform_inflation_mm
-                                 if rectangle.source == "platform"
-                                 else config.obstacle_inflation_mm)
-                soft_weight = (config.platform_cost_weight
-                               if rectangle.source == "platform"
-                               else config.obstacle_cost_weight)
-                if soft_distance > 0.0 and soft_weight > 0.0:
-                    soft_path = self._costmap_shape_path(rectangle, soft_distance)
-                    soft_item = self.scene.addPath(soft_path, yellow_pen,
-                                                   yellow_brush)
-                    soft_item.setData(0, "soft_cost_zone"); soft_item.setZValue(1)
+                if (rectangle.source == "custom" and
+                        config.obstacle_inflation_mm > 0.0 and
+                        config.obstacle_cost_weight > 0.0):
+                    soft_path = self._costmap_shape_path(
+                        rectangle, config.obstacle_inflation_mm)
+                    soft_item = self.scene.addPath(soft_path, yellow_pen, yellow_brush)
+                    soft_item.setData(0, "soft_cost_zone")
+                    soft_item.setData(1, "obstacle")
+                    soft_item.setZValue(1)
                     soft_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-                item = self.scene.addPath(
-                    self._costmap_shape_path(rectangle), pink_pen, pink_brush)
-                item.setData(0, "inflated_forbidden")
-                item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-                item.setZValue(2)
+                if rectangle.hard:
+                    item = self.scene.addPath(
+                        self._costmap_shape_path(rectangle), pink_pen, pink_brush)
+                    item.setData(0, "inflated_forbidden")
+                    item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                    item.setZValue(2)
+            split = self.scene.addRect(
+                QRectF(group_left, group_top, group_right - group_left,
+                       group_bottom - group_top),
+                QPen(QColor("#f9a825"), 2, Qt.PenStyle.DashLine))
+            split.setData(0, "platform_cost_split_boundary")
+            split.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            split.setZValue(3)
             physical_pen = QPen(QColor("#d32f2f"), 5)
-            field_outline = self.scene.addRect(0, 0, FIELD_SIZE_MM, FIELD_SIZE_MM,
-                                               physical_pen)
+            field_outline = self.scene.addPath(
+                self._physical_boundary_path(config), physical_pen)
             field_outline.setData(0, "physical_forbidden_outline")
             field_outline.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
             field_outline.setZValue(3)
@@ -1501,18 +1704,52 @@ class MapEditorWidget(QWidget):
 
     def line(self,*args,marker,pen): return self.static(self.scene.addLine(*args,pen),marker)
 
+    @staticmethod
+    def _physical_boundary_path(config: CostmapSettings) -> QPainterPath:
+            raw_half = config.boundary_zone_half_width_mm
+            raw_depth = config.boundary_zone_depth_mm
+            side_half = config.side_zone_half_length_mm
+            side_depth = config.side_zone_depth_mm
+            center = FIELD_SIZE_MM / 2.0
+            raw_left, raw_right = center - raw_half, center + raw_half
+            side_top, side_bottom = center - side_half, center + side_half
+            rough_left, rough_right = side_top, side_bottom
+            path = QPainterPath(QPointF(0, 0))
+            for x, y in ((raw_left, 0), (raw_left, raw_depth),
+                         (raw_right, raw_depth), (raw_right, 0),
+                         (FIELD_SIZE_MM, 0),
+                         (FIELD_SIZE_MM, FIELD_SIZE_MM),
+                         (rough_right, FIELD_SIZE_MM),
+                         (rough_right, FIELD_SIZE_MM - side_depth),
+                         (rough_left, FIELD_SIZE_MM - side_depth),
+                         (rough_left, FIELD_SIZE_MM), (0, FIELD_SIZE_MM),
+                         (0, side_bottom), (side_depth, side_bottom),
+                         (side_depth, side_top), (0, side_top), (0, 0)):
+                path.lineTo(x, y)
+            return path
+
     def draw_field(self):
-            self.static(self.scene.addRect(0,0,2400,2400,QPen(QColor("#d32f2f"),6),QColor("#ffffff")),"field_boundary")
+            config = (self.current_costmap_settings()
+                      if hasattr(self, "boundary_zone_half_width")
+                      else self.plan.layout.costmap)
+            self.static(self.scene.addRect(0,0,2400,2400,QPen(Qt.PenStyle.NoPen),QColor("#ffffff")),"field_background")
             for x in range(0,2401,200): self.line(x,0,x,2400,marker="grid",pen=QPen(QColor(80,80,80,25),1))
             for y in range(0,2401,200): self.line(0,y,2400,y,marker="grid",pen=QPen(QColor(80,80,80,25),1))
             for x,y in PLATFORMS: self.static(self.scene.addRect(x,y,450,450,QPen(QColor("#d32f2f"),5),QColor("#fffde7")),"platform")
+            for left, top, right, bottom in boundary_inset_rects(config):
+                self.static(self.scene.addRect(
+                    left, top, right-left, bottom-top,
+                    QPen(Qt.PenStyle.NoPen), QColor("#ffffff")),
+                    "boundary_inset_zone")
+            self.static(self.scene.addPath(
+                self._physical_boundary_path(config), QPen(QColor("#d32f2f"), 6)),
+                "field_boundary")
             dash=QPen(QColor("#616161"),3,Qt.PenStyle.DashLine); self.line(1200,0,1200,2400,marker="center_line",pen=dash); self.line(0,1200,2400,1200,marker="center_line",pen=dash)
             for x,y,label in ((2250,150,"启停区 1"),(2250,2250,"启停区 2")):
                 zone = self.static(self.scene.addRect(x-150,y-150,300,300,QPen(Qt.PenStyle.NoPen),QColor("#114ce0")),"start_zone"); zone.setZValue(4)
                 label_item = self.text(x-115,y+162,label,"start_zone_label",20); label_item.setZValue(5)
                 h_center = self.line(x-18,y,x+18,y,marker="start_zone_center",pen=QPen(QColor("#ffffff"),3)); h_center.setZValue(5)
                 v_center = self.line(x,y-18,x,y+18,marker="start_zone_center",pen=QPen(QColor("#ffffff"),3)); v_center.setZValue(5)
-            self.static(self.scene.addRect(0,910,150,580,QPen(QColor("#9e9e9e"),2),QColor("#ffffff")),"storage_base"); self.static(self.scene.addRect(910,2250,580,150,QPen(QColor("#9e9e9e"),2),QColor("#ffffff")),"rough_base")
             raw_x=self.plan.layout.raw_center_x_mm; raw=DraggableEllipseItem((-150,-150,300,300),self.move_raw_area); raw.setPos(raw_x,RAW_CENTER_Y_MM); raw.setPen(QPen(QColor("#444"),4)); raw.setBrush(QColor("#f7f7f7")); raw.setData(0,"raw_turntable"); raw.setZValue(5); self.scene.addItem(raw)
             for angle in (90, 210, 330):
                 radians=math.radians(angle); x=raw_x+100*math.cos(radians); y=RAW_CENTER_Y_MM+100*math.sin(radians)
@@ -1770,7 +2007,9 @@ class MapEditorWidget(QWidget):
 
     def refresh_waypoints(self):
             self.waypoint_list.blockSignals(True)
+            self.runtime_waypoint_list.blockSignals(True)
             self.waypoint_list.clear()
+            self.runtime_waypoint_list.clear()
             self._waypoint_row_to_step_index = []
             for index, step in enumerate(self.plan.steps):
                 is_internal_rotation = (isinstance(step, RotateInPlace) and
@@ -1800,6 +2039,7 @@ class MapEditorWidget(QWidget):
                 else:
                     text = f"{index + 1}. 曲线路径 {step.name}"
                 self.waypoint_list.addItem(text)
+                self.runtime_waypoint_list.addItem(text)
                 self._waypoint_row_to_step_index.append(index)
             selected_step_index = self.active_index
             if (selected_step_index > 0 and
@@ -1810,7 +2050,10 @@ class MapEditorWidget(QWidget):
             if selected_step_index in self._waypoint_row_to_step_index:
                 self.waypoint_list.setCurrentRow(
                     self._waypoint_row_to_step_index.index(selected_step_index))
+                self.runtime_waypoint_list.setCurrentRow(
+                    self._waypoint_row_to_step_index.index(selected_step_index))
             self.waypoint_list.blockSignals(False)
+            self.runtime_waypoint_list.blockSignals(False)
             has_auto = any(isinstance(step, ContinuousPathSegment) and
                            step.name.startswith("自动规划") for step in self.plan.steps)
             self.replan_auto_button.setEnabled(not self.calibration_pending and has_auto)
@@ -1831,6 +2074,19 @@ class MapEditorWidget(QWidget):
             self.active_index, self.active_point_index = index, -1
             self.show_node(index)
             self.refresh_mode_ui()
+            selected_index = index
+            if (selected_index > 0 and
+                    isinstance(self.plan.steps[selected_index], RotateInPlace) and
+                    self.plan.steps[selected_index].name == "导航目标朝向" and
+                    not self.show_generated_details.isChecked()):
+                selected_index -= 1
+            if selected_index in self._waypoint_row_to_step_index:
+                row = self._waypoint_row_to_step_index.index(selected_index)
+                for step_list in (self.waypoint_list,
+                                  self.runtime_waypoint_list):
+                    step_list.blockSignals(True)
+                    step_list.setCurrentRow(row)
+                    step_list.blockSignals(False)
             self.redraw(); self.candidate_selected.emit(index)
 
     def _load_auto_segment_controls(self, settings: AutoSegmentSettings,
@@ -2511,7 +2767,7 @@ class MapEditorWidget(QWidget):
             self._runtime_target_direction_item.setBrush(QColor("#2e7d32")); self._runtime_target_direction_item.setPen(QPen(QColor("#2e7d32"), 2))
             self._runtime_target_direction_item.setZValue(40); self._runtime_target_direction_item.setData(0, "runtime_target_direction"); self.scene.addItem(self._runtime_target_direction_item)
             self._runtime_trace_item = QGraphicsPathItem()
-            self._runtime_trace_item.setPen(QPen(QColor("#fb8c00"), 4, Qt.PenStyle.DashLine)); self._runtime_trace_item.setZValue(38); self._runtime_trace_item.setData(0, "runtime_trace"); self.scene.addItem(self._runtime_trace_item)
+            self._runtime_trace_item.setPen(QPen(QColor("#8e24aa"), 5, Qt.PenStyle.SolidLine)); self._runtime_trace_item.setZValue(38); self._runtime_trace_item.setData(0, "runtime_trace"); self.scene.addItem(self._runtime_trace_item)
             self._runtime_projection_item = self.scene.addEllipse(-16, -16, 32, 32, QPen(QColor("#ff9800"), 3), QColor(255, 152, 0, 100))
             self._runtime_projection_item.setZValue(40); self._runtime_projection_item.setData(0, "runtime_projection")
             self._runtime_lookahead_item = self.scene.addEllipse(-14, -14, 28, 28, QPen(QColor("#00acc1"), 3), QColor(0, 172, 193, 100))

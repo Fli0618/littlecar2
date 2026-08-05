@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QF
                                QSplitter, QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from map_planner.gui import MapEditorWidget
-from map_planner.models import BezierPathSegment, ContinuousPathSegment, Pose, StepTurnPathSegment
 from pid_tuner.gui.plots import TelemetryPlots
 from pid_tuner.gui.widgets import ConnectionPanel
 from pid_tuner.models import (GotoStrategySnapshot, MotionGoal, PathConfigState, PathControlConfig,
@@ -26,7 +25,8 @@ from .control_panel import (
     protected_number,
 )
 from .controller import MotionWorkbenchController
-from .models import CoordinateSyncState, PathUploadSnapshot, PathUploadState, TargetPose
+from .models import (CoordinateSyncState, PathUploadSnapshot, PlanExecutionState,
+                     TargetPose)
 
 MOTION_WORKBENCH_REFRESH_MS = 40
 
@@ -43,11 +43,10 @@ class PathControlPanel(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.upload = QPushButton("上传路径")
-        self.start = QPushButton("启动路径")
-        self.abort = QPushButton("中止路径")
-        self.start.setEnabled(False)
-        self.status = QLabel("未上传")
+        self.upload = QPushButton("同步完整方案")
+        self.start = QPushButton("启动完整路径")
+        self.abort = QPushButton("停止完整路径")
+        self.status = QLabel("完整方案尚未同步")
         layout = QVBoxLayout(self)
         command_form = QFormLayout()
         command_form.addRow(self.upload); command_form.addRow(self.start); command_form.addRow(self.abort); command_form.addRow("状态", self.status)
@@ -291,9 +290,9 @@ class MotionWorkbenchWindow(QMainWindow):
             lambda _active: self._refresh_origin_controls())
         self.controller.session.origin_reset.connect(self._on_origin_reset)
         self.controller.session.telemetry.connect(self._sync_heading_source)
-        self.path_panel.upload_requested.connect(self._upload_selected_path)
-        self.path_panel.start_requested.connect(lambda: self.controller.start_path(self._uploaded_path_id))
-        self.path_panel.abort_requested.connect(self.controller.abort_path)
+        self.path_panel.upload_requested.connect(self._sync_full_plan)
+        self.path_panel.start_requested.connect(self._start_full_plan)
+        self.path_panel.abort_requested.connect(self.controller.stop)
         self.path_panel.read_config_requested.connect(self.controller.session.read_path_config)
         self.path_panel.apply_config_requested.connect(self.controller.session.apply_path_config)
         self.path_panel.restore_config_requested.connect(self.controller.session.restore_path_config)
@@ -312,7 +311,6 @@ class MotionWorkbenchWindow(QMainWindow):
         self.map_editor.continuous_requested.connect(self.controller.start_continuous)
         self.map_editor.execution_stop_requested.connect(self.controller.stop)
         self.view_switch.clicked.connect(self._switch_workspace)
-        self._uploaded_path_id = 0
         self.controller.set_plan(self.map_editor.get_plan())
         self.controller.set_map_calibrated(not self.map_editor.calibration_pending)
 
@@ -471,6 +469,18 @@ class MotionWorkbenchWindow(QMainWindow):
         count = getattr(execution, "step_count", 0)
         reason = getattr(execution, "reason", "")
         self.map_editor.set_execution_status(f"{state} {cursor}/{count} {reason}".strip())
+        running = state == PlanExecutionState.RUNNING
+        self.path_panel.upload.setEnabled(not running)
+        self.path_panel.start.setEnabled(not running)
+        self.path_panel.abort.setEnabled(running)
+        if running:
+            self.path_panel.status.setText(
+                f"完整路径运行中：第 {cursor + 1}/{count} 步")
+        elif state in (PlanExecutionState.COMPLETED,
+                       PlanExecutionState.CANCELED,
+                       PlanExecutionState.FAILED):
+            self.path_panel.status.setText(
+                f"完整路径：{state.value}{'；' + reason if reason else ''}")
 
     def _switch_workspace(self) -> None:
         next_index = 1 - self.workspace.currentIndex(); self.workspace.setCurrentIndex(next_index)
@@ -482,38 +492,32 @@ class MotionWorkbenchWindow(QMainWindow):
         self.map_editor.apply_runtime_snapshot(snapshot)
         self.pose_status.setText("位姿: 有效" if snapshot.pose_valid else "位姿: 无效")
 
-    def _upload_selected_path(self) -> None:
-        step = self.map_editor.selected_step()
-        if step is None:
-            self.path_panel.status.setText("请先在地图中选择路径步骤")
+    def _sync_full_plan(self) -> bool:
+        plan = self.map_editor.get_plan()
+        if not plan.steps:
+            self.path_panel.status.setText("完整方案没有可执行动作")
+            return False
+        if self.controller.plan_execution.state == PlanExecutionState.RUNNING:
+            self.path_panel.status.setText("完整路径运行中，不能重新同步")
+            return False
+        self.controller.set_plan(plan)
+        self.path_panel.status.setText(f"完整方案已同步：共 {len(plan.steps)} 个动作")
+        return True
+
+    def _start_full_plan(self) -> None:
+        if not self._sync_full_plan():
             return
-        if isinstance(step, ContinuousPathSegment):
-            points = step.points
-        elif isinstance(step, BezierPathSegment):
-            try:
-                points = self.map_editor.selected_step_path_points()
-            except (TypeError, ValueError) as error:
-                self.path_panel.status.setText(f"贝塞尔路径无效：{error}")
-                return
-        elif isinstance(step, StepTurnPathSegment):
-            try:
-                points = self.controller.selected_path_points()
-            except (TypeError, ValueError) as error:
-                self.path_panel.status.setText(f"垫步路径无效：{error}")
-                return
-        else:
-            self.path_panel.status.setText("当前步骤不是可上传的连续路径")
+        reason = self.controller.map_execution_block_reason()
+        if reason is not None:
+            self.path_panel.status.setText(reason)
             return
-        path_id = self.controller.allocate_path_id()
-        self._uploaded_path_id = path_id
-        self.controller.upload_path(path_id, points)
-        self.path_panel.start.setEnabled(False)
-        self.path_panel.status.setText(f"正在上传路径 {path_id}")
+        if self.controller.start_full_plan():
+            self.path_panel.status.setText("完整路径启动中")
 
     def _set_upload_status(self, snapshot: PathUploadSnapshot) -> None:
         self.upload_status.setText(f"路径: {snapshot.state.value}")
-        self.path_panel.status.setText(snapshot.message or snapshot.state.value)
-        self.path_panel.start.setEnabled(snapshot.state == PathUploadState.COMMITTED)
+        if self.controller.plan_execution.state == PlanExecutionState.RUNNING:
+            self.path_panel.status.setText(snapshot.message or snapshot.state.value)
 
     def _set_coordinate_sync_status(self, state: CoordinateSyncState) -> None:
         mapping = {

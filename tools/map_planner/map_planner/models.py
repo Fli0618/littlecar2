@@ -125,12 +125,21 @@ class CostmapSettings:
     vehicle_length_mm: float = 300.0
     # Retained in persisted plans; planning always uses the fixed 300 mm width.
     vehicle_width_mm: float = VEHICLE_WIDTH_MM
-    boundary_safety_margin_mm: float = 0.0
+    boundary_safety_margin_mm: float = 20.0
     boundary_inflation_mm: float = 120.0
     boundary_cost_weight: float = 3.0
+    boundary_zone_half_width_mm: float = 200.0
+    boundary_zone_depth_mm: float = 85.0
+    side_zone_half_length_mm: float = 290.0
+    side_zone_depth_mm: float = 150.0
+    boundary_zone_inflation_mm: float = 35.0
     platform_safety_margin_mm: float = 20.0
-    platform_inflation_mm: float = 80.0
+    # ``platform_*`` is the soft cost inside the rectangle joining the four
+    # outer platform corners; outer values apply only outside that rectangle.
+    platform_inflation_mm: float = 20.0
     platform_cost_weight: float = 3.0
+    platform_outer_inflation_mm: float = 240.0
+    platform_outer_cost_weight: float = 3.8
     obstacle_radius_mm: float = 25.0
     obstacle_safety_margin_mm: float = 20.0
     obstacle_inflation_mm: float = 80.0
@@ -259,7 +268,17 @@ class Plan:
             if not isinstance(obstacles, list) or not all(isinstance(item, dict) for item in obstacles): raise ValueError
             costmap_value = layout.get("costmap", {})
             if not isinstance(costmap_value, dict): raise ValueError
-            costmap = CostmapSettings(**costmap_value) if costmap_value else CostmapSettings()
+            if costmap_value:
+                costmap_value = dict(costmap_value)
+                costmap_value.setdefault(
+                    "platform_outer_inflation_mm",
+                    costmap_value.get("platform_inflation_mm", 80.0))
+                costmap_value.setdefault(
+                    "platform_outer_cost_weight",
+                    costmap_value.get("platform_cost_weight", 3.0))
+                costmap = CostmapSettings(**costmap_value)
+            else:
+                costmap = CostmapSettings()
             return cls(name=str(value["name"]), created_at=str(value["created_at"]), updated_at=str(value["updated_at"]),
                 start_kind=kind, start_paper_x_mm=float(start["paper_x_mm"]), start_paper_y_mm=float(start["paper_y_mm"]),
                 start_heading_deg=float(start["heading_deg"]), steps=steps,

@@ -25,7 +25,14 @@ def test_costmap_settings_round_trip():
         vehicle_length_mm=360,
         vehicle_width_mm=240,
         boundary_safety_margin_mm=15,
+        boundary_zone_half_width_mm=225,
+        boundary_zone_depth_mm=95,
+        side_zone_half_length_mm=275,
+        side_zone_depth_mm=145,
+        boundary_zone_inflation_mm=135,
         platform_inflation_mm=95,
+        platform_outer_inflation_mm=140,
+        platform_outer_cost_weight=6.5,
         obstacle_cost_weight=4.5,
     )
     with tempfile.TemporaryDirectory() as directory:

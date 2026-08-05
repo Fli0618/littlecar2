@@ -3,7 +3,9 @@ import math
 import pytest
 
 from map_planner.auto_path import (AutoPathError, AutoPathSettings,
-                                   _segment_hits_rect, _shape_contains,
+                                   _center_bounds, _segment_hits_rect,
+                                   _shape_contains, _weighted_edge_cost,
+                                   boundary_inset_rects,
                                    build_inflated_obstacles, plan_auto_path)
 from map_planner.models import CostmapSettings, Obstacle, Pose
 
@@ -18,7 +20,7 @@ def test_inflation_uses_vehicle_half_width_margin_and_custom_radius():
     ))
     rects = build_inflated_obstacles([Obstacle(300, 300)], settings)
 
-    platform = rects[0]
+    platform = next(rect for rect in rects if rect.source == "platform")
     assert (platform.left, platform.top, platform.right, platform.bottom) == (380, 380, 1170, 1170)
     assert platform.corner_radius == 170
     assert not _shape_contains((380, 380), platform)
@@ -39,24 +41,63 @@ def test_inflation_uses_configured_vehicle_dimensions():
         platform_safety_margin_mm=20,
     ))
 
-    platform = build_inflated_obstacles([], settings)[0]
+    platform = next(rect for rect in build_inflated_obstacles([], settings)
+                    if rect.source == "platform")
 
     assert (platform.left, platform.top, platform.right, platform.bottom) == (350, 350, 1200, 1200)
     assert platform.corner_radius == 200
 
 
+def test_boundary_work_zones_indent_top_left_and_bottom_edges():
+    costmap = CostmapSettings(boundary_zone_half_width_mm=200,
+                              boundary_zone_depth_mm=85)
+    settings = AutoPathSettings(costmap=costmap,
+                                include_fixed_platforms=False)
+    rects = build_inflated_obstacles([], settings)
+    zones = [rect for rect in rects if rect.source == "boundary_zone"]
+
+    assert boundary_inset_rects(costmap) == (
+        (1000, 0, 1400, 85), (0, 910, 150, 1490),
+        (910, 2250, 1490, 2400))
+    assert len(zones) == 3
+    assert (zones[0].left, zones[0].top,
+            zones[0].right, zones[0].bottom) == (830, -170, 1570, 255)
+    assert zones[0].corner_radius == 170
+    assert _shape_contains((1200, 250), zones[0])
+    assert not _shape_contains((1200, 256), zones[0])
+
+
 def test_boundary_cost_moves_a_free_route_away_from_green_limit():
     result = plan_auto_path(
-        (2250, 150), (1500, 150), START_FRAME, 0, 0, [],
+        (2250, 150), (1500, 300), START_FRAME, 0, 0, [],
         AutoPathSettings(sample_spacing_mm=20, yaw_mode="fixed"),
     )
 
     assert result.route_paper[0] == (2250, 150)
-    assert result.route_paper[-1] == (1500, 150)
+    assert result.route_paper[-1] == (1500, 300)
     assert any(y > 150 for _, y in result.route_paper[1:-1])
     assert 35 < len(result.world_points) < 60
     assert all(point.yaw_deg == 0 for point in result.world_points)
-    assert result.length_mm > 750
+    assert result.length_mm > 760
+
+
+def test_platform_soft_cost_uses_mutually_exclusive_inner_and_outer_regions():
+    settings = AutoPathSettings(costmap=CostmapSettings(
+        boundary_cost_weight=0,
+        platform_inflation_mm=100,
+        platform_cost_weight=1,
+        platform_outer_inflation_mm=100,
+        platform_outer_cost_weight=10,
+    ))
+    rects = build_inflated_obstacles([], settings)
+    bounds = _center_bounds(settings)
+
+    inner_cost = _weighted_edge_cost((600, 1200), (601, 1200), bounds,
+                                     rects, settings)
+    outer_cost = _weighted_edge_cost((499, 1200), (500, 1200), bounds,
+                                     rects, settings)
+
+    assert outer_cost > inner_cost
 
 
 def test_green_vehicle_center_boundary_is_a_hard_limit():
@@ -83,7 +124,7 @@ def test_boundary_hard_safety_keeps_official_start_zone_exit_open():
 
 def test_visibility_route_avoids_inflated_platform_and_smoothing_stays_free():
     result = plan_auto_path(
-        (1200, 150), (300, 1200), Pose(1200, 150, 90), 0, 90, [],
+        (1200, 300), (350, 1200), Pose(1200, 300, 90), 0, 90, [],
         AutoPathSettings(costmap=CostmapSettings(platform_safety_margin_mm=20),
                          corner_radius_mm=100,
                          sample_spacing_mm=20, yaw_mode="tangent"),
