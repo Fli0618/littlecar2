@@ -30,6 +30,7 @@
 #include "advance_control.h"
 #include "advance_visual.h"
 #include "advance_motion.h"
+#include "advance_holonomic_position.h"
 #include "advance_world.h"
 #include "advance_arm.h"
 #include "car_pose.h"
@@ -253,6 +254,10 @@ static void App_TimerUpdate(void)
       AdvanceVisual_Update();
       break;
 
+    case ADVANCE_CONTROL_HOLONOMIC:
+      AdvanceHolonomic_Update();
+      break;
+
     default:
       break;
     }
@@ -361,6 +366,7 @@ int main(void)
   AdvanceControl_Init();
   AdvanceVisual_Init();
   AdvanceMotion_Init();
+  AdvanceHolonomic_Init();
   if (drive_emm_Init() != HAL_OK)
   {
     Error_Handler();

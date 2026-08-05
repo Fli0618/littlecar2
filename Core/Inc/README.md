@@ -18,3 +18,5 @@
 `advance_motion_config.h` 保存由工作台导出的 6 项单点 PID、20 项路径控制参数和 1 项 GOTO 默认策略，供 `advance_motion.c` 构建编译期默认值。该文件可整体替换；`advance_motion.h` 仅保留公共类型、约束和接口。路径参数此前提到的 14 项已废止，当前结构与调参协议均为 20 项。
 
 单点 GOTO 的 21 项分阶段速度规划参数由 `AdvanceMotion_GotoControlConfig_t` 成组管理，使用 active/pending/revision 在 20 ms 控制周期边界原子切换。其只影响 `AdvanceMotion_GotoPoseEx()` 的平移、航向独立加减速与末段捕获，不改变 `AdvanceMotion_FollowPathEx()`、路径上下文或既有 GOTO 载荷。
+
+`advance_holonomic_position.h` 定义轻量全向位置控制器的公开接口：目标复用 `WorldGoalPose2D_t`，控制权使用新增的 `ADVANCE_CONTROL_HOLONOMIC`，运行时可调参数固定为 12 项。该模块与 `AdvanceMotion` 并行存在，不替换任何旧接口；固定安全参数与默认参数位于 `advance_holonomic_position_config.h`。
