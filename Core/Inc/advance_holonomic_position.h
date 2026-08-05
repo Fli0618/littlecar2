@@ -66,24 +66,8 @@ typedef struct
   AdvanceHolonomic_RunState_t state; /*!< 当前运行状态 */
   WorldGoalPose2D_t goal;            /*!< 当前目标位姿 */
   WorldPose2D_t actual_pose;         /*!< 当前实际位姿 */
-  float reference_x_mm;              /*!< 参考位置 X，单位 mm */
-  float reference_y_mm;              /*!< 参考位置 Y，单位 mm */
-  float reference_yaw_deg;           /*!< 参考航向，单位 deg */
-  float reference_vx_world_mm_s;     /*!< 参考世界速度 X，单位 mm/s */
-  float reference_vy_world_mm_s;     /*!< 参考世界速度 Y，单位 mm/s */
-  float reference_wz_deg_s;          /*!< 参考角速度，单位 deg/s */
-  float error_forward_mm;            /*!< 车体前向位置误差，单位 mm */
-  float error_lateral_mm;            /*!< 车体横向位置误差，单位 mm */
-  float error_yaw_deg;               /*!< 航向误差，单位 deg */
-  float measured_forward_mm_s;       /*!< 实测车体前向速度，单位 mm/s */
-  float measured_lateral_mm_s;       /*!< 实测车体横向速度，单位 mm/s */
-  float measured_wz_deg_s;           /*!< 实测角速度，单位 deg/s */
-  float command_forward_mm_s;        /*!< 车体前向速度命令，单位 mm/s */
-  float command_lateral_mm_s;        /*!< 车体横向速度命令，单位 mm/s */
-  float command_wz_deg_s;            /*!< 航向速度命令，单位 deg/s */
-  float profile_progress_mm;         /*!< 平移轮廓进度，单位 mm */
-  float profile_remaining_mm;        /*!< 平移轮廓剩余距离，单位 mm */
-  float profile_reference_speed_mm_s; /*!< 平移轮廓参考速度，单位 mm/s */
+  float position_error_mm;           /*!< 当前位置误差，单位 mm；位置轴未启用时为 0 */
+  float yaw_error_deg;               /*!< 当前航向误差，单位 deg；航向轴未启用时为 0 */
   uint32_t started_tick;             /*!< 任务开始时间，单位 ms */
   uint32_t updated_tick;             /*!< 状态更新时间，单位 ms */
 } AdvanceHolonomic_RuntimeStatus_t;

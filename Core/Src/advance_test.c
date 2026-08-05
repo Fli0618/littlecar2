@@ -725,9 +725,10 @@ void Test_Holonomic_GotoPoseBlocking(void)
   AdvanceHolonomic_RunState_t state;
   WorldGoalPose2D_t goal;
   WorldPose2D_t pose;
+  float delta_x_world;
+  float delta_y_world;
 
   printf("[TEST] holonomic GotoPoseBlocking test\r\n");
-  AdvanceHolonomic_Init();
   Chassis_Enable(true);
   HAL_Delay(1000);
 
@@ -739,9 +740,12 @@ void Test_Holonomic_GotoPoseBlocking(void)
     return;
   }
 
-  // 预期：车体沿当前航向前进 300 mm，到达后自动停车并释放控制权
-  goal.x_mm = pose.x_mm;
-  goal.y_mm = pose.y_mm + 300.0f;
+  // 预期：车体沿当前航向前进 300 mm，到达后自动停车并释放控制权；
+  // 车体前向位移经 BodyToWorldVelocity 转换为世界坐标增量
+  AdvanceWorld_BodyToWorldVelocity(0.0f, 300.0f, pose.yaw_deg,
+                                   &delta_x_world, &delta_y_world);
+  goal.x_mm = pose.x_mm + delta_x_world;
+  goal.y_mm = pose.y_mm + delta_y_world;
   goal.yaw_deg = pose.yaw_deg;
   goal.vmax_mm_s = 300.0f;
   goal.wmax_deg_s = 60.0f;

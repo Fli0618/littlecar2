@@ -9,12 +9,20 @@
 /* 通用一维运动轮廓：平移与航向复用同一更新函数。 */
 typedef struct
 {
-  float position;
-  float velocity;
   float goal_position;
-  float max_velocity;
+  float direction;
   float acceleration;
   float deceleration;
+  float peak_velocity;
+  float accel_time_s;
+  float cruise_time_s;
+  float decel_time_s;
+  float total_time_s;
+  float accel_distance;
+  float cruise_distance;
+  float elapsed_time_s;
+  float position;
+  float velocity;
   uint8_t finished;
 } AdvanceHolonomic_Profile1D_t;
 
@@ -39,7 +47,6 @@ typedef struct
 
 typedef struct
 {
-  AdvanceHolonomic_RunState_t state;
   AdvanceHolonomic_RunState_t pending_terminal_state;
   WorldGoalPose2D_t goal;
   uint8_t position_required;
@@ -73,15 +80,17 @@ typedef struct
   uint32_t started_tick;
   uint32_t last_update_tick;
   uint32_t arrive_hold_start_tick;
-  uint8_t stop_pending;
   uint8_t stopping;
 
   AdvanceHolonomic_Config_t config;
-  AdvanceHolonomic_RuntimeStatus_t status;
   AdvanceHolonomic_DebugSnapshot_t debug;
 } AdvanceHolonomic_Module_t;
 
-static AdvanceHolonomic_Module_t g_holonomic = {0};
+static AdvanceHolonomic_Module_t g_holonomic = {
+    .pending_terminal_state = ADVANCE_HOLONOMIC_STATE_IDLE};
+
+/* 运行状态由 TIM6 中断写入、阻塞任务读取，独立声明为 volatile。 */
+static volatile AdvanceHolonomic_RunState_t g_holonomic_state = ADVANCE_HOLONOMIC_STATE_IDLE;
 
 static const AdvanceHolonomic_Config_t g_holonomic_default = {
     .linear_accel_mm_s2 = ADVANCE_HOLONOMIC_DEFAULT_LINEAR_ACCEL_MM_S2,
@@ -97,87 +106,152 @@ static const AdvanceHolonomic_Config_t g_holonomic_default = {
     .lateral_scale = ADVANCE_HOLONOMIC_DEFAULT_LATERAL_SCALE,
     .yaw_scale = ADVANCE_HOLONOMIC_DEFAULT_YAW_SCALE};
 
-/* 离散梯形/三角形速度轮廓更新：根据剩余距离计算制动速度，按加减速度趋近。 */
+/* 解析梯形/三角形速度轮廓：启动时预计算分段参数，运行时按累计时间解析求值。 */
+static void AdvanceHolonomic_Profile1D_Init(AdvanceHolonomic_Profile1D_t *profile,
+                                            float goal_position,
+                                            float max_velocity,
+                                            float acceleration,
+                                            float deceleration)
+{
+  float distance;
+  float accel_distance_at_max;
+  float decel_distance_at_max;
+
+  if (profile == NULL)
+  {
+    return;
+  }
+
+  profile->goal_position = goal_position;
+  profile->direction = (goal_position >= 0.0f) ? 1.0f : -1.0f;
+  profile->acceleration = acceleration;
+  profile->deceleration = deceleration;
+  profile->elapsed_time_s = 0.0f;
+  profile->position = 0.0f;
+  profile->velocity = 0.0f;
+  profile->finished = 0U;
+
+  distance = fabsf(goal_position);
+  if (distance <= 0.0001f)
+  {
+    /* 零距离目标直接完成 */
+    profile->peak_velocity = 0.0f;
+    profile->accel_time_s = 0.0f;
+    profile->cruise_time_s = 0.0f;
+    profile->decel_time_s = 0.0f;
+    profile->total_time_s = 0.0f;
+    profile->accel_distance = 0.0f;
+    profile->cruise_distance = 0.0f;
+    profile->position = goal_position;
+    profile->velocity = 0.0f;
+    profile->finished = 1U;
+    return;
+  }
+
+  accel_distance_at_max = (max_velocity * max_velocity) / (2.0f * acceleration);
+  decel_distance_at_max = (max_velocity * max_velocity) / (2.0f * deceleration);
+
+  if ((accel_distance_at_max + decel_distance_at_max) <= distance)
+  {
+    /* 梯形轮廓：可达最大速度并存在巡航段 */
+    profile->peak_velocity = max_velocity;
+    profile->accel_distance =
+        (profile->peak_velocity * profile->peak_velocity) / (2.0f * acceleration);
+    profile->cruise_distance =
+        distance - profile->accel_distance -
+        ((profile->peak_velocity * profile->peak_velocity) / (2.0f * deceleration));
+    if (profile->cruise_distance < 0.0f)
+    {
+      /* 浮点误差防护，防止出现极小负巡航距离 */
+      profile->cruise_distance = 0.0f;
+    }
+    profile->accel_time_s = profile->peak_velocity / acceleration;
+    profile->cruise_time_s = profile->cruise_distance / profile->peak_velocity;
+    profile->decel_time_s = profile->peak_velocity / deceleration;
+  }
+  else
+  {
+    /* 三角形轮廓：无法达到最大速度 */
+    profile->peak_velocity =
+        sqrtf((2.0f * distance * acceleration * deceleration) /
+              (acceleration + deceleration));
+    profile->accel_distance =
+        (profile->peak_velocity * profile->peak_velocity) / (2.0f * acceleration);
+    profile->cruise_distance = 0.0f;
+    profile->accel_time_s = profile->peak_velocity / acceleration;
+    profile->cruise_time_s = 0.0f;
+    profile->decel_time_s = profile->peak_velocity / deceleration;
+  }
+
+  profile->total_time_s =
+      profile->accel_time_s + profile->cruise_time_s + profile->decel_time_s;
+}
+
+/* 解析求值：加速/巡航/减速分段由累计时间确定，最终参考速度精确归零。 */
 static void AdvanceHolonomic_Profile1D_Update(AdvanceHolonomic_Profile1D_t *profile, float dt_s)
 {
-  float remaining;
-  float brake_velocity;
-  float target_velocity;
-  float previous_velocity;
-  float direction_sign;
-  float max_step;
+  float distance;
+  float t;
+  float position_abs;
+  float velocity_abs;
 
   if ((profile == NULL) || (dt_s <= 0.0f) || (profile->finished != 0U))
   {
     return;
   }
 
-  remaining = fabsf(profile->goal_position - profile->position);
-  if (remaining <= 0.0001f)
+  profile->elapsed_time_s += dt_s;
+  distance = fabsf(profile->goal_position);
+
+  if (profile->elapsed_time_s >= profile->total_time_s)
   {
+    /* 轮廓结束：位置精确等于目标，速度精确归零 */
     profile->position = profile->goal_position;
     profile->velocity = 0.0f;
     profile->finished = 1U;
     return;
   }
 
-  brake_velocity = sqrtf(2.0f * profile->deceleration * remaining);
-  target_velocity = fminf(profile->max_velocity, brake_velocity);
-  direction_sign = (profile->goal_position >= profile->position) ? 1.0f : -1.0f;
-  target_velocity *= direction_sign;
-  previous_velocity = profile->velocity;
-
-  if (fabsf(previous_velocity) < fabsf(target_velocity))
+  if (profile->elapsed_time_s <= profile->accel_time_s)
   {
-    /* 加速段：按 acceleration * dt 接近目标速度 */
-    max_step = profile->acceleration * dt_s;
-    if (fabsf(target_velocity - previous_velocity) <= max_step)
-    {
-      profile->velocity = target_velocity;
-    }
-    else
-    {
-      profile->velocity = previous_velocity +
-                          (max_step * ((target_velocity > previous_velocity) ? 1.0f : -1.0f));
-    }
+    /* 加速段：position = 0.5*a*t^2，velocity = a*t */
+    t = profile->elapsed_time_s;
+    position_abs = 0.5f * profile->acceleration * t * t;
+    velocity_abs = profile->acceleration * t;
+  }
+  else if (profile->elapsed_time_s <= (profile->accel_time_s + profile->cruise_time_s))
+  {
+    /* 巡航段：位置线性推进，速度保持峰值 */
+    t = profile->elapsed_time_s - profile->accel_time_s;
+    position_abs = profile->accel_distance + (profile->peak_velocity * t);
+    velocity_abs = profile->peak_velocity;
   }
   else
   {
-    /* 减速段：按 deceleration * dt 接近目标速度 */
-    max_step = profile->deceleration * dt_s;
-    if (fabsf(previous_velocity - target_velocity) <= max_step)
-    {
-      profile->velocity = target_velocity;
-    }
-    else
-    {
-      profile->velocity = previous_velocity -
-                          (max_step * ((previous_velocity > target_velocity) ? 1.0f : -1.0f));
-    }
+    /* 减速段：position = accel + cruise + peak*t - 0.5*d*t^2 */
+    t = profile->elapsed_time_s - profile->accel_time_s - profile->cruise_time_s;
+    position_abs = profile->accel_distance + profile->cruise_distance +
+                   (profile->peak_velocity * t) -
+                   (0.5f * profile->deceleration * t * t);
+    velocity_abs = profile->peak_velocity - (profile->deceleration * t);
   }
 
-  /* 梯形积分，避免仅使用新速度造成额外误差 */
-  profile->position += 0.5f * (previous_velocity + profile->velocity) * dt_s;
+  /* 末端浮点误差保护：速度非负、位置不越界 */
+  if (velocity_abs < 0.0f)
+  {
+    velocity_abs = 0.0f;
+  }
+  if (position_abs < 0.0f)
+  {
+    position_abs = 0.0f;
+  }
+  else if (position_abs > distance)
+  {
+    position_abs = distance;
+  }
 
-  /* 防止 position 越过 goal_position */
-  if (direction_sign > 0.0f)
-  {
-    if (profile->position >= profile->goal_position)
-    {
-      profile->position = profile->goal_position;
-      profile->velocity = 0.0f;
-      profile->finished = 1U;
-    }
-  }
-  else
-  {
-    if (profile->position <= profile->goal_position)
-    {
-      profile->position = profile->goal_position;
-      profile->velocity = 0.0f;
-      profile->finished = 1U;
-    }
-  }
+  profile->position = profile->direction * position_abs;
+  profile->velocity = profile->direction * velocity_abs;
 }
 
 /* 目标校验：NULL、非有限浮点、边界、速度上限、超时与标志位。 */
@@ -612,7 +686,7 @@ static void AdvanceHolonomic_GenerateReference(AdvanceHolonomic_Reference_t *ref
   }
 }
 
-/* 尝试送达停车命令；失败时置 stop_pending 等待后续周期重试。 */
+/* 尝试送达停车命令；失败由 stopping 状态在后续周期重试。 */
 static uint8_t AdvanceHolonomic_TryStop(uint8_t hard_stop)
 {
   uint8_t ok;
@@ -625,7 +699,6 @@ static uint8_t AdvanceHolonomic_TryStop(uint8_t hard_stop)
   {
     ok = (Chassis_SmoothStop(g_holonomic.acc) != 0U) ? 1U : 0U;
   }
-  g_holonomic.stop_pending = (ok != 0U) ? 0U : 1U;
   return ok;
 }
 
@@ -635,23 +708,21 @@ static void AdvanceHolonomic_EnterTerminalState(AdvanceHolonomic_RunState_t term
 {
   uint8_t hard_stop = (terminal_state == ADVANCE_HOLONOMIC_STATE_ARRIVED) ? 1U : 0U;
 
+  (void)now_tick;
   g_holonomic.pending_terminal_state = terminal_state;
   if (AdvanceControl_GetMode() != ADVANCE_CONTROL_HOLONOMIC)
   {
     /* 控制权已不在本模块，不发送停车，直接进入终态 */
-    g_holonomic.stop_pending = 0U;
     g_holonomic.stopping = 0U;
-    g_holonomic.state = terminal_state;
-    g_holonomic.status.updated_tick = now_tick;
+    g_holonomic_state = terminal_state;
     return;
   }
 
   if (AdvanceHolonomic_TryStop(hard_stop) != 0U)
   {
     g_holonomic.stopping = 0U;
-    g_holonomic.state = terminal_state;
+    g_holonomic_state = terminal_state;
     (void)AdvanceControl_ReleaseMode();
-    g_holonomic.status.updated_tick = now_tick;
     return;
   }
 
@@ -675,7 +746,6 @@ static void AdvanceHolonomic_ResetRunState(void)
   g_holonomic.measured.forward_mm_s = 0.0f;
   g_holonomic.measured.wz_deg_s = 0.0f;
   g_holonomic.arrive_hold_start_tick = 0U;
-  g_holonomic.stop_pending = 0U;
   g_holonomic.stopping = 0U;
   g_holonomic.last_update_tick = HAL_GetTick();
 }
@@ -686,7 +756,7 @@ static void AdvanceHolonomic_UpdateDebugSnapshot(uint32_t now_tick)
   AdvanceHolonomic_DebugSnapshot_t *debug = &g_holonomic.debug;
 
   debug->tick = now_tick;
-  debug->state = g_holonomic.state;
+  debug->state = g_holonomic_state;
   debug->goal = g_holonomic.goal;
   debug->actual_pose = g_holonomic.latest_pose;
   debug->measured_forward_mm_s = g_holonomic.measured.forward_mm_s;
@@ -708,44 +778,13 @@ static void AdvanceHolonomic_UpdateIdleSnapshot(uint32_t now_tick)
   AdvanceHolonomic_UpdateDebugSnapshot(now_tick);
 }
 
-/* 对外状态摘要随调试快照同步刷新。 */
-static void AdvanceHolonomic_UpdateRuntimeStatus(uint32_t now_tick)
-{
-  AdvanceHolonomic_RuntimeStatus_t *status = &g_holonomic.status;
-  const AdvanceHolonomic_DebugSnapshot_t *debug = &g_holonomic.debug;
-
-  status->state = g_holonomic.state;
-  status->goal = g_holonomic.goal;
-  status->actual_pose = g_holonomic.latest_pose;
-  status->reference_x_mm = debug->reference_x_mm;
-  status->reference_y_mm = debug->reference_y_mm;
-  status->reference_yaw_deg = debug->reference_yaw_deg;
-  status->reference_vx_world_mm_s = debug->reference_vx_world_mm_s;
-  status->reference_vy_world_mm_s = debug->reference_vy_world_mm_s;
-  status->reference_wz_deg_s = debug->reference_wz_deg_s;
-  status->error_forward_mm = debug->error_forward_mm;
-  status->error_lateral_mm = debug->error_lateral_mm;
-  status->error_yaw_deg = debug->error_yaw_deg;
-  status->measured_forward_mm_s = debug->measured_forward_mm_s;
-  status->measured_lateral_mm_s = debug->measured_lateral_mm_s;
-  status->measured_wz_deg_s = debug->measured_wz_deg_s;
-  status->command_forward_mm_s = debug->command_forward_mm_s;
-  status->command_lateral_mm_s = debug->command_lateral_mm_s;
-  status->command_wz_deg_s = debug->command_wz_deg_s;
-  status->profile_progress_mm = debug->profile_progress_mm;
-  status->profile_remaining_mm = debug->profile_remaining_mm;
-  status->profile_reference_speed_mm_s = debug->profile_reference_speed_mm_s;
-  status->started_tick = g_holonomic.started_tick;
-  status->updated_tick = now_tick;
-}
-
 void AdvanceHolonomic_Init(void)
 {
-  g_holonomic = (AdvanceHolonomic_Module_t){0};
+  g_holonomic = (AdvanceHolonomic_Module_t){
+      .pending_terminal_state = ADVANCE_HOLONOMIC_STATE_IDLE};
   g_holonomic.config = g_holonomic_default;
-  g_holonomic.state = ADVANCE_HOLONOMIC_STATE_IDLE;
+  g_holonomic_state = ADVANCE_HOLONOMIC_STATE_IDLE;
   AdvanceHolonomic_UpdateDebugSnapshot(HAL_GetTick());
-  AdvanceHolonomic_UpdateRuntimeStatus(HAL_GetTick());
 }
 
 AdvanceHolonomic_Status_t AdvanceHolonomic_Start(const WorldGoalPose2D_t *goal,
@@ -791,6 +830,16 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_Start(const WorldGoalPose2D_t *goal,
   g_holonomic.start_y_mm = pose.y_mm;
   g_holonomic.start_yaw_deg = pose.yaw_deg;
 
+  /* 新任务启动：清空上一任务调试字段，避免残留修正量与命令 */
+  g_holonomic.debug = (AdvanceHolonomic_DebugSnapshot_t){0};
+  g_holonomic.debug.tick = now_tick;
+  g_holonomic.debug.state = ADVANCE_HOLONOMIC_STATE_RUNNING;
+  g_holonomic.debug.goal = *goal;
+  g_holonomic.debug.actual_pose = pose;
+  g_holonomic.debug.reference_x_mm = pose.x_mm;
+  g_holonomic.debug.reference_y_mm = pose.y_mm;
+  g_holonomic.debug.reference_yaw_deg = pose.yaw_deg;
+
   if (g_holonomic.position_required != 0U)
   {
     g_holonomic.goal_x_mm = goal->x_mm;
@@ -809,14 +858,11 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_Start(const WorldGoalPose2D_t *goal,
       g_holonomic.direction_y = 0.0f;
       g_holonomic.path_length_mm = 0.0f;
     }
-    g_holonomic.linear_profile = (AdvanceHolonomic_Profile1D_t){
-        .position = 0.0f,
-        .velocity = 0.0f,
-        .goal_position = g_holonomic.path_length_mm,
-        .max_velocity = goal->vmax_mm_s,
-        .acceleration = g_holonomic.config.linear_accel_mm_s2,
-        .deceleration = g_holonomic.config.linear_decel_mm_s2,
-        .finished = (g_holonomic.path_length_mm <= ADVANCE_HOLONOMIC_MIN_PATH_LENGTH_MM) ? 1U : 0U};
+    AdvanceHolonomic_Profile1D_Init(&g_holonomic.linear_profile,
+                                    g_holonomic.path_length_mm,
+                                    goal->vmax_mm_s,
+                                    g_holonomic.config.linear_accel_mm_s2,
+                                    g_holonomic.config.linear_decel_mm_s2);
   }
   else
   {
@@ -825,7 +871,11 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_Start(const WorldGoalPose2D_t *goal,
     g_holonomic.direction_x = 0.0f;
     g_holonomic.direction_y = 0.0f;
     g_holonomic.path_length_mm = 0.0f;
-    g_holonomic.linear_profile = (AdvanceHolonomic_Profile1D_t){.finished = 1U};
+    AdvanceHolonomic_Profile1D_Init(&g_holonomic.linear_profile,
+                                    0.0f,
+                                    0.0f,
+                                    g_holonomic.config.linear_accel_mm_s2,
+                                    g_holonomic.config.linear_decel_mm_s2);
   }
 
   if (g_holonomic.yaw_required != 0U)
@@ -833,33 +883,32 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_Start(const WorldGoalPose2D_t *goal,
     g_holonomic.goal_yaw_deg = AdvanceWorld_WrapAngleDeg(goal->yaw_deg);
     /* 内部航向目标 = 起始角 + 最短有符号增量，避免 ±180° 附近长路径旋转 */
     yaw_delta = AdvanceWorld_WrapAngleDeg(goal->yaw_deg - pose.yaw_deg);
-    g_holonomic.yaw_profile = (AdvanceHolonomic_Profile1D_t){
-        .position = 0.0f,
-        .velocity = 0.0f,
-        .goal_position = yaw_delta,
-        .max_velocity = goal->wmax_deg_s,
-        .acceleration = g_holonomic.config.yaw_accel_deg_s2,
-        .deceleration = g_holonomic.config.yaw_accel_deg_s2,
-        .finished = (fabsf(yaw_delta) <= 0.0001f) ? 1U : 0U};
+    AdvanceHolonomic_Profile1D_Init(&g_holonomic.yaw_profile,
+                                    yaw_delta,
+                                    goal->wmax_deg_s,
+                                    g_holonomic.config.yaw_accel_deg_s2,
+                                    g_holonomic.config.yaw_accel_deg_s2);
   }
   else
   {
     g_holonomic.goal_yaw_deg = pose.yaw_deg;
-    g_holonomic.yaw_profile = (AdvanceHolonomic_Profile1D_t){.finished = 1U};
+    AdvanceHolonomic_Profile1D_Init(&g_holonomic.yaw_profile,
+                                    0.0f,
+                                    0.0f,
+                                    g_holonomic.config.yaw_accel_deg_s2,
+                                    g_holonomic.config.yaw_accel_deg_s2);
   }
 
   g_holonomic.started_tick = now_tick;
   g_holonomic.last_update_tick = now_tick;
   g_holonomic.arrive_hold_start_tick = 0U;
-  g_holonomic.stop_pending = 0U;
   g_holonomic.stopping = 0U;
   g_holonomic.velocity_history_valid = 0U;
   g_holonomic.latest_pose = pose;
-  g_holonomic.state = ADVANCE_HOLONOMIC_STATE_RUNNING;
+  g_holonomic_state = ADVANCE_HOLONOMIC_STATE_RUNNING;
 
   AdvanceHolonomic_UpdateMeasuredVelocity(&pose);
   AdvanceHolonomic_UpdateDebugSnapshot(now_tick);
-  AdvanceHolonomic_UpdateRuntimeStatus(now_tick);
   return ADVANCE_HOLONOMIC_STATUS_OK;
 }
 
@@ -881,8 +930,7 @@ void AdvanceHolonomic_Update(void)
     {
       /* 控制权意外丢失：不再发送停车命令 */
       g_holonomic.stopping = 0U;
-      g_holonomic.stop_pending = 0U;
-      g_holonomic.state = ADVANCE_HOLONOMIC_STATE_CANCELED;
+      g_holonomic_state = ADVANCE_HOLONOMIC_STATE_CANCELED;
       AdvanceHolonomic_ResetRunState();
     }
     else if (AdvanceHolonomic_TryStop(
@@ -891,16 +939,15 @@ void AdvanceHolonomic_Update(void)
                      : 0U) != 0U)
     {
       g_holonomic.stopping = 0U;
-      g_holonomic.state = g_holonomic.pending_terminal_state;
+      g_holonomic_state = g_holonomic.pending_terminal_state;
       (void)AdvanceControl_ReleaseMode();
     }
     AdvanceHolonomic_UpdateIdleSnapshot(now_tick);
-    AdvanceHolonomic_UpdateRuntimeStatus(now_tick);
     return;
   }
 
-  if ((g_holonomic.state != ADVANCE_HOLONOMIC_STATE_RUNNING) &&
-      (g_holonomic.state != ADVANCE_HOLONOMIC_STATE_SETTLING))
+  if ((g_holonomic_state != ADVANCE_HOLONOMIC_STATE_RUNNING) &&
+      (g_holonomic_state != ADVANCE_HOLONOMIC_STATE_SETTLING))
   {
     AdvanceHolonomic_UpdateIdleSnapshot(now_tick);
     return;
@@ -910,9 +957,8 @@ void AdvanceHolonomic_Update(void)
   if (AdvanceControl_GetMode() != ADVANCE_CONTROL_HOLONOMIC)
   {
     AdvanceHolonomic_ResetRunState();
-    g_holonomic.state = ADVANCE_HOLONOMIC_STATE_CANCELED;
+    g_holonomic_state = ADVANCE_HOLONOMIC_STATE_CANCELED;
     AdvanceHolonomic_UpdateIdleSnapshot(now_tick);
-    AdvanceHolonomic_UpdateRuntimeStatus(now_tick);
     return;
   }
 
@@ -922,7 +968,6 @@ void AdvanceHolonomic_Update(void)
   {
     AdvanceHolonomic_EnterTerminalState(ADVANCE_HOLONOMIC_STATE_TIMEOUT, now_tick);
     AdvanceHolonomic_UpdateIdleSnapshot(now_tick);
-    AdvanceHolonomic_UpdateRuntimeStatus(now_tick);
     return;
   }
 
@@ -931,20 +976,23 @@ void AdvanceHolonomic_Update(void)
   {
     AdvanceHolonomic_EnterTerminalState(ADVANCE_HOLONOMIC_STATE_NO_ORIGIN, now_tick);
     AdvanceHolonomic_UpdateIdleSnapshot(now_tick);
-    AdvanceHolonomic_UpdateRuntimeStatus(now_tick);
     return;
   }
   if (pose_status != ADVANCE_HOLONOMIC_STATUS_OK)
   {
     AdvanceHolonomic_EnterTerminalState(ADVANCE_HOLONOMIC_STATE_NO_POSE, now_tick);
     AdvanceHolonomic_UpdateIdleSnapshot(now_tick);
-    AdvanceHolonomic_UpdateRuntimeStatus(now_tick);
     return;
   }
   g_holonomic.latest_pose = pose;
 
   dt_ms = now_tick - g_holonomic.last_update_tick;
-  if ((dt_ms == 0U) || (dt_ms > ADVANCE_HOLONOMIC_MAX_DT_MS))
+  if (dt_ms == 0U)
+  {
+    /* 零时间间隔：不推进轮廓、不更新 last_update_tick、不下发底盘命令 */
+    return;
+  }
+  if (dt_ms > ADVANCE_HOLONOMIC_MAX_DT_MS)
   {
     dt_ms = ADVANCE_HOLONOMIC_MAX_DT_MS;
   }
@@ -971,9 +1019,9 @@ void AdvanceHolonomic_Update(void)
 
   if (profiles_done != 0U)
   {
-    if (g_holonomic.state == ADVANCE_HOLONOMIC_STATE_RUNNING)
+    if (g_holonomic_state == ADVANCE_HOLONOMIC_STATE_RUNNING)
     {
-      g_holonomic.state = ADVANCE_HOLONOMIC_STATE_SETTLING;
+      g_holonomic_state = ADVANCE_HOLONOMIC_STATE_SETTLING;
       g_holonomic.arrive_hold_start_tick = 0U;
     }
     /* SETTLING 参考固定为最终目标，速度归零，继续执行相同控制律 */
@@ -1006,29 +1054,26 @@ void AdvanceHolonomic_Update(void)
   {
     /* 下发失败：本周期不更新命令快照，下一周期重试 */
     AdvanceHolonomic_UpdateDebugSnapshot(now_tick);
-    AdvanceHolonomic_UpdateRuntimeStatus(now_tick);
     return;
   }
 
-  if (g_holonomic.state == ADVANCE_HOLONOMIC_STATE_SETTLING)
+  if (g_holonomic_state == ADVANCE_HOLONOMIC_STATE_SETTLING)
   {
     if (AdvanceHolonomic_CheckArrival(&pose, now_tick) != 0U)
     {
       AdvanceHolonomic_EnterTerminalState(ADVANCE_HOLONOMIC_STATE_ARRIVED, now_tick);
       AdvanceHolonomic_UpdateIdleSnapshot(now_tick);
-      AdvanceHolonomic_UpdateRuntimeStatus(now_tick);
       return;
     }
   }
 
   AdvanceHolonomic_UpdateDebugSnapshot(now_tick);
-  AdvanceHolonomic_UpdateRuntimeStatus(now_tick);
 }
 
 void AdvanceHolonomic_Cancel(void)
 {
-  if ((g_holonomic.state != ADVANCE_HOLONOMIC_STATE_RUNNING) &&
-      (g_holonomic.state != ADVANCE_HOLONOMIC_STATE_SETTLING))
+  if ((g_holonomic_state != ADVANCE_HOLONOMIC_STATE_RUNNING) &&
+      (g_holonomic_state != ADVANCE_HOLONOMIC_STATE_SETTLING))
   {
     return;
   }
@@ -1037,8 +1082,8 @@ void AdvanceHolonomic_Cancel(void)
 
 uint8_t AdvanceHolonomic_IsActive(void)
 {
-  return ((g_holonomic.state == ADVANCE_HOLONOMIC_STATE_RUNNING) ||
-          (g_holonomic.state == ADVANCE_HOLONOMIC_STATE_SETTLING))
+  return ((g_holonomic_state == ADVANCE_HOLONOMIC_STATE_RUNNING) ||
+          (g_holonomic_state == ADVANCE_HOLONOMIC_STATE_SETTLING))
              ? 1U
              : 0U;
 }
@@ -1051,12 +1096,12 @@ AdvanceHolonomic_RunState_t AdvanceHolonomic_GotoGoalBlocking(
   {
     return ADVANCE_HOLONOMIC_STATE_CANCELED;
   }
-  while ((g_holonomic.state == ADVANCE_HOLONOMIC_STATE_RUNNING) ||
-         (g_holonomic.state == ADVANCE_HOLONOMIC_STATE_SETTLING))
+  while ((g_holonomic_state == ADVANCE_HOLONOMIC_STATE_RUNNING) ||
+         (g_holonomic_state == ADVANCE_HOLONOMIC_STATE_SETTLING))
   {
     __WFI();
   }
-  return g_holonomic.state;
+  return g_holonomic_state;
 }
 
 AdvanceHolonomic_RunState_t AdvanceHolonomic_GotoPoseBlocking(float x_mm,
@@ -1079,6 +1124,8 @@ AdvanceHolonomic_RunState_t AdvanceHolonomic_GotoPoseBlocking(float x_mm,
 AdvanceHolonomic_Status_t AdvanceHolonomic_GetStatus(AdvanceHolonomic_RuntimeStatus_t *status)
 {
   uint32_t primask;
+  float error_x_mm;
+  float error_y_mm;
 
   if (status == NULL)
   {
@@ -1086,7 +1133,31 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_GetStatus(AdvanceHolonomic_RuntimeSta
   }
   primask = __get_PRIMASK();
   __disable_irq();
-  *status = g_holonomic.status;
+  status->state = g_holonomic_state;
+  status->goal = g_holonomic.goal;
+  status->actual_pose = g_holonomic.latest_pose;
+  status->started_tick = g_holonomic.started_tick;
+  status->updated_tick = g_holonomic.debug.tick;
+  if (g_holonomic.position_required != 0U)
+  {
+    error_x_mm = g_holonomic.goal_x_mm - g_holonomic.latest_pose.x_mm;
+    error_y_mm = g_holonomic.goal_y_mm - g_holonomic.latest_pose.y_mm;
+    status->position_error_mm = sqrtf((error_x_mm * error_x_mm) +
+                                      (error_y_mm * error_y_mm));
+  }
+  else
+  {
+    status->position_error_mm = 0.0f;
+  }
+  if (g_holonomic.yaw_required != 0U)
+  {
+    status->yaw_error_deg = AdvanceWorld_WrapAngleDeg(
+        g_holonomic.goal_yaw_deg - g_holonomic.latest_pose.yaw_deg);
+  }
+  else
+  {
+    status->yaw_error_deg = 0.0f;
+  }
   if (primask == 0U)
   {
     __enable_irq();
@@ -1139,8 +1210,8 @@ AdvanceHolonomic_Status_t AdvanceHolonomic_SetConfig(const AdvanceHolonomic_Conf
   {
     return ADVANCE_HOLONOMIC_STATUS_INVALID_PARAM;
   }
-  if ((g_holonomic.state == ADVANCE_HOLONOMIC_STATE_RUNNING) ||
-      (g_holonomic.state == ADVANCE_HOLONOMIC_STATE_SETTLING))
+  if ((g_holonomic_state == ADVANCE_HOLONOMIC_STATE_RUNNING) ||
+      (g_holonomic_state == ADVANCE_HOLONOMIC_STATE_SETTLING))
   {
     return ADVANCE_HOLONOMIC_STATUS_BUSY;
   }
