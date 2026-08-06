@@ -464,6 +464,9 @@ static void AdvanceVisual_ControlStep(uint32_t now_tick)
   g_visual_debug_snapshot.command_vy = (int32_t)vy_forward;
   g_visual_debug_snapshot.chassis_command_ok = chassis_command_ok;
   g_visual_debug_snapshot.stable_count = g_stable_count;
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE == 0U)
+  (void)g_visual_debug_snapshot;
+#endif
 }
 
 static void AdvanceVisual_LogSnapshot(void)
@@ -528,16 +531,19 @@ static AdvanceVisual_State_t
 AdvanceVisual_RunBlockingInternal(AdvanceVisual_Mode_t mode, uint8_t target_type)
 {
   Detect_Status_t status;
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
   AdvanceControl_Mode_t control_before;
+#endif
   AdvanceVisual_State_t final_state;
   uint32_t now_tick;
   uint32_t next_control_tick;
   uint32_t next_log_tick;
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
   uint32_t elapsed_tick;
-
-  control_before = AdvanceControl_GetMode();
+#endif
 
 #if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
+  control_before = AdvanceControl_GetMode();
   printf("[VIS] start mode=%u target=%u control_before=%u\r\n",
          (unsigned int)mode,
          (unsigned int)target_type,
@@ -619,8 +625,8 @@ AdvanceVisual_RunBlockingInternal(AdvanceVisual_Mode_t mode, uint8_t target_type
   }
 
   final_state = g_visual_state;
-  elapsed_tick = HAL_GetTick() - g_started_tick;
 #if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
+  elapsed_tick = HAL_GetTick() - g_started_tick;
   printf("[VIS] exit state=%u elapsed=%lu frame_age=%lu target_age=%lu "
          "stable=%u control=%u detect_active=%u\r\n",
          (unsigned int)final_state,
