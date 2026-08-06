@@ -32,6 +32,7 @@
 #include "advance_motion.h"
 #include "advance_holonomic_position.h"
 #include "advance_world.h"
+#include "advance_material_task.h"
 #include "advance_arm.h"
 #include "car_pose.h"
 #include "comm_jetson.h"
@@ -439,6 +440,13 @@ int main(void)
   // 主流程
   // Test_jetson(start_area);
   // App_RunTask(start_area);
+
+  AdvanceVisual_State_t state;
+  Chassis_Enable(true);
+  HAL_Delay(100U);
+  state = AdvanceVisual_AlignColorBlocking(RED);
+  printf("[VISUAL] state=%u\r\n", (unsigned int)state);
+
   while (1)
   {
     __WFI();

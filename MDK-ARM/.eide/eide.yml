@@ -63,6 +63,8 @@ virtualFolder:
                 - path: ../Core/Inc/advance_motion_config.h
                 - path: ../Core/Inc/advance_holonomic_position.h
                 - path: ../Core/Inc/advance_holonomic_position_config.h
+                - path: ../Core/Src/advance_material_task.c
+                - path: ../Core/Inc/advance_material_task.h
               folders: []
     - name: Drivers
       files: []
