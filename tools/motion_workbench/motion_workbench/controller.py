@@ -250,6 +250,7 @@ class MotionWorkbenchController(QObject):
         return True
 
     def stop(self) -> None:
+        self._active_controller = "classic"
         if self._plan_state == PlanExecutionState.RUNNING:
             self._plan_waiting = False
             self._finish_plan(PlanExecutionState.CANCELED, "STOP")
@@ -257,6 +258,7 @@ class MotionWorkbenchController(QObject):
         self._finish(SinglePointState.CANCELED, "STOP")
 
     def new_experiment(self) -> None:
+        self._active_controller = "classic"
         self.execution = None
         self._trace.clear()
         self._new_trace_points.clear()
@@ -271,19 +273,19 @@ class MotionWorkbenchController(QObject):
         self.latest_telemetry = item
         self.buffer.append(item)
         self._pid_revision = item.pid_revision
-        if self._active_controller != "classic":
-            return
         pose = TargetPose(*item.actual)
         valid = bool(item.flags & 0x01) and bool(item.flags & 0x02)
         self.actual = pose if valid else None
         self._pose_valid = valid
-        self._last_error = tuple(item.error)
         if valid and self._should_append_trace(pose):
             self._trace.append(pose)
             self._new_trace_points.append(pose)
             if len(self._trace) > 2000:
                 del self._trace[:len(self._trace) - 2000]
         self._update_coordinate_sync(item, valid)
+        if self._active_controller != "classic":
+            return
+        self._last_error = tuple(item.error)
         if self._plan_state == PlanExecutionState.RUNNING and self._plan_waiting and item.state not in (0, 1):
             self._handle_plan_terminal(item.state)
         if self.execution is not None and self._last_state == SinglePointState.RUNNING and item.state not in (0, 1):
@@ -352,6 +354,7 @@ class MotionWorkbenchController(QObject):
         if self._upload.state != PathUploadState.COMMITTED or self._upload.path_id != path_id:
             self.status_changed.emit("路径尚未提交，不能启动")
             return
+        self._active_controller = "classic"
         self._set_upload(PathUploadState.STARTING, path_id, "正在启动路径")
         self.session.start_path(PathStartCommand(path_id))
 
@@ -387,6 +390,7 @@ class MotionWorkbenchController(QObject):
             self._finish(SinglePointState.CANCELED, "运动停止")
 
     def _on_failure(self, message: str) -> None:
+        self._active_controller = "classic"
         self.path_upload_failed(message)
         if self._plan_state == PlanExecutionState.RUNNING:
             self._plan_waiting = False
@@ -442,6 +446,7 @@ class MotionWorkbenchController(QObject):
         except ValueError as error:
             self.status_changed.emit(str(error))
             return False
+        self._active_controller = "classic"
         self._plan_state = PlanExecutionState.RUNNING
         self._plan_continuous = continuous
         self._plan_reason = ""
@@ -469,6 +474,7 @@ class MotionWorkbenchController(QObject):
     def _send_current_plan_step(self) -> None:
         if self._plan is None:
             return
+        self._active_controller = "classic"
         try:
             step = materialize_steps(self._plan)[self._plan_cursor]
             self._plan_waiting = True
@@ -512,6 +518,7 @@ class MotionWorkbenchController(QObject):
         return step.points
 
     def _send_plan_path(self, points: list[PathPosePoint]) -> None:
+        self._active_controller = "classic"
         path_id = self.allocate_path_id()
         begin, chunks, commit = build_path_upload(path_id, points)
         self._set_upload(PathUploadState.UPLOADING, path_id, "正在上传流程路径")

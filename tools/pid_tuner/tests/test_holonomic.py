@@ -12,10 +12,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from pid_tuner.gui.session import SessionController
+from pid_tuner.gui.session import ActiveMotionKind, SessionController
 from pid_tuner.models import (AckResponse, BoardError, GotoStrategySnapshot, HolonomicConfig,
-                               HolonomicConfigState, MotionGoal, PathConfigSnapshot,
-                               PathConfigState, PidConfig, PidConfigState)
+                               HolonomicConfigState, HolonomicTelemetry, MotionGoal, PathConfigSnapshot,
+                               PathConfigState, PathStartCommand, PidConfig, PidConfigState, Telemetry)
 from pid_tuner.protocol import (CMD_ACK, CMD_HOLONOMIC_CONFIG, CMD_HOLONOMIC_GOTO_POSE,
                                 CMD_HOLONOMIC_TELEMETRY, CMD_GET_HOLONOMIC_CONFIG,
                                 CMD_ERROR, ERROR_BAD_COMMAND,
@@ -238,6 +238,94 @@ class HolonomicSessionTests(unittest.TestCase):
             state = controller._wait_for_revision(
                 response, FakeClient().get_holonomic_config, "全向参数")
             self.assertEqual(state.revision, 9)
+        finally:
+            controller._executor.shutdown(wait=False)
+
+    @staticmethod
+    def _classic_telemetry(state: int = 2, remote_link_status: int = 0,
+                           actual: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                           error: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> Telemetry:
+        return Telemetry(1, 0, 0, state, 0x03, (0.0, 0.0, 0.0), actual, error,
+                         (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+                         remote_link_status=remote_link_status)
+
+    @staticmethod
+    def _holonomic_telemetry(state: int = 3, remote_link_status: int = 0) -> HolonomicTelemetry:
+        return HolonomicTelemetry(
+            1, 0, state, 0x04, remote_link_status,
+            (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+            0.0, 0.0, 0.0)
+
+    def test_motion_ack_sets_controller_kind(self) -> None:
+        controller = SessionController()
+        submitted = []
+        controller._submit = lambda operation, callback=None, failure_callback=None: submitted.append(
+            (callback, failure_callback))  # type: ignore[method-assign]
+        controller.connected = True
+        try:
+            controller.start_motion(MotionGoal(1, 2, 3, 4, 5, 1000))
+            submitted.pop()[0](None)
+            self.assertEqual(controller._active_motion_kind, ActiveMotionKind.CLASSIC)
+            controller.start_holonomic_motion(MotionGoal(1, 2, 3, 4, 5, 1000))
+            submitted.pop()[0](None)
+            self.assertEqual(controller._active_motion_kind, ActiveMotionKind.HOLONOMIC)
+            controller.start_path(PathStartCommand(7))
+            submitted.pop()[0](None)
+            self.assertEqual(controller._active_motion_kind, ActiveMotionKind.PATH)
+        finally:
+            controller._executor.shutdown(wait=False)
+
+    def test_unrelated_terminal_telemetry_does_not_clear_motion(self) -> None:
+        controller = SessionController()
+        classic_received = []
+        holonomic_received = []
+        controller.telemetry.connect(classic_received.append)
+        controller.holonomic_telemetry.connect(holonomic_received.append)
+        try:
+            controller._set_active_motion(ActiveMotionKind.HOLONOMIC)
+            controller._handle_telemetry(self._classic_telemetry())
+            self.assertTrue(controller.motion_active)
+            self.assertEqual(controller._active_motion_kind, ActiveMotionKind.HOLONOMIC)
+            self.assertEqual(len(classic_received), 1)
+
+            controller._set_active_motion(ActiveMotionKind.PATH)
+            controller._handle_holonomic_telemetry(self._holonomic_telemetry())
+            self.assertTrue(controller.motion_active)
+            self.assertEqual(controller._active_motion_kind, ActiveMotionKind.PATH)
+            self.assertEqual(len(holonomic_received), 1)
+        finally:
+            controller._executor.shutdown(wait=False)
+
+    def test_matching_terminal_and_link_timeout_clear_motion(self) -> None:
+        controller = SessionController()
+        try:
+            controller._set_active_motion(ActiveMotionKind.HOLONOMIC)
+            controller._handle_holonomic_telemetry(self._holonomic_telemetry())
+            self.assertFalse(controller.motion_active)
+
+            controller._set_active_motion(ActiveMotionKind.CLASSIC)
+            controller._handle_holonomic_telemetry(self._holonomic_telemetry(remote_link_status=0x4000))
+            self.assertFalse(controller.motion_active)
+
+            controller._set_active_motion(ActiveMotionKind.PATH)
+            controller._handle_telemetry(self._classic_telemetry())
+            self.assertFalse(controller.motion_active)
+
+            controller._set_active_motion(ActiveMotionKind.HOLONOMIC)
+            controller._handle_telemetry(self._classic_telemetry(state=1, remote_link_status=0x4000))
+            self.assertFalse(controller.motion_active)
+        finally:
+            controller._executor.shutdown(wait=False)
+
+    def test_stop_disconnect_and_abort_reset_motion_kind(self) -> None:
+        controller = SessionController()
+        try:
+            for action in (controller.stop, controller.abort_path, controller.disconnect):
+                controller._set_active_motion(ActiveMotionKind.HOLONOMIC)
+                action()
+                self.assertEqual(controller._active_motion_kind, ActiveMotionKind.NONE)
+                self.assertFalse(controller.motion_active)
         finally:
             controller._executor.shutdown(wait=False)
 

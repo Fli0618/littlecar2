@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from enum import Enum
 import time
 from typing import Callable, TypeVar
 
@@ -16,6 +17,13 @@ from ..serial_client import SerialClient
 
 
 ConfigState = TypeVar("ConfigState", PidConfigState, PathConfigState, HolonomicConfigState)
+
+
+class ActiveMotionKind(str, Enum):
+    NONE = "none"
+    CLASSIC = "classic"
+    PATH = "path"
+    HOLONOMIC = "holonomic"
 
 
 class SessionController(QObject):
@@ -47,6 +55,7 @@ class SessionController(QObject):
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pid-tuner-ui")
         self.connected = False
         self.motion_active = False
+        self._active_motion_kind = ActiveMotionKind.NONE
         self._heartbeat_in_flight = False
         self._motion_generation = 0
 
@@ -101,6 +110,7 @@ class SessionController(QObject):
         except Exception as error:
             self._client = None
             self.connected = False
+            self._set_active_motion(ActiveMotionKind.NONE)
             self.connection_changed.emit(False)
             self.connection_failed.emit(str(error))
 
@@ -112,8 +122,7 @@ class SessionController(QObject):
         self._motion_generation += 1
         if client is not None:
             self._executor.submit(self._stop_and_close, client, self.motion_active)
-        self.motion_active = False
-        self.motion_changed.emit(False)
+        self._set_active_motion(ActiveMotionKind.NONE)
         self.status.emit("已断开")
 
     @staticmethod
@@ -124,15 +133,20 @@ class SessionController(QObject):
         finally:
             client.close()
 
-    def _set_motion_active(self, active: bool) -> None:
-        if self.motion_active == active:
-            return
+    def _set_active_motion(self, kind: ActiveMotionKind) -> None:
+        active = kind != ActiveMotionKind.NONE
+        changed = self.motion_active != active
+        self._active_motion_kind = kind
         self.motion_active = active
-        self.motion_changed.emit(active)
+        if changed:
+            self.motion_changed.emit(active)
 
     def _submit(self, operation: Callable[[SerialClient], object],
-                callback: Callable[[object], None] | None = None) -> None:
+                callback: Callable[[object], None] | None = None,
+                failure_callback: Callable[[Exception], None] | None = None) -> None:
         if self._client is None:
+            if failure_callback:
+                failure_callback(RuntimeError("未连接串口"))
             self.operation_failed.emit("未连接串口")
             return
         future = self._executor.submit(operation, self._client)
@@ -143,6 +157,8 @@ class SessionController(QObject):
                 if callback:
                     callback(value)
             except Exception as error:
+                if failure_callback:
+                    failure_callback(error)
                 self.operation_failed.emit(str(error))
 
         future.add_done_callback(done)
@@ -232,35 +248,45 @@ class SessionController(QObject):
     def start_motion(self, goal: MotionGoal) -> None:
         self._motion_generation += 1
         generation = self._motion_generation
-        self._set_motion_active(False)
+        self._set_active_motion(ActiveMotionKind.NONE)
 
         def done(_: object) -> None:
             if generation != self._motion_generation or not self.connected:
                 return
-            self.motion_active = True
-            self.motion_changed.emit(True)
+            self._set_active_motion(ActiveMotionKind.CLASSIC)
             self.status.emit("远程运动中")
 
-        self._submit(lambda client: client.goto(goal), done)
+        def failed(_: Exception) -> None:
+            if generation == self._motion_generation:
+                self._set_active_motion(ActiveMotionKind.NONE)
+
+        self._submit(lambda client: client.goto(goal), done, failed)
 
     def start_holonomic_motion(self, goal: MotionGoal) -> None:
         self._motion_generation += 1
         generation = self._motion_generation
-        self._set_motion_active(False)
+        self._set_active_motion(ActiveMotionKind.NONE)
 
         def done(_: object) -> None:
             if generation != self._motion_generation or not self.connected:
                 return
-            self.motion_active = True
-            self.motion_changed.emit(True)
+            self._set_active_motion(ActiveMotionKind.HOLONOMIC)
             self.status.emit("全向远程运动中")
 
-        self._submit(lambda client: client.holonomic_goto(goal), done)
+        def failed(_: Exception) -> None:
+            if generation == self._motion_generation:
+                self._set_active_motion(ActiveMotionKind.NONE)
+
+        self._submit(lambda client: client.holonomic_goto(goal), done, failed)
 
     def _handle_telemetry(self, item: Telemetry) -> None:
         self.telemetry.emit(item)
-        if self.motion_active and (item.state not in (0, 1) or item.heartbeat_timed_out):
-            self._set_motion_active(False)
+        if item.heartbeat_timed_out:
+            self._set_active_motion(ActiveMotionKind.NONE)
+        elif (item.state not in (0, 1) and self.motion_active and
+              (self._active_motion_kind in (ActiveMotionKind.CLASSIC, ActiveMotionKind.PATH) or
+               self._active_motion_kind == ActiveMotionKind.NONE)):
+            self._set_active_motion(ActiveMotionKind.NONE)
 
     def heartbeat(self) -> None:
         if not self.motion_active or self._heartbeat_in_flight or self._client is None:
@@ -276,18 +302,17 @@ class SessionController(QObject):
                 result.result()  # type: ignore[attr-defined]
             except Exception as error:
                 if generation == self._motion_generation:
-                    self._set_motion_active(False)
+                    self._set_active_motion(ActiveMotionKind.NONE)
                     self.operation_failed.emit(str(error))
 
         future.add_done_callback(done)
 
     def stop(self) -> None:
         self._motion_generation += 1
-        self._set_motion_active(False)
+        self._set_active_motion(ActiveMotionKind.NONE)
 
         def done(_: object) -> None:
-            self.motion_active = False
-            self.motion_changed.emit(False)
+            self._set_active_motion(ActiveMotionKind.NONE)
             self.status.emit("已发送 STOP")
 
         self._submit(lambda client: client.stop(), done)
@@ -303,13 +328,28 @@ class SessionController(QObject):
         self._submit(upload, lambda _: self.path_committed.emit(commit.path_id))
 
     def start_path(self, command: PathStartCommand) -> None:
+        self._motion_generation += 1
+        generation = self._motion_generation
+        self._set_active_motion(ActiveMotionKind.NONE)
+
         def started(_: object) -> None:
-            self._set_motion_active(True)
+            if generation != self._motion_generation or not self.connected:
+                return
+            self._set_active_motion(ActiveMotionKind.PATH)
             self.path_started.emit(command.path_id)
-        self._submit(lambda client: client.path_start(command), started)
+
+        def failed(_: Exception) -> None:
+            if generation == self._motion_generation:
+                self._set_active_motion(ActiveMotionKind.NONE)
+
+        self._submit(lambda client: client.path_start(command), started, failed)
 
     def upload_and_start_path(self, begin: PathBeginCommand, chunks: tuple[PathChunkCommand, ...],
                               commit: PathCommitCommand, start: PathStartCommand) -> None:
+        self._motion_generation += 1
+        generation = self._motion_generation
+        self._set_active_motion(ActiveMotionKind.NONE)
+
         def action(client: SerialClient) -> None:
             client.path_begin(begin)
             for chunk in chunks:
@@ -317,14 +357,21 @@ class SessionController(QObject):
             client.path_commit(commit)
             client.path_start(start)
         def done(_: object) -> None:
+            if generation != self._motion_generation or not self.connected:
+                return
             self.path_committed.emit(commit.path_id)
             self.path_started.emit(start.path_id)
-            self._set_motion_active(True)
-        self._submit(action, done)
+            self._set_active_motion(ActiveMotionKind.PATH)
+
+        def failed(_: Exception) -> None:
+            if generation == self._motion_generation:
+                self._set_active_motion(ActiveMotionKind.NONE)
+
+        self._submit(action, done, failed)
 
     def abort_path(self) -> None:
         self._motion_generation += 1
-        self._set_motion_active(False)
+        self._set_active_motion(ActiveMotionKind.NONE)
         self._submit(lambda client: client.path_abort())
 
     def _handle_path_telemetry(self, telemetry: PathTelemetry) -> None:
@@ -332,9 +379,11 @@ class SessionController(QObject):
 
     def _handle_holonomic_telemetry(self, telemetry: HolonomicTelemetry) -> None:
         self.holonomic_telemetry.emit(telemetry)
-        if self.motion_active and (telemetry.state not in (0, 1, 2) or
-                                   telemetry.remote_link_status & 0x4000):
-            self._set_motion_active(False)
+        if telemetry.remote_link_status & 0x4000:
+            self._set_active_motion(ActiveMotionKind.NONE)
+        elif (telemetry.state not in (0, 1, 2) and
+              self._active_motion_kind == ActiveMotionKind.HOLONOMIC):
+            self._set_active_motion(ActiveMotionKind.NONE)
 
     def shutdown(self) -> None:
         self.disconnect()
