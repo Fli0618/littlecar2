@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
@@ -65,6 +67,63 @@ def test_only_color_and_circle_modes_require_fill_light():
     assert not main._requires_fill_light(CMD_START_QR)
     assert not main._requires_fill_light(CMD_START_DISK_CENTER)
     assert not main._requires_fill_light(CMD_STOP)
+
+
+def test_color_detection_backend_switches_without_fallback(monkeypatch):
+    yolo_detector = object()
+    hsv_detector = object()
+    hybrid_detector = object()
+    monkeypatch.setattr(main, "advance_detect_color", yolo_detector)
+    monkeypatch.setattr(main, "advance_detect_color_hsv", hsv_detector)
+    monkeypatch.setattr(main, "advance_detect_color_hybrid", hybrid_detector)
+
+    monkeypatch.setattr(main, "COLOR_DETECTION_BACKEND", "yolo")
+    assert main._color_detection_backend() is yolo_detector
+    monkeypatch.setattr(main, "COLOR_DETECTION_BACKEND", "hsv")
+    assert main._color_detection_backend() is hsv_detector
+    monkeypatch.setattr(main, "COLOR_DETECTION_BACKEND", "yolo_hsv")
+    assert main._color_detection_backend() is hybrid_detector
+    monkeypatch.setattr(main, "COLOR_DETECTION_BACKEND", "unknown")
+    with pytest.raises(ValueError, match="unsupported color detection backend"):
+        main._color_detection_backend()
+
+
+def test_disk_center_run_keeps_pure_yolo_backend_available(monkeypatch):
+    port, state = Port(), main.make_service_state()
+    state.update(mode=CMD_START_DISK_CENTER, session=4, period_ms=1, last_run=-1.0)
+    seen = []
+
+    def fake_disk_center(_frame, *, color_detector):
+        seen.append(color_detector)
+        return {"center": [10, 20], "support_count": 1, "measured_count": 1}
+
+    monkeypatch.setattr(main, "COLOR_DETECTION_BACKEND", "yolo")
+    monkeypatch.setattr(main, "advance_detect_disk_center", fake_disk_center)
+    main.run_detection(port, {"qr": Camera(), "vision": Camera()}, state, 0.0)
+
+    assert seen == [main.advance_detect_color]
+
+
+def test_hybrid_debug_fields_do_not_change_target_payload():
+    baseline = {
+        "detections": [{"type": 2, "center": [10, 20], "confidence": 0.8, "measured": True, "support_count": 2}]
+    }
+    hybrid = {
+        "detections": [
+            {
+                **baseline["detections"][0],
+                "yolo_type": 0,
+                "yolo_confidence": 0.64,
+                "hsv_color": "blue",
+                "hsv_coverage": 0.91,
+                "hsv_purity": 0.93,
+                "hsv_margin": 0.76,
+                "classification_source": "hsv",
+            }
+        ]
+    }
+
+    assert main._target_payload(hybrid) == main._target_payload(baseline)
 
 
 def test_detection_log_is_emitted_only_when_result_changes(capsys):
@@ -140,6 +199,7 @@ def test_old_inference_result_is_dropped_after_session_change(monkeypatch):
     port, state = Port(), main.make_service_state()
     state.update(mode=CMD_START_COLOR, session=1, period_ms=1)
     cameras = {"qr": Camera(), "vision": Camera()}
+    monkeypatch.setattr(main, "COLOR_DETECTION_BACKEND", "yolo")
     monkeypatch.setattr(main, "advance_detect_color", lambda frame: {"detections": []})
     monkeypatch.setattr(main, "poll_commands", lambda p, s: s.update(session=2))
     main.run_detection(port, cameras, state, 1.0)
@@ -164,6 +224,7 @@ def test_period_controls_camera_reads_and_detection(monkeypatch):
     camera = Camera(reads=[object(), object()])
     cameras = {"qr": Camera(), "vision": camera}
     results = iter([{"detections": [{"type": 1, "center": [0, 0], "confidence": 1.0, "measured": True, "support_count": 1}]}, {"detections": [{"type": 1, "center": [1, 0], "confidence": 1.0, "measured": True, "support_count": 1}]}])
+    monkeypatch.setattr(main, "COLOR_DETECTION_BACKEND", "yolo")
     monkeypatch.setattr(main, "advance_detect_color", lambda frame: next(results))
 
     for now in (0.0, 0.01, 0.02, 0.041):
@@ -282,6 +343,7 @@ def test_preview_callback_receives_detection_frame_after_result_send(monkeypatch
     state.update(mode=CMD_START_COLOR, session=4, period_ms=1, last_run=-1.0)
     frame = object()
     seen = []
+    monkeypatch.setattr(main, "COLOR_DETECTION_BACKEND", "yolo")
     monkeypatch.setattr(main, "advance_detect_color", lambda detected_frame: {
         "detections": [{"type": 1, "center": [0, 0], "confidence": 1.0, "measured": True, "support_count": 1}]
     })
@@ -304,6 +366,7 @@ def test_preview_callback_receives_detection_frame_after_result_send(monkeypatch
 def test_preview_callback_error_does_not_block_result_send(monkeypatch):
     port, state = Port(), main.make_service_state()
     state.update(mode=CMD_START_COLOR, session=4, period_ms=1, last_run=-1.0)
+    monkeypatch.setattr(main, "COLOR_DETECTION_BACKEND", "yolo")
     monkeypatch.setattr(main, "advance_detect_color", lambda frame: {"detections": []})
 
     main.run_detection(

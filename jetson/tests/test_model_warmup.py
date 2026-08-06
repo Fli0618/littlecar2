@@ -10,6 +10,7 @@ import main as jetson_main
 def test_warmup_vision_models_calls_both_detectors(monkeypatch) -> None:
     calls: list[tuple[str, tuple[int, ...], np.dtype]] = []
 
+    monkeypatch.setattr(jetson_main, "COLOR_DETECTION_BACKEND", "yolo")
     monkeypatch.setattr(
         jetson_main,
         "detect_color",

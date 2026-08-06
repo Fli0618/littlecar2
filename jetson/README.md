@@ -109,3 +109,31 @@ STM32 接收的视觉坐标始终是原始相机帧中的像素坐标，当前�
 - 提交前至少执行导入检查和视觉/协议测试；涉及硬件的测试需要在 Jetson 设备上单独确认相机、串口和设备权限。
 - 测试不得依赖真实摄像头、串口或模型下载；硬件测试应与可重复的单元测试分开。
 - 每完成一个独立小任务，应检查 `git diff` 和 `git status`，只提交本次任务相关的源代码、配置、文档和测试修改，不提交 `__pycache__`、`.pytest_cache`、`*.egg-info` 等生成物。
+
+## HSV 颜色标定
+
+离线调参工具位于仓库根目录 `tools/hsv_tuner/`，运行 `python tools/hsv_tuner/hsv_tuner_gui.py` 启动 Tkinter 图形界面。工具默认按 Jetson 的 `640×480` 分析契约处理图片，使用与正式分类相同的中心椭圆采样；不访问相机、串口、YOLO、TensorRT 或 GPIO。正式颜色链路不使用 Hough，Hough 接口仅为历史兼容。
+
+工具启动时自动加载 `jetson/assets/config/hsv_colors.json`，支持导入默认参数、导入外部 JSON、重载当前配置和另存为。ROI 推荐只修改当前颜色的 HSV 区间，推荐值不会自动保存。保存默认配置后，需要重启 Jetson 视觉服务，新的 HSV 参数才会进入正式 YOLO bbox + HSV 分类链路。
+
+## YOLO+HSV 混合颜色检测
+
+正式颜色任务默认使用 `COLOR_DETECTION_BACKEND = "yolo_hsv"`：YOLO 只负责输出物料候选框与几何位置，HSV 仅在候选框内重新判定颜色。HSV 分类不确定时默认拒绝该候选框；仅在离线诊断时可通过 `uncertain_policy="keep_yolo"` 保留 YOLO 类别。`EmptySlot`（类型 `6`）不进入 HSV 分类，保持 YOLO 结果。
+
+混合链路不使用 Hough 圆检测。Hough 仅保留在独立的纯 HSV 检测/标定辅助功能中，不是比赛服务的正式颜色检测路径。混合结果保留原有 `type`、`center`、`bbox`、`confidence` 协议字段，并额外携带 `yolo_*`、`hsv_*` 与 `classification_source` 调试字段；这些字段不会写入 STM32 目标 Payload。物料盘中心推断仍可选择纯 `yolo` 后端，避免将 HSV 分类策略强制应用到该任务。
+
+混合链路测试不加载模型、不访问相机或串口，使用 mock 的 `detect_color` 和 `classify_bbox_hsv` 覆盖 YOLO 几何保留、HSV 修正、拒绝/回退策略、EmptySlot、跟踪调试字段、后端选择、物料盘纯 YOLO 及 Payload 兼容性：
+
+```powershell
+conda run -n low_numpy python -m pytest tests/test_hybrid_color.py tests/test_protocol_client.py -q
+```
+
+HSV 颜色规则由 `assets/config/hsv_colors.json` 管理。当前默认启用红、黄、蓝、绿四种颜色，类型编号分别为 `0`、`1`、`2`、`3`；黑色和浅蓝色配置保留但默认禁用。配置格式、字段边界和启用颜色说明见 `assets/config/README.md`。
+
+在 Windows 开发机上执行 `python tools/hsv_tuner/hsv_tuner_gui.py` 打开离线标定界面。调参工具统一放在仓库根目录的 `tools/hsv_tuner/`；启动窗口后选择图片、配置和输出目录，界面提供 HSV 三通道直方图、H-S 二维热力图、ROI 统计和阈值线，不会访问摄像头、串口、模型或 GPIO。运行方式和输出文件命名规则见 `tools/hsv_tuner/README.md`。
+
+HSV 核心逻辑覆盖配置读写、Mask 构建和分类阈值的纯函数测试；在 `jetson/` 目录执行：
+
+```powershell
+python -m pytest tests/test_hsv_color.py tests/test_hsv_tuner.py -q
+```

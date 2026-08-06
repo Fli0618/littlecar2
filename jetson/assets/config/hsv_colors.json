@@ -1,0 +1,139 @@
+{
+  "version": 1,
+  "sampling": {
+    "scale_x": 0.55,
+    "scale_y": 0.55,
+    "min_pixels": 100,
+    "min_coverage": 0.25,
+    "min_margin": 0.1
+  },
+  "processing": {
+    "blur_kernel": 3,
+    "open_kernel": 3,
+    "open_iterations": 1,
+    "close_kernel": 3,
+    "close_iterations": 1
+  },
+  "colors": {
+    "red": {
+      "type": 0,
+      "enabled": true,
+      "ranges": [
+        {
+          "lower": [
+            168,
+            98,
+            60
+          ],
+          "upper": [
+            179,
+            255,
+            255
+          ]
+        },
+        {
+          "lower": [
+            0,
+            71,
+            60
+          ],
+          "upper": [
+            15,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    "yellow": {
+      "type": 1,
+      "enabled": true,
+      "ranges": [
+        {
+          "lower": [
+            12,
+            148,
+            161
+          ],
+          "upper": [
+            38,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    "blue": {
+      "type": 2,
+      "enabled": true,
+      "ranges": [
+        {
+          "lower": [
+            101,
+            138,
+            81
+          ],
+          "upper": [
+            119,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    "green": {
+      "type": 3,
+      "enabled": true,
+      "ranges": [
+        {
+          "lower": [
+            49,
+            113,
+            89
+          ],
+          "upper": [
+            79,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    "black": {
+      "type": 4,
+      "enabled": false,
+      "ranges": [
+        {
+          "lower": [
+            0,
+            0,
+            73
+          ],
+          "upper": [
+            28,
+            255,
+            124
+          ]
+        }
+      ]
+    },
+    "light_blue": {
+      "type": 5,
+      "enabled": false,
+      "ranges": [
+        {
+          "lower": [
+            85,
+            25,
+            100
+          ],
+          "upper": [
+            115,
+            170,
+            255
+          ]
+        }
+      ]
+    }
+  }
+}
