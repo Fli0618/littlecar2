@@ -9,7 +9,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 import main
-from protocol.commands import CMD_START_COLOR
+from protocol.commands import CMD_COLOR_RESULT, CMD_START_CIRCLE, CMD_START_COLOR
+from protocol.frame import parse_frames
 
 
 class FakeCapture:
@@ -120,3 +121,71 @@ def test_invalid_runtime_frame_skips_detection_and_serial_send(monkeypatch):
 
     assert not detected
     assert port.output == b""
+
+
+def test_color_detection_uses_upper_three_quarters_and_circle_uses_full_frame():
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    color_frame, color_bounds = main._detection_frame(frame, CMD_START_COLOR)
+    circle_frame, circle_bounds = main._detection_frame(frame, CMD_START_CIRCLE)
+
+    assert color_frame.shape == (360, 640, 3)
+    assert color_bounds == (0, 0, 640, 360)
+    assert circle_frame.shape == frame.shape
+    assert circle_bounds == (0, 0, 640, 480)
+
+
+def test_detection_coordinates_restore_center_and_bbox_to_global_frame():
+    result = {
+        "detections": [
+            {
+                "type": 2,
+                "center": [40, 50],
+                "bbox": [20, 30, 60, 70],
+                "confidence": 0.9,
+            }
+        ]
+    }
+
+    restored = main._restore_detection_coordinates(result, (10, 100, 500, 400))
+
+    assert restored["detections"][0]["center"] == [50, 150]
+    assert restored["detections"][0]["bbox"] == [30, 130, 70, 170]
+    assert result["detections"][0]["center"] == [40, 50]
+
+
+def test_color_run_detection_sends_coordinates_from_original_frame(monkeypatch):
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    state = main.make_service_state()
+    state.update(mode=CMD_START_COLOR, session=2, period_ms=1, last_run=-1.0)
+    port = Port()
+    seen_shapes = []
+
+    def fake_color_detector(detected_frame):
+        seen_shapes.append(detected_frame.shape)
+        return {
+            "detections": [
+                {
+                    "type": 3,
+                    "center": [120, 80],
+                    "confidence": 0.9,
+                    "measured": True,
+                    "support_count": 2,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(main, "COLOR_DETECTION_BACKEND", "yolo")
+    monkeypatch.setattr(main, "advance_detect_color", fake_color_detector)
+    main.run_detection(
+        port,
+        {main.CAMERA_QR: FakeCapture(), main.CAMERA_VISION: FakeCapture(frame=frame)},
+        state,
+        0.0,
+    )
+
+    sent = parse_frames(bytearray(), port.output)
+    assert seen_shapes == [(360, 640, 3)]
+    assert sent[0][0] == CMD_COLOR_RESULT
+    assert int.from_bytes(sent[0][2][2:4], "little", signed=True) == 120
+    assert int.from_bytes(sent[0][2][4:6], "little", signed=True) == 80

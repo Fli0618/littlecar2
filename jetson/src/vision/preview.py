@@ -17,6 +17,7 @@ _CROSSHAIR_COLOR = (0, 255, 0)
 _QR_COLOR = (0, 255, 255)
 _COLOR_TARGET_COLOR = (255, 180, 0)
 _CIRCLE_TARGET_COLOR = (255, 0, 255)
+_ROI_COLOR = (0, 200, 255)
 _DISK_CENTER_COLOR = (0, 0, 255)
 _SUPPORT_POINT_COLOR = (255, 255, 0)
 _TEXT_COLOR = (255, 255, 255)
@@ -30,6 +31,7 @@ def render_camera_preview(
     mode: int,
     result: dict[str, object] | None = None,
     aim_offset: tuple[int, int] = (0, 0),
+    roi_bounds: tuple[int, int, int, int] | None = None,
     status_text: str = "",
 ) -> np.ndarray:
     """渲染独立 RGB 预览图，不修改相机输入帧或识别结果。"""
@@ -39,6 +41,7 @@ def render_camera_preview(
     aim_x = width // 2 + int(aim_offset[0])
     aim_y = height // 2 + int(aim_offset[1])
     _draw_crosshair(preview_bgr, aim_x, aim_y)
+    _draw_roi_overlay(preview_bgr, roi_bounds)
 
     normalized_result: dict[str, object] = result if isinstance(result, dict) else {}
     if mode == CMD_START_QR:
@@ -66,6 +69,25 @@ def _draw_crosshair(frame: np.ndarray, center_x: int, center_y: int) -> None:
     _draw_text(frame, f"aim=({center_x - frame.shape[1] // 2:+d},{center_y - frame.shape[0] // 2:+d})", (12, 52), _CROSSHAIR_COLOR)
 
 
+def _draw_roi_overlay(frame: np.ndarray, roi_bounds: tuple[int, int, int, int] | None) -> None:
+    """显示当前任务的检测范围，不改变原始图像内容。"""
+    if roi_bounds is None:
+        return
+    x1, y1, x2, y2 = roi_bounds
+    height, width = frame.shape[:2]
+    if (x1, y1, x2, y2) == (0, 0, width, height):
+        _draw_text(frame, "ROI: GLOBAL", (12, 78), _ROI_COLOR)
+        return
+
+    x1 = max(0, min(width - 1, x1))
+    x2 = max(0, min(width - 1, x2 - 1))
+    y1 = max(0, min(height - 1, y1))
+    y2 = max(0, min(height - 1, y2 - 1))
+    cv2.rectangle(frame, (x1, y1), (x2, y2), _ROI_COLOR, 1)
+    cv2.line(frame, (0, y2), (width - 1, y2), _ROI_COLOR, 2)
+    _draw_text(frame, "ROI: COLOR TOP 3/4 | bottom excluded", (12, min(height - 18, y2 + 22)), _ROI_COLOR)
+
+
 def _draw_qr_result(frame: np.ndarray, result: dict[str, object]) -> None:
     raw_code = result.get("raw_code")
     status = result.get("status")
@@ -81,7 +103,7 @@ def _draw_detections(frame: np.ndarray, result: dict[str, object], mode: int) ->
     if not isinstance(detections, list):
         return
     label = "COLOR" if mode == CMD_START_COLOR else "CIRCLE"
-    _draw_text(frame, f"{label} targets: {len(detections)}", (12, 82), color)
+    _draw_text(frame, f"{label} targets: {len(detections)}", (12, 104), color)
     for item in detections:
         if not isinstance(item, dict):
             continue
@@ -90,12 +112,22 @@ def _draw_detections(frame: np.ndarray, result: dict[str, object], mode: int) ->
             continue
         point = _bounded_point(frame, *center)
         cv2.drawMarker(frame, point, color, markerType=cv2.MARKER_TILTED_CROSS, markerSize=20, thickness=2)
-        label = (
-            f"type={_display_value(item.get('type'))} "
-            f"conf={_format_confidence(item.get('confidence'))} "
-            f"measured={int(bool(item.get('measured', False)))} "
-            f"support={_display_value(item.get('support_count', 0))}"
-        )
+        if mode == CMD_START_COLOR:
+            label = (
+                f"final={_display_value(item.get('type'))} "
+                f"yolo={_display_value(item.get('yolo_type'))} "
+                f"hsv={_display_value(item.get('hsv_color'))} "
+                f"conf={_format_confidence(item.get('confidence'))} "
+                f"cov={_format_confidence(item.get('hsv_coverage'))} "
+                f"margin={_format_confidence(item.get('hsv_margin'))}"
+            )
+        else:
+            label = (
+                f"type={_display_value(item.get('type'))} "
+                f"conf={_format_confidence(item.get('confidence'))} "
+                f"measured={int(bool(item.get('measured', False)))} "
+                f"support={_display_value(item.get('support_count', 0))}"
+            )
         _draw_text(frame, label, (point[0] + 8, point[1] - 8), color)
 
 
@@ -185,12 +217,17 @@ def _draw_unicode_text(
     probe = Image.new("L", (1, 1), 0)
     probe_draw = ImageDraw.Draw(probe)
     try:
-        left, top, right, bottom = probe_draw.textbbox((0, 0), text, font=font)
+        try:
+            left, top, right, bottom = probe_draw.textbbox((0, 0), text, font=font)
+        except ValueError:
+            # Pillow 的默认位图字体在部分版本中不支持 textbbox。
+            text_width, text_height = probe_draw.textsize(text, font=font)
+            left, top, right, bottom = 0, 0, text_width, text_height
         mask_width = max(1, right - left)
         mask_height = max(1, bottom - top)
         mask = Image.new("L", (mask_width, mask_height), 0)
         ImageDraw.Draw(mask).text((-left, -top), text, font=font, fill=255)
-    except (UnicodeEncodeError, OSError):
+    except (UnicodeEncodeError, OSError, ValueError):
         x, y = _bounded_point(frame, *origin)
         cv2.putText(frame, text, (x, y), _FONT, 0.48, color, 1, cv2.LINE_AA)
         return

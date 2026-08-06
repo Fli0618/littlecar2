@@ -1,5 +1,6 @@
 #include "advance_visual.h"
 
+#include <math.h>
 #include <stdio.h>
 
 typedef enum
@@ -37,6 +38,9 @@ typedef struct
 static volatile AdvanceVisual_State_t g_visual_state = ADVANCE_VISUAL_STATE_IDLE;
 static AdvanceVisual_Mode_t g_visual_mode = ADVANCE_VISUAL_MODE_CIRCLE;
 static uint8_t g_target_type;
+static uint8_t g_target_locked;
+static int16_t g_locked_target_x;
+static int16_t g_locked_target_y;
 static uint8_t g_stable_count;
 static uint32_t g_started_tick;
 static uint32_t g_last_frame_tick;
@@ -45,6 +49,7 @@ static AdvanceVisual_DebugSnapshot_t g_visual_debug_snapshot;
 
 #ifdef ADVANCE_VISUAL_TEST
 static volatile uint8_t g_visual_transform_test_passed;
+static volatile uint8_t g_visual_target_test_passed;
 #endif
 
 static int16_t AdvanceVisual_GetReferenceX(void)
@@ -95,6 +100,17 @@ static float AdvanceVisual_LimitFloat(float value, float limit)
     return -limit;
   }
   return value;
+}
+
+static float AdvanceVisual_GetTargetDistance(int16_t x,
+                                             int16_t y,
+                                             int16_t reference_x,
+                                             int16_t reference_y)
+{
+  int64_t delta_x = (int32_t)x - (int32_t)reference_x;
+  int64_t delta_y = (int32_t)y - (int32_t)reference_y;
+
+  return sqrtf((float)((delta_x * delta_x) + (delta_y * delta_y)));
 }
 
 /* 将相机像素误差旋转到车体坐标，随后应用车体轴方向标定。 */
@@ -181,42 +197,178 @@ static uint8_t AdvanceVisual_RunTransformSelfTest(void)
   AdvanceVisual_ApplyBodyAxisSign(body_error_x, body_error_y,
                                   -1.0f, 1.0f,
                                   &signed_error_x, &signed_error_y);
+  if ((signed_error_x != -20.0f) || (signed_error_y != -10.0f))
+  {
+    return 0U;
+  }
+
+  AdvanceVisual_TransformPixelError(ADVANCE_VISUAL_CAMERA_ROTATION,
+                                    10, 20, &body_error_x, &body_error_y);
+  AdvanceVisual_ApplyBodyAxisSign(body_error_x, body_error_y,
+                                  ADVANCE_VISUAL_BODY_X_SIGN,
+                                  ADVANCE_VISUAL_BODY_Y_SIGN,
+                                  &signed_error_x, &signed_error_y);
   return ((signed_error_x == -20.0f) && (signed_error_y == -10.0f)) ? 1U : 0U;
 }
 #endif
 
 static AdvanceVisual_FrameState_t
+AdvanceVisual_SelectTypedTarget(const Detect_TargetList_t *targets,
+                                uint8_t target_type,
+                                int16_t reference_x,
+                                int16_t reference_y,
+                                uint8_t lock_valid,
+                                int16_t lock_x,
+                                int16_t lock_y,
+                                int16_t *center_x,
+                                int16_t *center_y)
+{
+  const Detect_Target_t *best_target = NULL;
+  float best_distance = 0.0f;
+  uint8_t target_count;
+  uint8_t i;
+
+  if ((targets == NULL) || (center_x == NULL) || (center_y == NULL))
+  {
+    return ADVANCE_VISUAL_FRAME_NO_TARGET;
+  }
+
+  target_count = (targets->count > DETECT_TARGET_MAX)
+                     ? DETECT_TARGET_MAX
+                     : targets->count;
+  for (i = 0U; i < target_count; ++i)
+  {
+    const Detect_Target_t *target = &targets->targets[i];
+    int16_t origin_x = (lock_valid != 0U) ? lock_x : reference_x;
+    int16_t origin_y = (lock_valid != 0U) ? lock_y : reference_y;
+    float distance;
+    float distance_delta;
+
+    if ((target->type != target_type) || (target->measured == 0U))
+    {
+      continue;
+    }
+
+    distance = AdvanceVisual_GetTargetDistance(target->x, target->y,
+                                               origin_x, origin_y);
+    if ((lock_valid != 0U) &&
+        (distance > (float)ADVANCE_VISUAL_TARGET_LOCK_MAX_JUMP_PX))
+    {
+      continue;
+    }
+
+    if (best_target == NULL)
+    {
+      best_target = target;
+      best_distance = distance;
+      continue;
+    }
+
+    distance_delta = distance - best_distance;
+    if (distance_delta < -(float)ADVANCE_VISUAL_TARGET_DISTANCE_TIE_PX)
+    {
+      best_target = target;
+      best_distance = distance;
+    }
+    else if ((fabsf(distance_delta) <=
+              (float)ADVANCE_VISUAL_TARGET_DISTANCE_TIE_PX) &&
+             (target->confidence > best_target->confidence))
+    {
+      best_target = target;
+      best_distance = distance;
+    }
+  }
+
+  if (best_target == NULL)
+  {
+    return ADVANCE_VISUAL_FRAME_NO_TARGET;
+  }
+
+  *center_x = best_target->x;
+  *center_y = best_target->y;
+  return ADVANCE_VISUAL_FRAME_TARGET;
+}
+
+static AdvanceVisual_FrameState_t
 AdvanceVisual_GetTypedTargetFrame(int16_t *center_x, int16_t *center_y)
 {
   Detect_TargetList_t targets;
-  uint8_t i;
-  uint8_t found = 0U;
-  uint8_t best_confidence = 0U;
+  AdvanceVisual_FrameState_t frame_state;
 
   if (detect_get_targets(&targets) == 0U)
   {
     return ADVANCE_VISUAL_FRAME_NONE;
   }
 
-  for (i = 0U; i < targets.count; ++i)
-  {
-    const Detect_Target_t *target = &targets.targets[i];
+  frame_state = AdvanceVisual_SelectTypedTarget(
+      &targets, g_target_type,
+      AdvanceVisual_GetReferenceX(), AdvanceVisual_GetReferenceY(),
+      g_target_locked, g_locked_target_x, g_locked_target_y,
+      center_x, center_y);
 
-    if ((target->type != g_target_type) || (target->measured == 0U))
-    {
-      continue;
-    }
-    if ((found == 0U) || (target->confidence > best_confidence))
-    {
-      *center_x = target->x;
-      *center_y = target->y;
-      best_confidence = target->confidence;
-      found = 1U;
-    }
+  if (frame_state == ADVANCE_VISUAL_FRAME_TARGET)
+  {
+    g_target_locked = 1U;
+    g_locked_target_x = *center_x;
+    g_locked_target_y = *center_y;
   }
 
-  return (found != 0U) ? ADVANCE_VISUAL_FRAME_TARGET : ADVANCE_VISUAL_FRAME_NO_TARGET;
+  return frame_state;
 }
+
+#ifdef ADVANCE_VISUAL_TEST
+static uint8_t AdvanceVisual_RunTargetSelectionSelfTest(void)
+{
+  Detect_TargetList_t targets = {0};
+  int16_t center_x = 0;
+  int16_t center_y = 0;
+
+  targets.count = 4U;
+  targets.targets[0] = (Detect_Target_t){1U, 330, 240, 10U, 1U, 0U};
+  targets.targets[1] = (Detect_Target_t){1U, 340, 240, 90U, 1U, 0U};
+  targets.targets[2] = (Detect_Target_t){2U, 320, 240, 100U, 1U, 0U};
+  targets.targets[3] = (Detect_Target_t){1U, 325, 240, 100U, 0U, 0U};
+  if ((AdvanceVisual_SelectTypedTarget(&targets, 1U, 320, 240,
+                                       0U, 0, 0,
+                                       &center_x, &center_y) !=
+       ADVANCE_VISUAL_FRAME_TARGET) ||
+      (center_x != 330) || (center_y != 240))
+  {
+    return 0U;
+  }
+
+  targets.count = 2U;
+  targets.targets[0] = (Detect_Target_t){1U, 335, 240, 10U, 1U, 0U};
+  targets.targets[1] = (Detect_Target_t){1U, 350, 240, 90U, 1U, 0U};
+  if ((AdvanceVisual_SelectTypedTarget(&targets, 1U, 320, 240,
+                                       1U, 330, 240,
+                                       &center_x, &center_y) !=
+       ADVANCE_VISUAL_FRAME_TARGET) ||
+      (center_x != 335) || (center_y != 240))
+  {
+    return 0U;
+  }
+
+  targets.count = 2U;
+  targets.targets[0] = (Detect_Target_t){1U, 338, 240, 10U, 1U, 0U};
+  targets.targets[1] = (Detect_Target_t){1U, 330, 248, 90U, 1U, 0U};
+  if ((AdvanceVisual_SelectTypedTarget(&targets, 1U, 320, 240,
+                                       1U, 330, 240,
+                                       &center_x, &center_y) !=
+       ADVANCE_VISUAL_FRAME_TARGET) ||
+      (center_x != 330) || (center_y != 248))
+  {
+    return 0U;
+  }
+
+  targets.count = 1U;
+  targets.targets[0] = (Detect_Target_t){1U, 451, 240, 100U, 1U, 0U};
+  return (AdvanceVisual_SelectTypedTarget(&targets, 1U, 320, 240,
+                                          1U, 330, 240,
+                                          &center_x, &center_y) ==
+          ADVANCE_VISUAL_FRAME_NO_TARGET) ? 1U : 0U;
+}
+#endif
 
 static AdvanceVisual_FrameState_t
 AdvanceVisual_GetDiskCenterFrame(int16_t *center_x, int16_t *center_y)
@@ -311,6 +463,7 @@ static void AdvanceVisual_Finish(AdvanceVisual_State_t state)
 
   detect_status = detect_stop();
   stop_ok = AdvanceVisual_StopAndReleaseControl();
+  g_target_locked = 0U;
   g_visual_state = state;
 
 #if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
@@ -331,6 +484,9 @@ void AdvanceVisual_Init(void)
   g_visual_state = ADVANCE_VISUAL_STATE_IDLE;
   g_visual_mode = ADVANCE_VISUAL_MODE_CIRCLE;
   g_target_type = 0U;
+  g_target_locked = 0U;
+  g_locked_target_x = 0;
+  g_locked_target_y = 0;
   g_stable_count = 0U;
   g_started_tick = 0U;
   g_last_frame_tick = 0U;
@@ -339,6 +495,7 @@ void AdvanceVisual_Init(void)
 
 #ifdef ADVANCE_VISUAL_TEST
   g_visual_transform_test_passed = AdvanceVisual_RunTransformSelfTest();
+  g_visual_target_test_passed = AdvanceVisual_RunTargetSelectionSelfTest();
 #endif
 }
 
@@ -583,6 +740,9 @@ AdvanceVisual_RunBlockingInternal(AdvanceVisual_Mode_t mode, uint8_t target_type
   now_tick = HAL_GetTick();
   g_visual_mode = mode;
   g_target_type = target_type;
+  g_target_locked = 0U;
+  g_locked_target_x = 0;
+  g_locked_target_y = 0;
   g_stable_count = 0U;
   g_started_tick = now_tick;
   g_last_frame_tick = now_tick;

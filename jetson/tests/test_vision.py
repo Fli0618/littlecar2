@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import vision.advance_yolo as advance_yolo
+import vision.hsv_color as hsv_color
 import vision.qr as qr
 from vision import yolo
 from vision.materials import advance_detect_disk_center, detect_disk_center
@@ -22,6 +23,50 @@ def test_yolo_exposes_raw_class_id_and_uses_cached_model():
         yolo.detect_color(np.zeros((100, 100, 3), dtype=np.uint8))
     assert result["detections"][0]["type"] == 4
     assert create.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("bgr", "expected_type"),
+    [
+        ((0, 0, 255), hsv_color.RED),
+        ((0, 255, 255), hsv_color.YELLOW),
+        ((255, 0, 0), hsv_color.BLUE),
+        ((0, 255, 0), hsv_color.GREEN),
+    ],
+)
+def test_hsv_classifier_uses_yolo_compatible_types(bgr, expected_type):
+    roi = np.full((20, 20, 3), bgr, dtype=np.uint8)
+
+    assert hsv_color.classify_color_hsv(roi) == expected_type
+
+
+@pytest.mark.parametrize("bgr", [(0, 0, 0), (255, 191, 0), (128, 128, 128), (255, 255, 255)])
+def test_hsv_classifier_ignores_non_target_colors(bgr):
+    roi = np.full((20, 20, 3), bgr, dtype=np.uint8)
+
+    assert hsv_color.classify_color_hsv(roi) is None
+
+
+def test_hsv_detector_returns_four_color_schema(monkeypatch):
+    frame = np.zeros((100, 140, 3), dtype=np.uint8)
+    frame[30:70, 30:70] = (0, 0, 255)
+    frame[30:70, 90:130] = (0, 255, 255)
+    circles = np.asarray([[[50, 50, 20], [110, 50, 20]]], dtype=np.float32)
+    monkeypatch.setattr(hsv_color.cv2, "HoughCircles", lambda *_args, **_kwargs: circles)
+
+    result = hsv_color.detect_color_hsv(frame)
+
+    assert [item["type"] for item in result["detections"]] == [hsv_color.RED, hsv_color.YELLOW]
+    assert all(item["confidence"] == 1.0 for item in result["detections"])
+    assert result["detections"][0]["center"] == [50, 50]
+    assert result["detections"][0]["bbox"] == [30, 30, 70, 70]
+
+
+def test_hsv_detector_does_not_fallback_when_hough_fails(monkeypatch):
+    frame = np.zeros((100, 140, 3), dtype=np.uint8)
+    monkeypatch.setattr(hsv_color.cv2, "HoughCircles", lambda *_args, **_kwargs: None)
+
+    assert hsv_color.detect_color_hsv(frame) == {"detections": []}
 
 
 def test_advanced_tracking_reports_measurement_and_support_count_and_resets():
@@ -47,6 +92,19 @@ def test_advanced_disk_center_returns_measured_count():
     with patch.object(advance_yolo, "advance_detect_color", return_value={"detections": [dict(detection(1, 20, 30), measured=True), dict(detection(2, 50, 30), measured=False)]}):
         result = advance_detect_disk_center(frame)
     assert result["support_count"] == 2 and result["measured_count"] == 1
+
+
+def test_disk_center_accepts_selected_color_detector():
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    def detector(_frame):
+        return {
+            "detections": [{"type": 0, "center": [20, 30], "confidence": 1.0, "measured": True}]
+        }
+
+    result = advance_detect_disk_center(frame, color_detector=detector)
+
+    assert result["center"] == [20, 30]
 
 
 def test_advance_qr_confirms_repeats_disappears_and_reappears():

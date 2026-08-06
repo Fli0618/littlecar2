@@ -39,6 +39,17 @@ def test_preview_renders_each_detection_mode(mode, result):
     assert preview_rgb.any()
 
 
+def test_preview_draws_roi_boundary_for_color_and_global_label_for_circle():
+    frame = np.zeros((100, 140, 3), dtype=np.uint8)
+
+    color_preview = render_camera_preview(frame, CMD_START_COLOR, roi_bounds=(0, 0, 140, 75))
+    circle_preview = render_camera_preview(frame, CMD_START_CIRCLE, roi_bounds=(0, 0, 140, 100))
+
+    # ROI line is drawn in BGR yellow and then converted to RGB.
+    assert color_preview[74, 20].tolist() == [255, 200, 0]
+    assert circle_preview.any()
+
+
 def test_preview_rejects_invalid_camera_frame():
     with pytest.raises(TypeError, match="BGR numpy.ndarray"):
         render_camera_preview(np.zeros((10, 10), dtype=np.uint8), 0)

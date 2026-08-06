@@ -25,20 +25,22 @@ extern "C"
 
 /* 像素误差到车体横向/前向速度的比例系数；需结合实车低速标定调整。 */
 #define ADVANCE_VISUAL_KP_X (0.8f)
-#define ADVANCE_VISUAL_KP_Y (0.8f)
+#define ADVANCE_VISUAL_KP_Y (1.05f)
 /* 相机旋转映射后的车体轴方向修正；只能取 1.0f 或 -1.0f，不能替代旋转配置。 */
-#define ADVANCE_VISUAL_BODY_X_SIGN (1.0f)
+#define ADVANCE_VISUAL_BODY_X_SIGN (-1.0f)
 #define ADVANCE_VISUAL_BODY_Y_SIGN (1.0f)
 /* 视觉伺服允许下发的横向和前向最大速度，单位 mm/s。 */
 #define ADVANCE_VISUAL_MAX_VX (100.0f)
 #define ADVANCE_VISUAL_MAX_VY (100.0f)
 /* 车体轴误差的到达死区，单位为映射后的像素误差。 */
-#define ADVANCE_VISUAL_TOLERANCE_X ((int16_t)8)
-#define ADVANCE_VISUAL_TOLERANCE_Y ((int16_t)8)
+#define ADVANCE_VISUAL_TOLERANCE_X ((int16_t)2)
+#define ADVANCE_VISUAL_TOLERANCE_Y ((int16_t)2)
 /* 视觉帧、目标丢失和总任务超时，单位 ms。 */
 #define ADVANCE_VISUAL_STALE_MS ((uint32_t)120U)
-#define ADVANCE_VISUAL_LOST_TIMEOUT_MS ((uint32_t)500U)
-#define ADVANCE_VISUAL_TOTAL_TIMEOUT_MS ((uint32_t)5000U)
+#define ADVANCE_VISUAL_LOST_TIMEOUT_MS ((uint32_t)1500U)
+#define ADVANCE_VISUAL_TOTAL_TIMEOUT_MS ((uint32_t)10000U)
+#define ADVANCE_VISUAL_TARGET_LOCK_MAX_JUMP_PX ((int16_t)120)
+#define ADVANCE_VISUAL_TARGET_DISTANCE_TIE_PX ((int16_t)8)
 #define ADVANCE_VISUAL_ARRIVE_COUNT ((uint8_t)3U)
 #define ADVANCE_VISUAL_ACC ((uint8_t)5U)
 
@@ -77,9 +79,9 @@ typedef enum
   ADVANCE_VISUAL_CAMERA_ROTATION_270_CW
 } AdvanceVisual_CameraRotation_t;
 
-/* 默认相机正向安装；仅在编译期按实际安装角度修改。 */
+/* 默认值对应当前相机安装方向；仅在编译期按实际安装角度修改。 */
 #ifndef ADVANCE_VISUAL_CAMERA_ROTATION
-#define ADVANCE_VISUAL_CAMERA_ROTATION ADVANCE_VISUAL_CAMERA_ROTATION_0
+#define ADVANCE_VISUAL_CAMERA_ROTATION ADVANCE_VISUAL_CAMERA_ROTATION_90_CW
 #endif
 
 typedef enum

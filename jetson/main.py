@@ -36,11 +36,15 @@ from ui import CAMERA_QR, CAMERA_VISION, CompetitionGUI
 from vision import (
     advance_detect_circle,
     advance_detect_color,
+    advance_detect_color_hsv,
+    advance_detect_color_hybrid,
     advance_detect_disk_center,
     advance_detect_qr,
     configure_model_backend,
     detect_circle,
     detect_color,
+    detect_color_hsv,
+    get_hsv_config,
     reset_advance_tracking,
     reset_qr_tracking,
     render_camera_preview,
@@ -57,6 +61,10 @@ QR_FRAME_WIDTH = 640
 QR_FRAME_HEIGHT = 480
 VISION_FRAME_WIDTH = 640
 VISION_FRAME_HEIGHT = 480
+# 颜色物料只在画面上方 3/4 内检测；同心圆检测使用完整画面。
+COLOR_ROI_TOP = 0
+COLOR_ROI_BOTTOM_RATIO = 0.75
+COLOR_DETECTION_BACKEND = "yolo_hsv"
 MODEL_BACKEND = "engine"  # "pt" or "engine"
 DEFAULT_PERIOD_MS = 40
 MAX_TARGETS = 8
@@ -76,6 +84,22 @@ QR_PREVIEW_AIM_OFFSET_Y_PX = 0
 VISION_PREVIEW_AIM_OFFSET_X_PX = 0
 VISION_PREVIEW_AIM_OFFSET_Y_PX = 0
 _FILL_LIGHT_MODES = frozenset((CMD_START_COLOR, CMD_START_CIRCLE))
+
+
+def _color_detection_backend() -> Callable[[np.ndarray], dict[str, object]]:
+    """返回颜色任务检测器；混合模式先完成 HSV 分类再进入跟踪。"""
+    backends: dict[str, Callable[[np.ndarray], dict[str, object]]] = {
+        "yolo": advance_detect_color,
+        "hsv": advance_detect_color_hsv,
+        "yolo_hsv": advance_detect_color_hybrid,
+    }
+    try:
+        return backends[COLOR_DETECTION_BACKEND]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported color detection backend: {COLOR_DETECTION_BACKEND!r}; "
+            "expected 'yolo', 'hsv' or 'yolo_hsv'"
+        ) from exc
 
 
 def _requires_fill_light(mode: int) -> bool:
@@ -155,6 +179,61 @@ def _frame_matches_camera_contract(frame: object, camera_name: str) -> bool:
     """仅允许按启动契约协商成功的原始相机帧进入检测与坐标发送。"""
     actual_size = _frame_size(frame)
     return actual_size is None or actual_size == _camera_frame_size(camera_name)
+
+
+def _detection_roi_bounds(frame: np.ndarray, mode: int) -> tuple[int, int, int, int] | None:
+    """返回检测 ROI 的全局像素边界，格式为 ``(x1, y1, x2, y2)``。"""
+    if not isinstance(frame, np.ndarray):
+        return None
+    height, width = frame.shape[:2]
+    if mode == CMD_START_COLOR:
+        bottom = max(COLOR_ROI_TOP + 1, min(height, int(height * COLOR_ROI_BOTTOM_RATIO)))
+        return 0, COLOR_ROI_TOP, width, bottom
+    if mode == CMD_START_CIRCLE:
+        return 0, 0, width, height
+    return None
+
+
+def _detection_frame(frame: np.ndarray, mode: int) -> tuple[np.ndarray, tuple[int, int, int, int] | None]:
+    """按任务选择模型输入帧，并返回该帧在原图中的 ROI 边界。"""
+    bounds = _detection_roi_bounds(frame, mode)
+    if bounds is None:
+        return frame, None
+    x1, y1, x2, y2 = bounds
+    return frame[y1:y2, x1:x2], bounds
+
+
+def _restore_detection_coordinates(
+    result: dict[str, object], roi_bounds: tuple[int, int, int, int] | None,
+) -> dict[str, object]:
+    """将 ROI 内检测结果复制并恢复到原始相机坐标系。"""
+    if roi_bounds is None:
+        return result
+    offset_x, offset_y = roi_bounds[:2]
+    if offset_x == 0 and offset_y == 0:
+        return result
+
+    detections = result.get("detections")
+    if not isinstance(detections, list):
+        return result
+    restored: list[dict[str, object]] = []
+    for item in detections:
+        if not isinstance(item, dict):
+            continue
+        restored_item = dict(item)
+        center = item.get("center")
+        if isinstance(center, (list, tuple)) and len(center) == 2:
+            restored_item["center"] = [int(center[0]) + offset_x, int(center[1]) + offset_y]
+        bbox = item.get("bbox")
+        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+            restored_item["bbox"] = [
+                int(bbox[0]) + offset_x,
+                int(bbox[1]) + offset_y,
+                int(bbox[2]) + offset_x,
+                int(bbox[3]) + offset_y,
+            ]
+        restored.append(restored_item)
+    return {**result, "detections": restored}
 
 
 def _release_camera(camera: object | None) -> None:
@@ -250,17 +329,36 @@ def _detection_log_payload(mode: int, result: dict[str, object]) -> dict[str, ob
                 if not isinstance(item, dict):
                     continue
                 center = item.get("center")
-                normalized.append(
-                    {
-                        "type": item.get("type"),
-                        "center": list(center) if isinstance(center, (list, tuple)) else None,
-                        "confidence": round(float(item["confidence"]), 3)
-                        if isinstance(item.get("confidence"), (int, float))
-                        else None,
-                        "measured": bool(item.get("measured", False)),
-                        "support_count": int(item.get("support_count", 0)),
-                    }
-                )
+                entry: dict[str, object] = {
+                    "type": item.get("type"),
+                    "center": list(center) if isinstance(center, (list, tuple)) else None,
+                    "confidence": round(float(item["confidence"]), 3)
+                    if isinstance(item.get("confidence"), (int, float))
+                    else None,
+                    "measured": bool(item.get("measured", False)),
+                    "support_count": int(item.get("support_count", 0)),
+                }
+                if mode == CMD_START_COLOR:
+                    entry.update(
+                        {
+                            "yolo_type": item.get("yolo_type"),
+                            "yolo_confidence": round(float(item["yolo_confidence"]), 3)
+                            if isinstance(item.get("yolo_confidence"), (int, float))
+                            else None,
+                            "hsv_color": item.get("hsv_color"),
+                            "hsv_coverage": round(float(item["hsv_coverage"]), 3)
+                            if isinstance(item.get("hsv_coverage"), (int, float))
+                            else None,
+                            "hsv_purity": round(float(item["hsv_purity"]), 3)
+                            if isinstance(item.get("hsv_purity"), (int, float))
+                            else None,
+                            "hsv_margin": round(float(item["hsv_margin"]), 3)
+                            if isinstance(item.get("hsv_margin"), (int, float))
+                            else None,
+                            "classification_source": item.get("classification_source"),
+                        }
+                    )
+                normalized.append(entry)
         normalized.sort(key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False))
         return {"detections": normalized}
     return {
@@ -286,11 +384,20 @@ def _log_detection_result(state: dict[str, object], mode: int, result: dict[str,
 
 
 def warmup_vision_models() -> None:
-    """启动时加载并预热颜色、数字圆环两个 YOLO 模型。"""
+    """启动时预热当前颜色后端和数字圆环 YOLO 模型。"""
     frame = np.zeros((MODEL_WARMUP_FRAME_SIZE, MODEL_WARMUP_FRAME_SIZE, 3), dtype=np.uint8)
 
     started = time.perf_counter()
-    detect_color(frame)
+    if COLOR_DETECTION_BACKEND == "hsv":
+        get_hsv_config()
+        detect_color_hsv(frame)
+    elif COLOR_DETECTION_BACKEND == "yolo":
+        detect_color(frame)
+    elif COLOR_DETECTION_BACKEND == "yolo_hsv":
+        get_hsv_config()
+        detect_color(frame)
+    else:
+        _color_detection_backend()
     color_ms = (time.perf_counter() - started) * 1000.0
 
     started = time.perf_counter()
@@ -299,6 +406,7 @@ def warmup_vision_models() -> None:
 
     print(
         f"vision models ready backend={MODEL_BACKEND} "
+        f"color_detection={COLOR_DETECTION_BACKEND} "
         f"color_warmup_ms={color_ms:.1f} circle_warmup_ms={circle_ms:.1f}",
         flush=True,
     )
@@ -419,11 +527,17 @@ def run_detection(
             return
         response = CMD_QR_RESULT
     elif mode == CMD_START_COLOR:
-        result, response = advance_detect_color(frame), CMD_COLOR_RESULT
+        detection_frame, roi_bounds = _detection_frame(frame, mode)
+        result = _restore_detection_coordinates(_color_detection_backend()(detection_frame), roi_bounds)
+        response = CMD_COLOR_RESULT
     elif mode == CMD_START_CIRCLE:
-        result, response = advance_detect_circle(frame), CMD_CIRCLE_RESULT
+        detection_frame, _ = _detection_frame(frame, mode)
+        result, response = advance_detect_circle(detection_frame), CMD_CIRCLE_RESULT
     else:
-        result, response = advance_detect_disk_center(frame), CMD_DISK_CENTER_RESULT
+        result, response = (
+            advance_detect_disk_center(frame, color_detector=advance_detect_color),
+            CMD_DISK_CENTER_RESULT,
+        )
 
     poll_commands(port, state)
     if int(state["mode"]) != mode or int(state["session"]) != session:
@@ -598,12 +712,14 @@ def main() -> None:
         )
         try:
             status_text = f"{selected_camera_id} 相机预览 | {_preview_mode_text(preview_mode)}"
+            preview_roi = _detection_roi_bounds(preview_frame, preview_mode)
             gui.set_camera_frame(
                 render_camera_preview(
                     preview_frame,
                     preview_mode,
                     preview_result,
                     aim_offset=aim_offset,
+                    roi_bounds=preview_roi,
                     status_text=status_text,
                 ),
                 status_text=status_text,
