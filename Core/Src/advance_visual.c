@@ -1,5 +1,7 @@
 #include "advance_visual.h"
 
+#include <stdio.h>
+
 typedef enum
 {
   ADVANCE_VISUAL_MODE_COLOR = 0U,
@@ -14,6 +16,24 @@ typedef enum
   ADVANCE_VISUAL_FRAME_TARGET
 } AdvanceVisual_FrameState_t;
 
+typedef struct
+{
+  uint32_t tick;
+  AdvanceVisual_FrameState_t frame_state;
+  int16_t center_x;
+  int16_t center_y;
+  int32_t pixel_error_x;
+  int32_t pixel_error_y;
+  int32_t body_error_x;
+  int32_t body_error_y;
+  int32_t command_vx;
+  int32_t command_vy;
+  uint8_t chassis_command_ok;
+  uint8_t stable_count;
+  uint32_t frame_age_ms;
+  uint32_t target_age_ms;
+} AdvanceVisual_DebugSnapshot_t;
+
 static volatile AdvanceVisual_State_t g_visual_state = ADVANCE_VISUAL_STATE_IDLE;
 static AdvanceVisual_Mode_t g_visual_mode = ADVANCE_VISUAL_MODE_CIRCLE;
 static uint8_t g_target_type;
@@ -21,6 +41,7 @@ static uint8_t g_stable_count;
 static uint32_t g_started_tick;
 static uint32_t g_last_frame_tick;
 static uint32_t g_last_target_tick;
+static AdvanceVisual_DebugSnapshot_t g_visual_debug_snapshot;
 
 #ifdef ADVANCE_VISUAL_TEST
 static volatile uint8_t g_visual_transform_test_passed;
@@ -251,11 +272,58 @@ static Detect_Status_t AdvanceVisual_StartDetection(AdvanceVisual_Mode_t mode)
   }
 }
 
-static void AdvanceVisual_SetTerminalState(AdvanceVisual_State_t state)
+static uint8_t AdvanceVisual_StopAndReleaseControl(void)
 {
-  (void)detect_stop();
-  AdvanceControl_SetMode(ADVANCE_CONTROL_NONE);
+  AdvanceControl_Mode_t control_mode = AdvanceControl_GetMode();
+  uint8_t stop_ok;
+
+  if (control_mode == ADVANCE_CONTROL_VISUAL)
+  {
+    /* 先检查硬停止命令，再仅释放控制权，避免丢失停止结果。 */
+    stop_ok = Chassis_Stop();
+    if (stop_ok == 0U)
+    {
+      /* 队列短暂繁忙时再尝试一次，阻塞接口不会带着旧速度退出。 */
+      stop_ok = Chassis_Stop();
+    }
+    (void)AdvanceControl_ReleaseMode();
+    return stop_ok;
+  }
+
+  if (control_mode == ADVANCE_CONTROL_NONE)
+  {
+    return Chassis_Stop();
+  }
+
+  /* 其他控制器已经接管底盘，不能覆盖其新命令。 */
+  return 1U;
+}
+
+static void AdvanceVisual_Finish(AdvanceVisual_State_t state)
+{
+  Detect_Status_t detect_status;
+  uint8_t stop_ok;
+
+  if (g_visual_state != ADVANCE_VISUAL_STATE_RUNNING)
+  {
+    return;
+  }
+
+  detect_status = detect_stop();
+  stop_ok = AdvanceVisual_StopAndReleaseControl();
   g_visual_state = state;
+
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
+  if ((detect_status != DETECT_STATUS_OK) || (stop_ok == 0U))
+  {
+    printf("[VIS] finish detect_status=%u stop_ok=%u\r\n",
+           (unsigned int)detect_status,
+           (unsigned int)stop_ok);
+  }
+#else
+  (void)detect_status;
+  (void)stop_ok;
+#endif
 }
 
 void AdvanceVisual_Init(void)
@@ -267,16 +335,16 @@ void AdvanceVisual_Init(void)
   g_started_tick = 0U;
   g_last_frame_tick = 0U;
   g_last_target_tick = 0U;
+  g_visual_debug_snapshot = (AdvanceVisual_DebugSnapshot_t){0};
 
 #ifdef ADVANCE_VISUAL_TEST
   g_visual_transform_test_passed = AdvanceVisual_RunTransformSelfTest();
 #endif
 }
 
-void AdvanceVisual_Update(void)
+static void AdvanceVisual_ControlStep(uint32_t now_tick)
 {
   AdvanceVisual_FrameState_t frame_state;
-  uint32_t now_tick;
   int16_t center_x = 0;
   int16_t center_y = 0;
   int32_t pixel_error_x;
@@ -287,6 +355,7 @@ void AdvanceVisual_Update(void)
   float signed_error_y;
   float vx_right;
   float vy_forward;
+  uint8_t chassis_command_ok = 1U;
 
   if (g_visual_state != ADVANCE_VISUAL_STATE_RUNNING)
   {
@@ -294,58 +363,85 @@ void AdvanceVisual_Update(void)
   }
   if (AdvanceControl_GetMode() != ADVANCE_CONTROL_VISUAL)
   {
-    AdvanceVisual_SetTerminalState(ADVANCE_VISUAL_STATE_CANCELED);
+    AdvanceVisual_Finish(ADVANCE_VISUAL_STATE_CANCELED);
     return;
   }
 
-  now_tick = HAL_GetTick();
   if ((now_tick - g_started_tick) >= ADVANCE_VISUAL_TOTAL_TIMEOUT_MS)
   {
-    AdvanceVisual_SetTerminalState(ADVANCE_VISUAL_STATE_TIMEOUT);
+    AdvanceVisual_Finish(ADVANCE_VISUAL_STATE_TIMEOUT);
     return;
   }
 
   frame_state = AdvanceVisual_GetFrame(&center_x, &center_y);
+  g_visual_debug_snapshot.tick = now_tick;
+  g_visual_debug_snapshot.frame_state = frame_state;
+  g_visual_debug_snapshot.center_x = center_x;
+  g_visual_debug_snapshot.center_y = center_y;
+  g_visual_debug_snapshot.pixel_error_x = 0;
+  g_visual_debug_snapshot.pixel_error_y = 0;
+  g_visual_debug_snapshot.body_error_x = 0;
+  g_visual_debug_snapshot.body_error_y = 0;
+  g_visual_debug_snapshot.command_vx = 0;
+  g_visual_debug_snapshot.command_vy = 0;
+  g_visual_debug_snapshot.chassis_command_ok = 1U;
+  g_visual_debug_snapshot.stable_count = g_stable_count;
+  g_visual_debug_snapshot.frame_age_ms = now_tick - g_last_frame_tick;
+  g_visual_debug_snapshot.target_age_ms = now_tick - g_last_target_tick;
+
   if (frame_state == ADVANCE_VISUAL_FRAME_NONE)
   {
     if ((now_tick - g_last_frame_tick) >= ADVANCE_VISUAL_STALE_MS)
     {
-      Chassis_SmoothStop(ADVANCE_VISUAL_ACC);
+      chassis_command_ok = Chassis_SmoothStop(ADVANCE_VISUAL_ACC);
     }
     if ((now_tick - g_last_target_tick) >= ADVANCE_VISUAL_LOST_TIMEOUT_MS)
     {
-      AdvanceVisual_SetTerminalState(ADVANCE_VISUAL_STATE_NO_TARGET);
+      AdvanceVisual_Finish(ADVANCE_VISUAL_STATE_NO_TARGET);
     }
+    g_visual_debug_snapshot.chassis_command_ok = chassis_command_ok;
     return;
   }
 
   g_last_frame_tick = now_tick;
+  g_visual_debug_snapshot.frame_age_ms = 0U;
   if (frame_state == ADVANCE_VISUAL_FRAME_NO_TARGET)
   {
     g_stable_count = 0U;
-    Chassis_SmoothStop(ADVANCE_VISUAL_ACC);
+    chassis_command_ok = Chassis_SmoothStop(ADVANCE_VISUAL_ACC);
     if ((now_tick - g_last_target_tick) >= ADVANCE_VISUAL_LOST_TIMEOUT_MS)
     {
-      AdvanceVisual_SetTerminalState(ADVANCE_VISUAL_STATE_NO_TARGET);
+      AdvanceVisual_Finish(ADVANCE_VISUAL_STATE_NO_TARGET);
     }
+    g_visual_debug_snapshot.chassis_command_ok = chassis_command_ok;
+    g_visual_debug_snapshot.stable_count = g_stable_count;
+    g_visual_debug_snapshot.target_age_ms = now_tick - g_last_target_tick;
     return;
   }
 
   g_last_target_tick = now_tick;
+  g_visual_debug_snapshot.target_age_ms = 0U;
   pixel_error_x = (int32_t)center_x - (int32_t)AdvanceVisual_GetReferenceX();
   pixel_error_y = (int32_t)center_y - (int32_t)AdvanceVisual_GetReferenceY();
+  g_visual_debug_snapshot.pixel_error_x = pixel_error_x;
+  g_visual_debug_snapshot.pixel_error_y = pixel_error_y;
   AdvanceVisual_TransformPixelError(ADVANCE_VISUAL_CAMERA_ROTATION,
                                     pixel_error_x, pixel_error_y,
                                     &body_error_x, &body_error_y);
+  g_visual_debug_snapshot.body_error_x = body_error_x;
+  g_visual_debug_snapshot.body_error_y = body_error_y;
   if ((AdvanceVisual_AbsI32(body_error_x) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_X) &&
       (AdvanceVisual_AbsI32(body_error_y) <= (int32_t)ADVANCE_VISUAL_TOLERANCE_Y))
   {
-    Chassis_SetBodyVelocityEx(0.0f, 0.0f, 0.0f, ADVANCE_VISUAL_ACC);
+    chassis_command_ok = Chassis_SetBodyVelocityEx(0.0f, 0.0f, 0.0f,
+                                                    ADVANCE_VISUAL_ACC);
     ++g_stable_count;
     if (g_stable_count >= ADVANCE_VISUAL_ARRIVE_COUNT)
     {
-      AdvanceVisual_SetTerminalState(ADVANCE_VISUAL_STATE_ARRIVED);
+      AdvanceVisual_Finish(ADVANCE_VISUAL_STATE_ARRIVED);
     }
+    g_visual_debug_snapshot.chassis_command_ok = chassis_command_ok;
+    g_visual_debug_snapshot.stable_count = g_stable_count;
     return;
   }
 
@@ -362,12 +458,69 @@ void AdvanceVisual_Update(void)
                    : ADVANCE_VISUAL_KP_Y * signed_error_y;
   vx_right = AdvanceVisual_LimitFloat(vx_right, ADVANCE_VISUAL_MAX_VX);
   vy_forward = AdvanceVisual_LimitFloat(vy_forward, ADVANCE_VISUAL_MAX_VY);
-  Chassis_SetBodyVelocityEx(vx_right, vy_forward, 0.0f, ADVANCE_VISUAL_ACC);
+  chassis_command_ok = Chassis_SetBodyVelocityEx(vx_right, vy_forward, 0.0f,
+                                                  ADVANCE_VISUAL_ACC);
+  g_visual_debug_snapshot.command_vx = (int32_t)vx_right;
+  g_visual_debug_snapshot.command_vy = (int32_t)vy_forward;
+  g_visual_debug_snapshot.chassis_command_ok = chassis_command_ok;
+  g_visual_debug_snapshot.stable_count = g_stable_count;
+}
+
+static void AdvanceVisual_LogSnapshot(void)
+{
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
+  const AdvanceVisual_DebugSnapshot_t *snapshot = &g_visual_debug_snapshot;
+
+  switch (snapshot->frame_state)
+  {
+    case ADVANCE_VISUAL_FRAME_TARGET:
+      printf("[VIS] t=%lu frame=TARGET center=(%d,%d) pixel=(%ld,%ld) "
+             "body=(%ld,%ld) cmd=(%ld,%ld) cmd_ok=%u stable=%u "
+             "frame_age=%lu target_age=%lu\r\n",
+             (unsigned long)snapshot->tick,
+             (int)snapshot->center_x,
+             (int)snapshot->center_y,
+             (long)snapshot->pixel_error_x,
+             (long)snapshot->pixel_error_y,
+             (long)snapshot->body_error_x,
+             (long)snapshot->body_error_y,
+             (long)snapshot->command_vx,
+             (long)snapshot->command_vy,
+             (unsigned int)snapshot->chassis_command_ok,
+             (unsigned int)snapshot->stable_count,
+             (unsigned long)snapshot->frame_age_ms,
+             (unsigned long)snapshot->target_age_ms);
+      break;
+
+    case ADVANCE_VISUAL_FRAME_NO_TARGET:
+      printf("[VIS] t=%lu frame=NO_TARGET target=%u target_age=%lu\r\n",
+             (unsigned long)snapshot->tick,
+             (unsigned int)g_target_type,
+             (unsigned long)snapshot->target_age_ms);
+      break;
+
+    case ADVANCE_VISUAL_FRAME_NONE:
+    default:
+      printf("[VIS] t=%lu frame=NONE frame_age=%lu target_age=%lu\r\n",
+             (unsigned long)snapshot->tick,
+             (unsigned long)snapshot->frame_age_ms,
+             (unsigned long)snapshot->target_age_ms);
+      break;
+  }
+#endif
 }
 
 static AdvanceVisual_State_t AdvanceVisual_ReturnStartError(void)
 {
   g_visual_state = ADVANCE_VISUAL_STATE_START_ERROR;
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
+  printf("[VIS] exit state=%u elapsed=0 frame_age=0 target_age=0 "
+         "stable=%u control=%u detect_active=%u\r\n",
+         (unsigned int)g_visual_state,
+         (unsigned int)g_stable_count,
+         (unsigned int)AdvanceControl_GetMode(),
+         (unsigned int)detect_is_active());
+#endif
   return g_visual_state;
 }
 
@@ -375,7 +528,21 @@ static AdvanceVisual_State_t
 AdvanceVisual_RunBlockingInternal(AdvanceVisual_Mode_t mode, uint8_t target_type)
 {
   Detect_Status_t status;
+  AdvanceControl_Mode_t control_before;
+  AdvanceVisual_State_t final_state;
   uint32_t now_tick;
+  uint32_t next_control_tick;
+  uint32_t next_log_tick;
+  uint32_t elapsed_tick;
+
+  control_before = AdvanceControl_GetMode();
+
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
+  printf("[VIS] start mode=%u target=%u control_before=%u\r\n",
+         (unsigned int)mode,
+         (unsigned int)target_type,
+         (unsigned int)control_before);
+#endif
 
   /*
    * 直接尝试获取控制权，不再采用
@@ -383,17 +550,27 @@ AdvanceVisual_RunBlockingInternal(AdvanceVisual_Mode_t mode, uint8_t target_type
    */
   if (AdvanceControl_SetMode(ADVANCE_CONTROL_VISUAL) == 0U)
   {
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
+    printf("[VIS] control acquire failed\r\n");
+#endif
     return AdvanceVisual_ReturnStartError();
   }
 
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
+  printf("[VIS] control acquired\r\n");
+#endif
+
   status = AdvanceVisual_StartDetection(mode);
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
+  printf("[VIS] detect_start status=%u\r\n", (unsigned int)status);
+#endif
   if (status != DETECT_STATUS_OK)
   {
     /*
-     * Jetson 检测未成功启动，此时底盘尚未运动，
-     * 直接释放视觉控制权。
+     * 即使启动失败也通过统一硬停止路径清除可能残留的底盘命令，
+     * 不让失败路径留下 VISUAL 控制权。
      */
-    AdvanceControl_ReleaseMode();
+    (void)AdvanceVisual_StopAndReleaseControl();
     return AdvanceVisual_ReturnStartError();
   }
 
@@ -404,14 +581,57 @@ AdvanceVisual_RunBlockingInternal(AdvanceVisual_Mode_t mode, uint8_t target_type
   g_started_tick = now_tick;
   g_last_frame_tick = now_tick;
   g_last_target_tick = now_tick;
+  g_visual_debug_snapshot = (AdvanceVisual_DebugSnapshot_t){0};
   g_visual_state = ADVANCE_VISUAL_STATE_RUNNING;
+
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
+  printf("[VIS] running ref=(%d,%d) period=%lu\r\n",
+         (int)AdvanceVisual_GetReferenceX(),
+         (int)AdvanceVisual_GetReferenceY(),
+         (unsigned long)ADVANCE_VISUAL_CONTROL_PERIOD_MS);
+#endif
+
+  next_control_tick = now_tick;
+  next_log_tick = now_tick + ADVANCE_VISUAL_LOG_PERIOD_MS;
 
   while (g_visual_state == ADVANCE_VISUAL_STATE_RUNNING)
   {
-    __WFI();
+    now_tick = HAL_GetTick();
+
+    if ((int32_t)(now_tick - next_control_tick) >= 0)
+    {
+      AdvanceVisual_ControlStep(now_tick);
+      /* 以本次实际执行时间重新计算，禁止延迟后的周期补跑。 */
+      next_control_tick = now_tick + ADVANCE_VISUAL_CONTROL_PERIOD_MS;
+    }
+
+    if ((g_visual_state == ADVANCE_VISUAL_STATE_RUNNING) &&
+        ((int32_t)(now_tick - next_log_tick) >= 0))
+    {
+      AdvanceVisual_LogSnapshot();
+      next_log_tick = now_tick + ADVANCE_VISUAL_LOG_PERIOD_MS;
+    }
+
+    if (g_visual_state == ADVANCE_VISUAL_STATE_RUNNING)
+    {
+      __WFI();
+    }
   }
 
-  return g_visual_state;
+  final_state = g_visual_state;
+  elapsed_tick = HAL_GetTick() - g_started_tick;
+#if (ADVANCE_VISUAL_DEBUG_LOG_ENABLE != 0U)
+  printf("[VIS] exit state=%u elapsed=%lu frame_age=%lu target_age=%lu "
+         "stable=%u control=%u detect_active=%u\r\n",
+         (unsigned int)final_state,
+         (unsigned long)elapsed_tick,
+         (unsigned long)g_visual_debug_snapshot.frame_age_ms,
+         (unsigned long)g_visual_debug_snapshot.target_age_ms,
+         (unsigned int)g_stable_count,
+         (unsigned int)AdvanceControl_GetMode(),
+         (unsigned int)detect_is_active());
+#endif
+  return final_state;
 }
 
 AdvanceVisual_State_t AdvanceVisual_AlignColorBlocking(ColorType_t color)
@@ -449,7 +669,8 @@ void AdvanceVisual_Cancel(void)
 {
   if (g_visual_state == ADVANCE_VISUAL_STATE_RUNNING)
   {
-    AdvanceVisual_SetTerminalState(ADVANCE_VISUAL_STATE_CANCELED);
+    /* 当前工程仅从主线程调用 Cancel，复杂清理不在中断上下文执行。 */
+    AdvanceVisual_Finish(ADVANCE_VISUAL_STATE_CANCELED);
   }
 }
 
