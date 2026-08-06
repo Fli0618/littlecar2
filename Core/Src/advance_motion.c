@@ -478,9 +478,9 @@ static void AdvanceMotion_SavePidPose(const WorldPose2D_t *pose, uint32_t now_ti
         float raw_vy = (pose->y_mm - g_motion_control.pid_last_y_mm) / pose_dt_s;
         
         g_motion_control.measured_vx_world_mm_s = 
-            (0.3f * raw_vx) + (0.7f * g_motion_control.measured_vx_world_mm_s);
+            (0.1f * raw_vx) + (0.9f * g_motion_control.measured_vx_world_mm_s);
         g_motion_control.measured_vy_world_mm_s = 
-            (0.3f * raw_vy) + (0.7f * g_motion_control.measured_vy_world_mm_s);
+            (0.1f * raw_vy) + (0.9f * g_motion_control.measured_vy_world_mm_s);
       }
       g_motion_control.pid_last_x_mm = pose->x_mm;
       g_motion_control.pid_last_y_mm = pose->y_mm;
@@ -499,7 +499,7 @@ static void AdvanceMotion_SavePidPose(const WorldPose2D_t *pose, uint32_t now_ti
         float raw_wz = yaw_delta / yaw_dt_s;
 
         g_motion_control.measured_wz_deg_s = 
-            (0.3f * raw_wz) + (0.7f * g_motion_control.measured_wz_deg_s);
+            (0.1f * raw_wz) + (0.9f * g_motion_control.measured_wz_deg_s);
       }
       g_motion_control.pid_last_yaw_deg = pose->yaw_deg;
       g_motion_control.last_yaw_updated_tick = pose->yaw_updated_tick;
@@ -1784,6 +1784,20 @@ void AdvanceMotion_Update(void)
     AdvanceMotion_SetTerminalState(ADVANCE_MOTION_STATE_CANCELED);
     AdvanceMotion_UpdateInactiveDebugSnapshot(now_tick);
     return;
+  }
+
+  {
+    float max_dv = 2000.0f * dt_s;
+    float max_dw = 1000.0f * dt_s;
+    vx_world_mm_s = AdvanceWorld_LimitFloat(vx_world_mm_s,
+        g_motion_control.command_vx_world_mm_s - max_dv,
+        g_motion_control.command_vx_world_mm_s + max_dv);
+    vy_world_mm_s = AdvanceWorld_LimitFloat(vy_world_mm_s,
+        g_motion_control.command_vy_world_mm_s - max_dv,
+        g_motion_control.command_vy_world_mm_s + max_dv);
+    wz_ccw_deg_s = AdvanceWorld_LimitFloat(wz_ccw_deg_s,
+        g_motion_control.command_wz_ccw_deg_s - max_dw,
+        g_motion_control.command_wz_ccw_deg_s + max_dw);
   }
 
   if (((position_required != 0U) &&
