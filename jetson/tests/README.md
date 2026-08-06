@@ -7,3 +7,5 @@
 ```powershell
 conda run -n low_numpy python -m pytest tests -q
 ```
+
+`test_hybrid_color.py` 覆盖 YOLO 候选框的 HSV 修正、不确定策略、EmptySlot 与跟踪调试字段；`test_protocol_client.py` 同时覆盖颜色后端选择、物料盘纯 YOLO 和目标 Payload 兼容性。

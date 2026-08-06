@@ -166,6 +166,7 @@ def _detect(frame_bgr: np.ndarray, model_path: Path) -> dict[str, list[dict[str,
                 "type": class_id,
                 "center": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
                 "confidence": float(_to_numpy(box.conf).reshape(-1)[0]),
+                "bbox": [int(x1), int(y1), int(x2), int(y2)],
             }
         )
     return {"detections": detections}
