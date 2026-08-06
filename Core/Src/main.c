@@ -59,7 +59,7 @@
 #define APP_ORIGIN_PERIOD_MS ((uint32_t)1000U)
 #define APP_LED_PERIOD_MS ((uint32_t)1500U)
 
-/* TIM6 是全部周期 Update 的唯一执行入口。 */
+/* TIM6 负责系统后台周期任务；阻塞式视觉伺服由其接口内部自行调度。 */
 
 /* USER CODE END PD */
 
@@ -128,12 +128,7 @@ static void App_RunTask(Competition_StartArea_t start_area) // 传入启停区�
 
   printf("[START] area=%u\r\n", (unsigned int)start_area);
   // 丝杆回零部分！！！
-  // if (!AdvanceArm_HomeBlocking())
-  // {
-  //   AdvanceArm_EStop();
-  //   printf("[ARM] home failed\r\n");
-  //   return;
-  // }
+  // AdvanceArm_LiftHomeBlocking();
   printf("[ARM] home success\r\n");
 
   char code[DETECT_QR_CODE_LENGTH + 1U] = {0};
@@ -250,16 +245,6 @@ static void App_TimerUpdate(void)
     AdvanceMotion_Update();
     /* 全向 pending 配置与控制轮廓也在固定 20 ms 边界推进。 */
     AdvanceHolonomic_Update();
-
-    switch (AdvanceControl_GetMode())
-    {
-    case ADVANCE_CONTROL_VISUAL:
-      AdvanceVisual_Update();
-      break;
-
-    default:
-      break;
-    }
   }
 
   if (++origin_elapsed_ms >= APP_ORIGIN_PERIOD_MS)
