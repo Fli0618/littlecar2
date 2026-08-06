@@ -39,5 +39,5 @@
 - `advance_arm` 的升降绝对位置运动必须先完成光电归零；反馈失效、堵转、故障、超时或非预期触发顶部光电时停止并清除归零状态。滑台不读取任何光电，依赖人工软件零点和 `ARM_SLIDE_POS_MAX`。
 - TIM6 是周期 Update 的唯一入口；主循环只运行一次顺序业务入口，之后以 `__WFI()` 等待中断。
 - 视觉通信使用 USART6 DMA + IDLE。业务层通过 `detect_color_start()`、`detect_circle_start()`、`detect_disk_center_start()`、`detect_qr_start()` 和 `detect_stop()` 控制服务，默认周期由 `DETECT_DEFAULT_PERIOD_MS` 配置为 40 ms。
-- `advance_visual` 提供 `AdvanceVisual_AlignColorBlocking()`、`AdvanceVisual_AlignDiskCenterBlocking()` 和 `AdvanceVisual_AlignCircleBlocking()` 三个业务接口。COLOR 使用 `detect_color_start()`/`detect_get_targets()`，CIRCLE 使用 `detect_circle_start()`/`detect_get_targets()`，DISK_CENTER 使用 `detect_disk_center_start()`/`detect_get_disk_center()`；三个接口共享同一套私有控制步骤、控制权、丢失和超时处理流程，并在阻塞接口内部以 20 ms 周期自调度，TIM6 不再推进视觉控制。
+- `advance_visual` 提供 `AdvanceVisual_AlignColorBlocking()`、`AdvanceVisual_AlignDiskCenterBlocking()` 和 `AdvanceVisual_AlignCircleBlocking()` 三个业务接口。COLOR 使用 `detect_color_start()`/`detect_get_targets()`，CIRCLE 使用 `detect_circle_start()`/`detect_get_targets()`，DISK_CENTER 使用 `detect_disk_center_start()`/`detect_get_disk_center()`；目标列表按任务类型过滤，首次按参考点最近目标锁定，后续在 120 像素门限内按上一锁定位置最近目标跟踪，8 像素内才使用置信度作次级判据。三个接口共享同一套私有控制步骤、控制权、丢失和超时处理流程，并在阻塞接口内部以 20 ms 周期自调度，TIM6 不再推进视觉控制。
 - 详细配置、参数含义与上板验收流程见 `MDK-ARM/docs/下位机闭环与安全修复说明.md`。
