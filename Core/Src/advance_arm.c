@@ -301,11 +301,27 @@ void AdvanceArm_GripperClose(void)
   AdvanceArm_Grab(true);
 }
 
-void AdvanceArm_RotateToPickup(void)
+void AdvanceArm_RotateOutwardCenter(void)
 {
   AdvanceArm_MoveServoBlocking(ARM_ROTATE_SERVO_ID,
                                ARM_ROTATE_ACC,
-                               ARM_ROTATE_POS_PICKUP,
+                               ARM_ROTATE_POS_OUTWARD_CENTER,
+                               ARM_ROTATE_SPEED);
+}
+
+void AdvanceArm_RotateOutwardLeft(void)
+{
+  AdvanceArm_MoveServoBlocking(ARM_ROTATE_SERVO_ID,
+                               ARM_ROTATE_ACC,
+                               ARM_ROTATE_POS_OUTWARD_LEFT,
+                               ARM_ROTATE_SPEED);
+}
+
+void AdvanceArm_RotateOutwardRight(void)
+{
+  AdvanceArm_MoveServoBlocking(ARM_ROTATE_SERVO_ID,
+                               ARM_ROTATE_ACC,
+                               ARM_ROTATE_POS_OUTWARD_RIGHT,
                                ARM_ROTATE_SPEED);
 }
 
