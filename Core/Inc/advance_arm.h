@@ -16,9 +16,9 @@ extern "C"
 #define ARM_LIFT_MOTOR_ID ((uint8_t)5U) /*!< 升降轴电机 ID。 */
 #define ARM_SLIDE_MOTOR_ID ((uint8_t)6U) /*!< 前后滑台电机 ID。 */
 
-/* 升降轴运动参数。 */
-#define ARM_LIFT_DOWN_DIRECTION ((uint8_t)0U) /*!< 升降轴下降方向。 */
-#define ARM_LIFT_UP_DIRECTION ((uint8_t)1U) /*!< 升降轴上升方向。 */
+/* 升降轴运动参数。只需标定上升方向，下降方向自动取反。 */
+#define ARM_LIFT_UP_DIRECTION ((uint8_t)1U) /*!< 升降轴上升方向，只允许设置为 0U 或 1U。 */
+#define ARM_LIFT_DOWN_DIRECTION ((uint8_t)(ARM_LIFT_UP_DIRECTION ^ 1U)) /*!< 升降轴下降方向。 */
 #define ARM_LIFT_ABSOLUTE_DIRECTION ARM_LIFT_DOWN_DIRECTION /*!< 升降轴绝对坐标正方向。 */
 #define ARM_LIFT_SPEED ((uint16_t)300U) /*!< 升降轴运动速度。 */
 #define ARM_LIFT_ACC ((uint8_t)10U) /*!< 升降轴加速度。 */
@@ -31,9 +31,9 @@ extern "C"
 #define ARM_LIFT_POS_TRAY ((uint32_t)0U) /*!< 小车自身物料盘高度。 */
 #define ARM_LIFT_POS_STACK ((uint32_t)0U) /*!< 码垛高度。 */
 
-/* 前后滑台运动参数。滑台不使用光电限位。 */
-#define ARM_SLIDE_EXTEND_DIRECTION ((uint8_t)0U) /*!< 滑台向外伸出方向。 */
-#define ARM_SLIDE_RETRACT_DIRECTION ((uint8_t)1U) /*!< 滑台向内收回方向。 */
+/* 前后滑台运动参数。滑台不使用光电限位，只需标定伸出方向。 */
+#define ARM_SLIDE_EXTEND_DIRECTION ((uint8_t)0U) /*!< 滑台向外伸出方向，只允许设置为 0U 或 1U。 */
+#define ARM_SLIDE_RETRACT_DIRECTION ((uint8_t)(ARM_SLIDE_EXTEND_DIRECTION ^ 1U)) /*!< 滑台向内收回方向。 */
 #define ARM_SLIDE_ABSOLUTE_DIRECTION ARM_SLIDE_EXTEND_DIRECTION /*!< 滑台绝对坐标正方向。 */
 #define ARM_SLIDE_SPEED ((uint16_t)300U) /*!< 滑台运动速度。 */
 #define ARM_SLIDE_ACC ((uint8_t)10U) /*!< 滑台加速度。 */
@@ -52,9 +52,9 @@ extern "C"
 #define ARM_HOME_CONFIRM_MS ((uint32_t)10U) /*!< 升降限位稳定确认时间。 */
 #define ARM_HOME_COMMAND_DELAY_MS ((uint32_t)100U) /*!< 停止、清零命令间隔。 */
 
-/* 步进轴阻塞运动参数。 */
-#define ARM_MOVE_TIMEOUT_MS ((uint32_t)5000U) /*!< 单次绝对位置运动超时。 */
-#define ARM_POSITION_TOLERANCE_PULSE ((int32_t)100) /*!< 到位允许误差。 */
+/* 步进轴阻塞运动保护参数。 */
+#define ARM_MOVE_TIMEOUT_MS ((uint32_t)5000U) /*!< 发出位置命令后最多等待 5000 ms，超时则停止电机并退出阻塞函数。 */
+#define ARM_POSITION_TOLERANCE_PULSE ((int32_t)100) /*!< 实际位置与目标位置误差不超过 100 脉冲时认为已经到位。 */
 
 /* 机械臂旋转舵机参数。 */
 #define ARM_ROTATE_SPEED ((uint16_t)500U)
