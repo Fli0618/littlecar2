@@ -474,10 +474,13 @@ static void AdvanceMotion_SavePidPose(const WorldPose2D_t *pose, uint32_t now_ti
       {
         float pose_dt_s = (float)pose_dt_ms / 1000.0f;
 
-        g_motion_control.measured_vx_world_mm_s =
-            (pose->x_mm - g_motion_control.pid_last_x_mm) / pose_dt_s;
-        g_motion_control.measured_vy_world_mm_s =
-            (pose->y_mm - g_motion_control.pid_last_y_mm) / pose_dt_s;
+        float raw_vx = (pose->x_mm - g_motion_control.pid_last_x_mm) / pose_dt_s;
+        float raw_vy = (pose->y_mm - g_motion_control.pid_last_y_mm) / pose_dt_s;
+        
+        g_motion_control.measured_vx_world_mm_s = 
+            (0.3f * raw_vx) + (0.7f * g_motion_control.measured_vx_world_mm_s);
+        g_motion_control.measured_vy_world_mm_s = 
+            (0.3f * raw_vy) + (0.7f * g_motion_control.measured_vy_world_mm_s);
       }
       g_motion_control.pid_last_x_mm = pose->x_mm;
       g_motion_control.pid_last_y_mm = pose->y_mm;
@@ -493,8 +496,10 @@ static void AdvanceMotion_SavePidPose(const WorldPose2D_t *pose, uint32_t now_ti
         float yaw_dt_s = (float)yaw_dt_ms / 1000.0f;
         float yaw_delta = AdvanceWorld_WrapAngleDeg(
             pose->yaw_deg - g_motion_control.pid_last_yaw_deg);
+        float raw_wz = yaw_delta / yaw_dt_s;
 
-        g_motion_control.measured_wz_deg_s = yaw_delta / yaw_dt_s;
+        g_motion_control.measured_wz_deg_s = 
+            (0.3f * raw_wz) + (0.7f * g_motion_control.measured_wz_deg_s);
       }
       g_motion_control.pid_last_yaw_deg = pose->yaw_deg;
       g_motion_control.last_yaw_updated_tick = pose->yaw_updated_tick;
