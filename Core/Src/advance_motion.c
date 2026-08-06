@@ -929,12 +929,16 @@ static void AdvanceMotion_SetPathLookaheadGoal(void)
                        (t * (g_path.points[index + 1U].x_mm - g_path.points[index].x_mm));
   g_motion.goal.y_mm = g_path.points[index].y_mm +
                        (t * (g_path.points[index + 1U].y_mm - g_path.points[index].y_mm));
-  g_path.feedforward_vx_mm_s =
-      ((g_path.points[index + 1U].x_mm - g_path.points[index].x_mm) / segment_length) *
-      g_path.reference_speed_mm_s;
-  g_path.feedforward_vy_mm_s =
-      ((g_path.points[index + 1U].y_mm - g_path.points[index].y_mm) / segment_length) *
-      g_path.reference_speed_mm_s;
+  {
+    uint16_t current_index = g_path.nearest_index;
+    float current_len = AdvanceMotion_GetPathSegmentLength(current_index);
+    g_path.feedforward_vx_mm_s =
+        ((g_path.points[current_index + 1U].x_mm - g_path.points[current_index].x_mm) / current_len) *
+        g_path.reference_speed_mm_s;
+    g_path.feedforward_vy_mm_s =
+        ((g_path.points[current_index + 1U].y_mm - g_path.points[current_index].y_mm) / current_len) *
+        g_path.reference_speed_mm_s;
+  }
 
   /* 算法改进：末段前馈二次方光滑平滑衰减，消除进站冲击与过冲 */
   ramp_zone_mm = fmaxf(2.0f * g_path_config_active.final_capture_distance_mm, 120.0f);
