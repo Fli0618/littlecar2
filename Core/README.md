@@ -24,7 +24,7 @@
 - `sensor_limit`：PC0~PC3 四路光电限位读取模块；只提供原始电平读取和有效状态判断，不负责 GPIO 初始化、中断或电机控制。
 - `advance_chassis`：基于 `drive_emm` 的麦克纳姆底盘高级运动接口。
 - `advance_control`：维护 `NONE/WORLD/VISUAL` 单一底盘控制权，并向高级控制器返回申请结果。
-- `advance_visual`：基于 Jetson 新实测目标的二维车体速度 P 控制；像素误差先按 `ADVANCE_VISUAL_CAMERA_ROTATION` 旋转到车体坐标，再应用 `ADVANCE_VISUAL_BODY_X_SIGN/Y_SIGN`、死区、P 增益和限幅；提供阻塞式对齐接口，接口内部每 20 ms 自调度 `AdvanceVisual_Update()`，在 `VISUAL` 控制权下推进，不再由 `main.c` 或 TIM6 调度。默认相机旋转角为 0 度，定义 `ADVANCE_VISUAL_TEST` 可在初始化时执行四种正交映射自检。
+- `advance_visual`：基于 Jetson 新实测目标的二维车体速度 P 控制；像素误差先按 `ADVANCE_VISUAL_CAMERA_ROTATION` 旋转到车体坐标，再应用 `ADVANCE_VISUAL_BODY_X_SIGN/Y_SIGN`、死区、P 增益和限幅；提供阻塞式对齐接口，接口内部每 20 ms 自调度私有控制步骤，在 `VISUAL` 控制权下推进，不再由 `main.c` 或 TIM6 调度。默认相机旋转角为 0 度，定义 `ADVANCE_VISUAL_TEST` 可在初始化时执行四种正交映射自检。
 - `advance_world`：维护 world 坐标系、全局位姿和 world/base 速度变换。
 - `advance_motion`：世界速度、`GotoPose` 与连续路径异步状态机；`FollowPathEx()` 直接引用调用方长期持有的离散路径数组，中段以动态前视切向前馈和投影 PD 连续通过软途经点，满足末端距离及参考/实测速度条件后切换到 Goto PID 精确停车，并在到达容差保持后发送底盘硬停止清除残余漂移；由 `main.c` 每 20 ms 调度。组合 GOTO 的大航向误差先对准策略由 `advance_motion.h` 的默认宏决定，并可在空闲状态由调参工具临时切换。
 - `drive_emm` 的 DMA 队列和反馈监督由 `main.c` 每 10 ms 调度，周期定义为 `DRIVE_EMM_UPDATE_PERIOD_MS`；该周期独立于 20 ms 底盘闭环周期。
@@ -39,5 +39,5 @@
 - `advance_arm` 不读取机械臂限位或电机反馈；Pick/Place 以固定顺序完成五个 1000 ms 原子动作，不能证明机械机构实际到位。
 - TIM6 是通信、传感器、世界位姿和底盘等后台周期 Update 的入口；视觉阻塞接口在自身内部按 20 ms 自调度，不依赖 TIM6。主循环只运行一次顺序业务入口，之后以 `__WFI()` 等待中断。
 - 视觉通信使用 USART6 DMA + IDLE。业务层通过 `detect_color_start()`、`detect_circle_start()`、`detect_disk_center_start()`、`detect_qr_start()` 和 `detect_stop()` 控制服务，默认周期由 `DETECT_DEFAULT_PERIOD_MS` 配置为 40 ms。
-- `advance_visual` 提供 `AdvanceVisual_AlignColorBlocking()`、`AdvanceVisual_AlignDiskCenterBlocking()` 和 `AdvanceVisual_AlignCircleBlocking()` 三个业务接口。COLOR 使用 `detect_color_start()`/`detect_get_targets()`，CIRCLE 使用 `detect_circle_start()`/`detect_get_targets()`，DISK_CENTER 使用 `detect_disk_center_start()`/`detect_get_disk_center()`；三个接口共享同一套 `AdvanceVisual_Update()`、控制权、丢失和超时处理流程，并在阻塞接口内部以 20 ms 周期自调度，TIM6 不再调用视觉 Update。
+- `advance_visual` 提供 `AdvanceVisual_AlignColorBlocking()`、`AdvanceVisual_AlignDiskCenterBlocking()` 和 `AdvanceVisual_AlignCircleBlocking()` 三个业务接口。COLOR 使用 `detect_color_start()`/`detect_get_targets()`，CIRCLE 使用 `detect_circle_start()`/`detect_get_targets()`，DISK_CENTER 使用 `detect_disk_center_start()`/`detect_get_disk_center()`；三个接口共享同一套私有控制步骤、控制权、丢失和超时处理流程，并在阻塞接口内部以 20 ms 周期自调度，TIM6 不再推进视觉控制。
 - 详细配置、参数含义与上板验收流程见 `MDK-ARM/docs/下位机闭环与安全修复说明.md`。
