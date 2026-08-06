@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+*.egg-info/
 runs/
 outputs/
 *.engine
@@ -15,3 +16,4 @@ assets/物料盘/
 assets/二维码/
 assets/circle_with_number_v2/
 assets/circle_with_number_v3/
+assets/物料照片数据集/
