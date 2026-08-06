@@ -1,5 +1,7 @@
 # Core/Src 目录说明
 
+`sensor_limit.c` 只读取 `LIFT_UP_LIMIT_GPIO_Port`/`LIFT_UP_LIMIT_Pin`，为升降轴顶部归零提供原始电平和有效状态接口；其余 CubeMX 限位宏不进入业务逻辑。`advance_arm.c` 使用该接口完成阻塞式归零，并以反馈位置和 `ARM_LIFT_POS_MAX` 实施升降软件行程保护。
+
 `AdvanceWorld_ResetOrigin()` 在 OPS 航向模式仅依赖新鲜 OPS 数据，在 WIT 航向模式额外要求新鲜 WIT 航向；重置先使用局部候选状态完成计算，失败不会清除已建立的原点或世界位姿。`advance_motion.c` 对位置、位姿和路径控制同时校验 OPS 位置与当前航向时间戳，且当前航向的有效位与 OPS/WIT 各自的更新时间戳成对读取，航向超时时进入安全停止。
 
 `advance_test.c` 包含现场调试入口。`Test_MMCL()` 会使用当前底盘四个电机验证多电机速度命令的批量装载、广播发送、同步启动、正反转、停止和失能流程。调用前必须将车辆架空，并准备断电或急停措施；该函数不会自动接入启动流程。`AdvanceTest_VerifyYawSourceFreshness()` 仅在运动控制非活动时切换 OPS/WIT 航向源，等待既有周期任务刷新快照后输出 `POSE_FRESH`、`YAW_FRESH` 与 `VALID` 标志，并恢复原航向源。

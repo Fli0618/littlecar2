@@ -149,15 +149,15 @@ STM32 是任务主控，Jetson 是 USART6 上的视觉服务端。STM32 使用 `
 - 安全规则：盘中心零支持点固定为无目标和 `(0, 0)`，业务层不得仅凭预测结果判定到达。
 - 回调与调度接口：`CommJetson_Init()`、`CommJetson_Update()`、`CommJetson_OnUartRxEvent()`、`CommJetson_OnUartError()` 和 `CommJetson_OnUartTxComplete()` 仅供 `main.c` 的 USART6 初始化、TIM6 调度和 HAL 回调分发使用。
 
-### 4.9 机械臂双轴归零与绝对位置控制
+### 4.9 机械臂单光电升降归零与绝对位置控制
 
-- 升降轴使用 ID 5，顶部光电限位为绝对坐标零点，向下为正方向；滑台轴使用 ID 6，后部光电限位为零点，向前为正方向。
+- 升降轴使用 ID 5，只有顶部光电作为绝对坐标零点，向下为正方向；滑台轴使用 ID 6，继续使用人工建立的软件零点并向前为正方向，不读取任何光电。
 - `AdvanceArm_Init()` 只复位软件归零状态并注册 ID 5、6 的反馈监测。TIM6 启动后持续调用 `drive_emm_Update()`，因此阻塞归零与位置运动只能在 TIM6 已启动后执行。
-- `AdvanceArm_HomeBlocking()` 固定先归零升降轴，再归零滑台轴。轴已经压住零点限位时，先确认反向运动对应的对侧限位未触发，再低速反向释放；释放过程中对侧限位触发会立即停止并使本轴归零失败。随后向零点方向搜索并进行 10 ms 二次确认；停止并发送当前位置清零命令后，才设置对应轴的归零状态。
-- `AdvanceArm_MoveLiftToBlocking(position_pulse)` 与 `AdvanceArm_MoveSlideToBlocking(position_pulse)` 只接收相对零点的绝对脉冲坐标。调用前必须完成对应轴归零，且目标不得超过各轴 `*_POS_MAX`。
-- 绝对位置命令使用固定正坐标方向；限位保护依据目标坐标和当前位置反馈判断实际运动方向，仅监测该方向对应的一个限位。触发限位时停止对应轴并返回 `ADVANCE_ARM_MOVE_LIMIT_REACHED`。
-- 反馈失效、堵转、故障或运动超时时，停止对应轴并清除该轴归零状态；普通 `AdvanceArm_Stop()` 不清除归零状态，`AdvanceArm_EStop()` 清除两个轴的归零状态。
-- 业务坐标宏保留原有分组与顺序，当前为 `0U` 占位。必须完成实机标定后才能用于取放等组合动作。
+- `AdvanceArm_LiftHomeBlocking()` 在顶部光电已触发时先向下低速释放，仅使用释放超时保护；随后向顶部搜索并进行 10 ms 稳定确认。停止、发送当前位置清零命令并等待完成后，才设置升降轴归零状态。
+- `AdvanceArm_MoveLiftToBlocking(position_pulse)` 只接收相对顶部零点的绝对脉冲坐标，调用前必须完成升降归零，且目标不得超过 `ARM_LIFT_POS_MAX`。远离零点时不读取远端光电；朝零点运动时触发顶部光电会按目标是否接近零点分别完成清零或判定归零失效。
+- `AdvanceArm_MoveSlideToBlocking(position_pulse)` 继续使用人工软件零点和 `ARM_SLIDE_POS_MAX`，不接入 `LIFT_DOWN_LIMIT_*`、`SLIDE_FRONT_LIMIT_*` 或 `SLIDE_REAR_LIMIT_*`。
+- 反馈失效、堵转、故障或运动超时时，停止对应轴并清除升降归零状态；普通 `AdvanceArm_Stop()` 不清除归零状态，`AdvanceArm_EStop()` 清除升降归零状态。
+- 业务坐标宏保留原有分组与顺序，当前为 `0U` 占位。`ARM_LIFT_POS_MAX` 和所有升降固定点位必须完成实机标定，并保持在 `0..ARM_LIFT_POS_MAX` 范围内。
 
 ## 5. 主循环与回调边界
 
