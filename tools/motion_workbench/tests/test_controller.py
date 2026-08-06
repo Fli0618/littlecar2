@@ -4,7 +4,7 @@ import unittest
 
 from PySide6.QtCore import QObject, Signal
 
-from pid_tuner.models import MotionGoal, Telemetry
+from pid_tuner.models import HolonomicTelemetry, MotionGoal, Telemetry
 from map_planner.models import (BezierPathSegment, ContinuousPathSegment, PathPosePoint, Plan,
                                 RotateInPlace, StepTurnNode, StepTurnPathSegment, Waypoint)
 
@@ -15,6 +15,7 @@ from motion_workbench.models import (CoordinateSyncState, PathUploadState, PlanE
 
 class FakeSession(QObject):
     telemetry = Signal(object)
+    holonomic_telemetry = Signal(object)
     motion_changed = Signal(bool)
     status = Signal(str)
     failure = Signal(str)
@@ -25,6 +26,7 @@ class FakeSession(QObject):
         self.connected = True; self.motion_active = False
 
     def start_motion(self, goal: MotionGoal) -> None: self.started.append(goal)
+    def start_holonomic_motion(self, goal: MotionGoal) -> None: self.started.append(goal)
     def stop(self) -> None: self.stopped += 1
     def upload_path(self, begin, chunks, commit) -> None: self.uploaded.append((begin, chunks, commit))
     def start_path(self, command) -> None: self.paths_started.append(command)
@@ -52,6 +54,59 @@ class ControllerTests(unittest.TestCase):
         session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
         controller.select_candidate(TargetPose(10, 20, 30))
         self.assertEqual(session.started, [])
+
+    def test_classic_telemetry_updates_shared_pose_without_overwriting_holonomic_error(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        controller.select_candidate(TargetPose(10, 20, 30))
+        controller.start_goal(MotionGoal(10, 20, 30, 100, 50, 1000), controller="holonomic")
+        session.holonomic_telemetry.emit(self._holonomic_telemetry(error=(9.0, 8.0, 7.0)))
+
+        session.telemetry.emit(self._telemetry(1, actual=(40.0, 50.0, 60.0), error=(1.0, 2.0, 3.0)))
+
+        self.assertEqual(controller.actual, TargetPose(40.0, 50.0, 60.0))
+        self.assertTrue(controller._pose_valid)
+        self.assertEqual(controller._last_error, (9.0, 8.0, 7.0))
+
+    def test_holonomic_to_waypoint_uses_classic_terminal(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        self._finish_holonomic(controller, session)
+        controller.set_plan(Plan(steps=[Waypoint(10, 20, 30)]))
+
+        self.assertTrue(controller.start_single(0))
+        self.assertEqual(controller._active_controller, "classic")
+        session.telemetry.emit(self._telemetry(2))
+        self.assertEqual(controller.plan_execution.state, PlanExecutionState.COMPLETED)
+
+    def test_holonomic_to_full_plan_completes_from_classic_terminals(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        self._finish_holonomic(controller, session)
+        controller.set_plan(Plan(steps=[Waypoint(10, 20, 30), RotateInPlace(90)]))
+
+        self.assertTrue(controller.start_full_plan())
+        self.assertEqual(controller._active_controller, "classic")
+        session.telemetry.emit(self._telemetry(2))
+        session.telemetry.emit(self._telemetry(2))
+        self.assertEqual(controller.plan_execution.state, PlanExecutionState.COMPLETED)
+
+    def test_holonomic_to_path_marks_classic_controller(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        self._finish_holonomic(controller, session)
+        points = [PathPosePoint(0, 0, 0), PathPosePoint(100, 0, 0)]
+        controller.upload_path(9, points)
+        controller.path_committed(9)
+        controller.start_path(9)
+
+        self.assertEqual(controller._active_controller, "classic")
+
+    def test_holonomic_to_reset_origin_accepts_classic_zero_telemetry(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        self._finish_holonomic(controller, session)
+        controller.set_map_calibrated(True)
+        self.assertTrue(controller.start_origin_reset())
+        controller.confirm_origin_reset()
+        self.assertEqual(controller._active_controller, "classic")
+        session.telemetry.emit(self._telemetry(1, actual=(0.0, 0.0, 0.0)))
+        self.assertEqual(controller.coordinate_sync_state, CoordinateSyncState.SYNCED)
 
     def test_actual_trace_uses_valid_telemetry_only(self) -> None:
         session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
@@ -183,5 +238,19 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(controller.coordinate_sync_state, CoordinateSyncState.SYNCED)
 
     @staticmethod
-    def _telemetry(state: int) -> Telemetry:
-        return Telemetry(1, 0, 0, state, 0x03, (0, 0, 0), (0, 0, 0), (0, 0, 0), (0, 0, 0), (0, 0, 0), (0, 0, 0))
+    def _telemetry(state: int, actual=(0.0, 0.0, 0.0), error=(0.0, 0.0, 0.0)) -> Telemetry:
+        return Telemetry(1, 0, 0, state, 0x03, (0, 0, 0), actual, error,
+                         (0, 0, 0), (0, 0, 0), (0, 0, 0))
+
+    @staticmethod
+    def _holonomic_telemetry(state: int = 3, error=(0.0, 0.0, 0.0)) -> HolonomicTelemetry:
+        return HolonomicTelemetry(
+            1, 0, state, 0x04, 0,
+            (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), error,
+            (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.0, 0.0, 0.0)
+
+    @classmethod
+    def _finish_holonomic(cls, controller: MotionWorkbenchController, session: FakeSession) -> None:
+        controller.select_candidate(TargetPose(10, 20, 30))
+        controller.start_goal(MotionGoal(10, 20, 30, 100, 50, 1000), controller="holonomic")
+        session.holonomic_telemetry.emit(cls._holonomic_telemetry())
