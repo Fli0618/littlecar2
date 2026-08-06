@@ -79,7 +79,7 @@ class ControlPanelTests(unittest.TestCase):
             self.assertFalse(panel.apply_pid.isEnabled())
             self.assertFalse(panel.restore_pid.isEnabled())
             panel.set_connected(True)
-            self.assertEqual(panel.current_pid(), PidConfig(1.5, 0.10, 0.78, 2.50, 1.0, 0.80))
+            self.assertEqual(panel.current_pid(), PidConfig(1.36, 0.14, 0.91, 2.56, 1.0, 0.80))
             self.assertTrue(all(box.minimum() == 0.0 and box.maximum() == 20.0 for box in panel.pid))
             panel.set_goto_strategy(True)
             self.assertTrue(panel.large_yaw_align.isChecked())

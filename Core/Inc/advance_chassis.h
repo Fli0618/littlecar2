@@ -28,7 +28,7 @@ extern "C"
 #define CHASSIS_MOTOR_LR_SIGN (1)
 #define CHASSIS_MOTOR_RR_SIGN (-1)
 
-#define CHASSIS_DEFAULT_ACC ((uint8_t)30U)           /*!< 底盘默认加速度参数。 */
+#define CHASSIS_DEFAULT_ACC ((uint8_t)0U)            /*!< 底盘默认加速度参数。0 表示由上层软件完全接管加减速，电机硬件立即响应。 */
 #define CHASSIS_SYNC_ADDR ((uint8_t)0x00U)           /*!< 四轮同步控制地址。 */
 #define CHASSIS_MAX_RPM ((uint16_t)3000U)            /*!< 底盘轮速上限，单位为 RPM。 */
 #define CHASSIS_UART_WAIT_TIMEOUT_MS ((uint32_t)20U) /*!< 串口发送等待超时时间，单位为 ms。 */

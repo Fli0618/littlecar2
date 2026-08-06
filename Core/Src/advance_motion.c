@@ -826,6 +826,13 @@ static float AdvanceMotion_GetPathSpeedLimit(void)
       (g_path_config_active.final_capture_speed_mm_s *
        g_path_config_active.final_capture_speed_mm_s) +
       (2.0f * g_path_config_active.decel_mm_s2 * braking_distance));
+
+  /* 算法改进：在捕获区内部，速度上限随剩余距离线性平滑衰减至 0，实现真正的零速到站 */
+  if (g_path.remaining_mm <= g_path_config_active.final_capture_distance_mm)
+  {
+    float ratio = g_path.remaining_mm / fmaxf(g_path_config_active.final_capture_distance_mm, 1.0f);
+    final_speed = fminf(final_speed, g_path_config_active.final_capture_speed_mm_s * AdvanceWorld_LimitFloat(ratio, 0.0f, 1.0f));
+  }
   float cross_track_abs_mm = AdvanceMotion_AbsFloat(g_path.cross_track_mm);
   float recovery_speed = g_path_config_active.cruise_speed_mm_s;
 
@@ -855,9 +862,18 @@ static void AdvanceMotion_UpdatePathLookahead(float dt_s)
                   g_path.reference_speed_mm_s) -
                  (g_path_config_active.lookahead_curve_gain_mm * curvature_ratio);
   float max_delta = g_path_config_active.lookahead_rate_mm_s * dt_s;
+  float effective_min_lookahead;
+
+  /* 算法改进：临近终点时，前视下限必须随 remaining_mm 平滑收缩，防止前视超前拉拽过冲 */
+  if (g_path.remaining_mm < target)
+  {
+    target = fmaxf(g_path.remaining_mm, 15.0f);
+  }
+  effective_min_lookahead = fminf(g_path_config_active.lookahead_min_mm,
+                                  fmaxf(g_path.remaining_mm, 15.0f));
 
   target = AdvanceWorld_LimitFloat(target,
-                                   g_path_config_active.lookahead_min_mm,
+                                   effective_min_lookahead,
                                    g_path_config_active.lookahead_max_mm);
   g_path.lookahead_mm = AdvanceWorld_LimitFloat(
       target, g_path.lookahead_mm - max_delta, g_path.lookahead_mm + max_delta);
@@ -870,6 +886,8 @@ static void AdvanceMotion_SetPathLookaheadGoal(void)
   float distance_mm = g_path.lookahead_mm;
   float available_mm = (1.0f - g_path.progress_on_segment) * segment_length;
   float t;
+  float ramp_zone_mm;
+  float ff_scale;
 
   if (distance_mm <= available_mm)
   {
@@ -912,6 +930,17 @@ static void AdvanceMotion_SetPathLookaheadGoal(void)
   g_path.feedforward_vy_mm_s =
       ((g_path.points[index + 1U].y_mm - g_path.points[index].y_mm) / segment_length) *
       g_path.reference_speed_mm_s;
+
+  /* 算法改进：末段前馈二次方光滑平滑衰减，消除进站冲击与过冲 */
+  ramp_zone_mm = fmaxf(2.0f * g_path_config_active.final_capture_distance_mm, 120.0f);
+  ff_scale = 1.0f;
+  if (g_path.remaining_mm < ramp_zone_mm)
+  {
+    float ratio = fmaxf(g_path.remaining_mm / ramp_zone_mm, 0.0f);
+    ff_scale = ratio * ratio;
+  }
+  g_path.feedforward_vx_mm_s *= ff_scale;
+  g_path.feedforward_vy_mm_s *= ff_scale;
 }
 
 static void AdvanceMotion_UpdatePathReference(uint32_t now_tick)
@@ -925,7 +954,6 @@ static void AdvanceMotion_UpdatePathReference(uint32_t now_tick)
   float reference_dt_s = (float)(now_tick - g_path.reference_tick) / 1000.0f;
   float target_speed;
   float speed_delta;
-  float measured_speed;
 
   end_index = search_start_index + ADVANCE_MOTION_PATH_SEARCH_SEGMENTS;
   if ((end_index < search_start_index) ||
@@ -1008,13 +1036,10 @@ static void AdvanceMotion_UpdatePathReference(uint32_t now_tick)
       g_path.yaw_gradient_deg_per_mm * g_path.reference_speed_mm_s;
   g_path.reference_tick = now_tick;
 
-  measured_speed = sqrtf(
-      (g_motion_control.measured_vx_world_mm_s * g_motion_control.measured_vx_world_mm_s) +
-      (g_motion_control.measured_vy_world_mm_s * g_motion_control.measured_vy_world_mm_s));
   if ((g_path.final_stage == 0U) &&
-      (g_path.remaining_mm <= g_path_config_active.final_capture_distance_mm) &&
-      (g_path.reference_speed_mm_s <= g_path_config_active.final_capture_speed_mm_s) &&
-      (measured_speed <= g_path_config_active.final_capture_speed_mm_s))
+      ((g_path.remaining_mm <= 0.0f) ||
+       ((g_path.remaining_mm <= g_path_config_active.final_capture_distance_mm) &&
+        (g_path.reference_speed_mm_s <= g_path_config_active.final_capture_speed_mm_s))))
   {
     g_path.final_stage = 1U;
     g_motion_control.pid_integral_x_mm_s = 0.0f;
@@ -1702,7 +1727,9 @@ void AdvanceMotion_Update(void)
       vy_world_mm_s = (g_pid_active.kp_pos * g_motion.error_y_mm) +
                       (g_pid_active.ki_pos * g_motion_control.pid_integral_y_mm_s) -
                       (g_pid_active.kd_pos * g_motion_control.measured_vy_world_mm_s);
-      vmax_mm_s = AdvanceMotion_GetGoalVmax(&g_motion.goal);
+      vmax_mm_s = (g_path.active != 0U)
+                      ? g_path_config_active.final_capture_speed_mm_s
+                      : AdvanceMotion_GetGoalVmax(&g_motion.goal);
       if ((g_motion_control.large_yaw_align_enabled != 0U) && (yaw_required != 0U))
       {
         vmax_mm_s *= AdvanceMotion_GetLargeYawAlignLinearScale(g_motion.yaw_error_deg);

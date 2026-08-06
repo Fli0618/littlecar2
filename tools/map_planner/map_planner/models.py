@@ -136,9 +136,9 @@ class CostmapSettings:
     platform_safety_margin_mm: float = 20.0
     # ``platform_*`` is the soft cost inside the rectangle joining the four
     # outer platform corners; outer values apply only outside that rectangle.
-    platform_inflation_mm: float = 20.0
+    platform_inflation_mm: float = 30.0
     platform_cost_weight: float = 3.0
-    platform_outer_inflation_mm: float = 240.0
+    platform_outer_inflation_mm: float = 260.0
     platform_outer_cost_weight: float = 3.8
     obstacle_radius_mm: float = 25.0
     obstacle_safety_margin_mm: float = 20.0

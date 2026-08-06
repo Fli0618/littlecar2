@@ -23,15 +23,33 @@ class FakeSession(QObject):
     def __init__(self) -> None:
         super().__init__(); self.started: list[MotionGoal] = []; self.stopped = 0
         self.uploaded = []; self.paths_started = []
-        self.connected = True; self.motion_active = False
+        self.holonomic_started: list[MotionGoal] = []
+        self.connected = True; self.motion_active = False; self.auto_accept_motion = True
+        self.telemetry.connect(self._track_terminal_motion)
+        self.holonomic_telemetry.connect(self._track_holonomic_terminal_motion)
 
-    def start_motion(self, goal: MotionGoal) -> None: self.started.append(goal)
-    def start_holonomic_motion(self, goal: MotionGoal) -> None: self.started.append(goal)
+    def _track_terminal_motion(self, item: Telemetry) -> None:
+        if item.state not in (0, 1):
+            self.motion_active = False; self.motion_changed.emit(False)
+
+    def _track_holonomic_terminal_motion(self, item: HolonomicTelemetry) -> None:
+        if item.state not in (0, 1, 2):
+            self.motion_active = False; self.motion_changed.emit(False)
+
+    def _accept_motion(self) -> None:
+        self.motion_active = True; self.motion_changed.emit(True)
+    def start_motion(self, goal: MotionGoal) -> None:
+        self.started.append(goal)
+        if self.auto_accept_motion: self._accept_motion()
+    def start_holonomic_motion(self, goal: MotionGoal) -> None:
+        self.started.append(goal); self.holonomic_started.append(goal)
+        if self.auto_accept_motion: self._accept_motion()
     def stop(self) -> None: self.stopped += 1
     def upload_path(self, begin, chunks, commit) -> None: self.uploaded.append((begin, chunks, commit))
     def start_path(self, command) -> None: self.paths_started.append(command)
     def upload_and_start_path(self, begin, chunks, commit, start) -> None:
         self.upload_path(begin, chunks, commit); self.start_path(start)
+        if self.auto_accept_motion: self._accept_motion()
     def reset_origin(self) -> None: pass
 
 
@@ -169,6 +187,54 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(len(session.uploaded), 2)
         self.assertEqual(len(session.paths_started), 2)
 
+    def test_path_to_terminal_rotation_ignores_stale_arrived_until_command_is_accepted(self) -> None:
+        session = FakeSession(); session.auto_accept_motion = False
+        controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        controller.set_plan(Plan(steps=[
+            ContinuousPathSegment([PathPosePoint(0, 0, 0), PathPosePoint(100, 0, 45)]),
+            RotateInPlace(90),
+        ]))
+
+        self.assertTrue(controller.start_continuous(0))
+        session._accept_motion()
+        session.telemetry.emit(self._telemetry(2))
+        self.assertEqual(len(session.started), 1)
+        self.assertEqual(controller.plan_execution.cursor, 1)
+
+        # The old path terminal state can remain in telemetry while the queued
+        # GOTO-yaw request is awaiting its ACK.  It must not finish the turn.
+        session.telemetry.emit(self._telemetry(2))
+        self.assertEqual(controller.plan_execution.cursor, 1)
+        self.assertEqual(controller.plan_execution.state, PlanExecutionState.RUNNING)
+
+        session._accept_motion()
+        session.telemetry.emit(self._telemetry(1))
+        session.telemetry.emit(self._telemetry(2))
+        self.assertEqual(controller.plan_execution.state, PlanExecutionState.COMPLETED)
+
+    def test_plan_point_controller_can_use_holonomic_for_waypoints_and_turns(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        controller.set_plan_point_controller("holonomic")
+        controller.set_plan(Plan(steps=[Waypoint(10, 20, 30), RotateInPlace(90)]))
+
+        self.assertTrue(controller.start_continuous(0))
+        self.assertEqual(len(session.holonomic_started), 1)
+        session.holonomic_telemetry.emit(self._holonomic_telemetry(3))
+        self.assertEqual(len(session.holonomic_started), 2)
+        session.holonomic_telemetry.emit(self._holonomic_telemetry(3))
+        self.assertEqual(controller.plan_execution.state, PlanExecutionState.COMPLETED)
+
+    def test_continuous_path_stays_on_path_controller_when_points_use_holonomic(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        controller.set_plan_point_controller("holonomic")
+        points = [PathPosePoint(0, 0, 0), PathPosePoint(100, 0, 0)]
+        controller.set_plan(Plan(steps=[ContinuousPathSegment(points)]))
+
+        self.assertTrue(controller.start_single(0))
+        self.assertEqual(controller._active_controller, "classic")
+        self.assertEqual(len(session.holonomic_started), 0)
+        self.assertEqual(len(session.paths_started), 1)
+
     def test_step_turn_uploads_once_and_starts_one_path(self) -> None:
         session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
         controller.set_plan(Plan(steps=[StepTurnPathSegment(
@@ -236,6 +302,20 @@ class ControllerTests(unittest.TestCase):
         controller.confirm_origin_reset()
         session.telemetry.emit(self._telemetry(1))
         self.assertEqual(controller.coordinate_sync_state, CoordinateSyncState.SYNCED)
+
+    def test_existing_board_zero_telemetry_restores_sync_without_another_reset(self) -> None:
+        session = FakeSession(); controller = MotionWorkbenchController(session)  # type: ignore[arg-type]
+        controller.set_map_calibrated(True)
+
+        session.telemetry.emit(self._telemetry(1, actual=(100.0, 0.0, 0.0)))
+        self.assertEqual(controller.coordinate_sync_state,
+                         CoordinateSyncState.BOARD_ORIGIN_UNKNOWN)
+        self.assertIsNotNone(controller.map_execution_block_reason())
+
+        session.telemetry.emit(self._telemetry(1, actual=(8.0, -6.0, 1.0)))
+
+        self.assertEqual(controller.coordinate_sync_state, CoordinateSyncState.SYNCED)
+        self.assertIsNone(controller.map_execution_block_reason())
 
     @staticmethod
     def _telemetry(state: int, actual=(0.0, 0.0, 0.0), error=(0.0, 0.0, 0.0)) -> Telemetry:

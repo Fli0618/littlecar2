@@ -90,7 +90,7 @@ class WorkbenchPidControlPanel(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        defaults = (1.5, 0.10, 0.78, 2.50, 1.0, 0.80)
+        defaults = (1.36, 0.14, 0.91, 2.56, 1.0, 0.80)
         self.pid = [protected_number(value, 0.0, 20.0, 0.01) for value in defaults]
         self.read_pid = QPushButton("读取 PID")
         self.apply_pid = QPushButton("应用 PID")

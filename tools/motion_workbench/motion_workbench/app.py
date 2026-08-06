@@ -26,32 +26,25 @@ from .control_panel import (
     protected_number,
 )
 from .controller import MotionWorkbenchController
-from .models import (CoordinateSyncState, PathUploadSnapshot, PlanExecutionState,
-                     TargetPose)
+from .models import CoordinateSyncState, PathUploadSnapshot, TargetPose
 
 MOTION_WORKBENCH_REFRESH_MS = 40
 
 
 class PathControlPanel(QWidget):
-    """Small path command surface; serialization remains in the controller layer."""
+    """Continuous-path parameter editor; execution lives in the realtime map page."""
 
-    upload_requested = Signal()
-    start_requested = Signal()
-    abort_requested = Signal()
     read_config_requested = Signal()
     apply_config_requested = Signal(object)
     restore_config_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
-        self.upload = QPushButton("同步完整方案")
-        self.start = QPushButton("启动完整路径")
-        self.abort = QPushButton("停止完整路径")
-        self.status = QLabel("完整方案尚未同步")
+        self._pending_config_action: str | None = None
         layout = QVBoxLayout(self)
-        command_form = QFormLayout()
-        command_form.addRow(self.upload); command_form.addRow(self.start); command_form.addRow(self.abort); command_form.addRow("状态", self.status)
-        layout.addLayout(command_form)
+        hint = QLabel("本页只管理路径控制参数；实机执行统一在“3 实时运行”中操作。")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         self.config_inputs: dict[str, QDoubleSpinBox] = {}
         groups = (
             ("路径 PD", (
@@ -61,28 +54,28 @@ class PathControlPanel(QWidget):
                 ("kd_yaw_rate", "航向角速度 Kd", 0.427, 0.0, 20.0, 0.01),
             )),
             ("速度规划", (
-                ("cruise_speed_mm_s", "巡航速度 mm/s", 820.0, 1.0, 1500.0, 10.0),
+                ("cruise_speed_mm_s", "巡航速度 mm/s", 600.0, 1.0, 1500.0, 10.0),
                 ("max_yaw_rate_deg_s", "最大角速度 deg/s", 100.0, 1.0, 180.0, 5.0),
-                ("accel_mm_s2", "加速度 mm/s²", 800.0, 1.0, 5000.0, 10.0),
-                ("decel_mm_s2", "减速度 mm/s²", 1000.0, 1.0, 5000.0, 10.0),
-                ("max_lateral_accel_mm_s2", "横向加速度 mm/s²", 600.0, 1.0, 5000.0, 10.0),
+                ("accel_mm_s2", "加速度 mm/s²", 450.0, 1.0, 5000.0, 10.0),
+                ("decel_mm_s2", "减速度 mm/s²", 650.0, 1.0, 5000.0, 10.0),
+                ("max_lateral_accel_mm_s2", "横向加速度 mm/s²", 240.0, 1.0, 5000.0, 10.0),
             )),
             ("曲率前馈", (
-                ("curvature_preview_mm", "曲率预览 mm", 300.0, 1.0, 2000.0, 5.0),
+                ("curvature_preview_mm", "曲率预览 mm", 450.0, 1.0, 2000.0, 5.0),
                 ("curvature_ff_time_s", "曲率前馈等效时间 s", 0.05, 0.0, 2.0, 0.01),
             )),
             ("前视规划", (
-                ("lookahead_min_mm", "最小前视 mm", 60.0, 1.0, 1000.0, 5.0),
-                ("lookahead_base_mm", "基础前视 mm", 60.0, 1.0, 1000.0, 5.0),
+                ("lookahead_min_mm", "最小前视 mm", 90.0, 1.0, 1000.0, 5.0),
+                ("lookahead_base_mm", "基础前视 mm", 90.0, 1.0, 1000.0, 5.0),
                 ("lookahead_speed_gain_s", "速度增益 s", 0.15, 0.0, 2.0, 0.01),
                 ("lookahead_curve_gain_mm", "曲率增益 mm", 120.0, 0.0, 1000.0, 5.0),
-                ("lookahead_max_mm", "最大前视 mm", 180.0, 1.0, 1000.0, 5.0),
+                ("lookahead_max_mm", "最大前视 mm", 220.0, 1.0, 1000.0, 5.0),
                 ("lookahead_rate_mm_s", "前视变化率 mm/s", 400.0, 1.0, 2000.0, 10.0),
-                ("initial_lookahead_mm", "初始前视 mm", 80.0, 1.0, 1000.0, 5.0),
+                ("initial_lookahead_mm", "初始前视 mm", 90.0, 1.0, 1000.0, 5.0),
             )),
             ("末段捕获", (
-                ("final_capture_distance_mm", "捕获距离 mm", 60.0, 0.0, 2000.0, 5.0),
-                ("final_capture_speed_mm_s", "捕获速度 mm/s", 150.0, 0.0, 1500.0, 5.0),
+                ("final_capture_distance_mm", "捕获距离 mm", 80.0, 0.0, 2000.0, 5.0),
+                ("final_capture_speed_mm_s", "捕获速度 mm/s", 50.0, 0.0, 1500.0, 5.0),
             )),
         )
         for title, fields in groups:
@@ -95,16 +88,16 @@ class PathControlPanel(QWidget):
         self.read_config = QPushButton("读取参数")
         self.apply_config = QPushButton("应用参数")
         self.restore_config = QPushButton("恢复默认")
+        self.config_status = QLabel("路径参数：未读取")
+        self.config_status.setWordWrap(True)
+        self._set_config_status("路径参数：未读取", "neutral")
+        layout.addWidget(self.config_status)
         for button in (self.read_config, self.apply_config, self.restore_config): buttons.addWidget(button)
         layout.addLayout(buttons)
-        self.config_status = QLabel("路径参数：未读取"); self.config_status.setWordWrap(True)
-        layout.addWidget(self.config_status); layout.addStretch()
-        self.upload.clicked.connect(self.upload_requested)
-        self.start.clicked.connect(self.start_requested)
-        self.abort.clicked.connect(self.abort_requested)
-        self.read_config.clicked.connect(self.read_config_requested)
+        layout.addStretch()
+        self.read_config.clicked.connect(self._emit_read_config)
         self.apply_config.clicked.connect(self._emit_config)
-        self.restore_config.clicked.connect(self.restore_config_requested)
+        self.restore_config.clicked.connect(self._emit_restore_config)
 
     def current_config(self) -> PathControlConfig:
         values = {name: box.value() for name, box in self.config_inputs.items()}
@@ -113,17 +106,58 @@ class PathControlPanel(QWidget):
         return PathControlConfig(**values)
 
     def set_config(self, revision: int, config: PathControlConfig) -> None:
+        """Compatibility entry point for a normal parameter read."""
+        self.set_read_config(revision, config)
+
+    def set_read_config(self, revision: int, config: PathControlConfig) -> None:
         for name, value in config.to_dict().items():
             self.config_inputs[name].setValue(value)
-        self.config_status.setText(f"路径参数修订号：{revision}")
+        action = "恢复默认成功" if self._pending_config_action == "restore" else "读取成功"
+        self._pending_config_action = None
+        self._set_config_status(f"✓ {action}｜下位机修订号：{revision}", "success")
+
+    def set_applied_config(self, revision: int, config: PathControlConfig) -> None:
+        for name, value in config.to_dict().items():
+            self.config_inputs[name].setValue(value)
+        self._pending_config_action = None
+        self._set_config_status(f"✓ 应用成功｜下位机修订号：{revision}", "success")
+
+    def show_operation_error(self, message: str) -> None:
+        if self._pending_config_action is None:
+            return
+        self._pending_config_action = None
+        self._set_config_status(f"✗ 操作失败：{message}", "error")
+
+    def _set_config_status(self, text: str, state: str) -> None:
+        colors = {
+            "neutral": ("#263238", "#b0bec5"),
+            "pending": ("#4e342e", "#ffb74d"),
+            "success": ("#1b5e20", "#a5d6a7"),
+            "error": ("#7f1d1d", "#ffcdd2"),
+        }
+        background, foreground = colors[state]
+        self.config_status.setText(text)
+        self.config_status.setStyleSheet(
+            f"padding: 8px; border-radius: 4px; background: {background}; color: {foreground}; font-weight: 700;")
+
+    def _emit_read_config(self) -> None:
+        self._pending_config_action = "read"
+        self._set_config_status("正在读取下位机参数…", "pending")
+        self.read_config_requested.emit()
+
+    def _emit_restore_config(self) -> None:
+        self._pending_config_action = "restore"
+        self._set_config_status("正在恢复下位机默认参数…", "pending")
+        self.restore_config_requested.emit()
 
     def _emit_config(self) -> None:
         try:
             config = self.current_config()
         except ValueError as error:
-            self.config_status.setText(str(error)); return
+            self._set_config_status(f"✗ 参数无效：{error}", "error"); return
+        self._pending_config_action = "apply"
+        self._set_config_status("正在发送，等待 STM32 确认…", "pending")
         self.apply_config_requested.emit(config)
-        self.config_status.setText("路径参数：等待下位机应用")
 
 
 class MotionConfigExportDialog(QDialog):
@@ -308,18 +342,16 @@ class MotionWorkbenchWindow(QMainWindow):
             lambda _active: self._refresh_origin_controls())
         self.controller.session.origin_reset.connect(self._on_origin_reset)
         self.controller.session.telemetry.connect(self._sync_heading_source)
-        self.path_panel.upload_requested.connect(self._sync_full_plan)
-        self.path_panel.start_requested.connect(self._start_full_plan)
-        self.path_panel.abort_requested.connect(self.controller.stop)
         self.path_panel.read_config_requested.connect(self.controller.session.read_path_config)
         self.path_panel.apply_config_requested.connect(self.controller.session.apply_path_config)
         self.path_panel.restore_config_requested.connect(self.controller.session.restore_path_config)
         self.controller.session.path_config_read.connect(
-            lambda state: self.path_panel.set_config(state.revision, state.config))
+            lambda state: self.path_panel.set_read_config(state.revision, state.config))
         self.controller.session.path_config_read.connect(self._cache_path_state)
         self.controller.session.path_config_applied.connect(
-            lambda state: self.path_panel.set_config(state.revision, state.config))
+            lambda state: self.path_panel.set_applied_config(state.revision, state.config))
         self.controller.session.path_config_applied.connect(self._cache_path_state)
+        self.controller.session.operation_failed.connect(self.path_panel.show_operation_error)
         self.map_editor.plan_changed.connect(self.controller.set_plan)
         self.map_editor.start_frame_changed.connect(lambda _frame: self.controller.invalidate_coordinate_sync())
         self.map_editor.calibration_state_changed.connect(self.controller.set_map_calibrated)
@@ -328,6 +360,8 @@ class MotionWorkbenchWindow(QMainWindow):
         self.map_editor.single_step_requested.connect(self.controller.start_single)
         self.map_editor.continuous_requested.connect(self.controller.start_continuous)
         self.map_editor.execution_stop_requested.connect(self.controller.stop)
+        self.map_editor.execution_controller_changed.connect(
+            self.controller.set_plan_point_controller)
         self.view_switch.clicked.connect(self._switch_workspace)
         self.controller.set_plan(self.map_editor.get_plan())
         self.controller.set_map_calibrated(not self.map_editor.calibration_pending)
@@ -504,18 +538,6 @@ class MotionWorkbenchWindow(QMainWindow):
         count = getattr(execution, "step_count", 0)
         reason = getattr(execution, "reason", "")
         self.map_editor.set_execution_status(f"{state} {cursor}/{count} {reason}".strip())
-        running = state == PlanExecutionState.RUNNING
-        self.path_panel.upload.setEnabled(not running)
-        self.path_panel.start.setEnabled(not running)
-        self.path_panel.abort.setEnabled(running)
-        if running:
-            self.path_panel.status.setText(
-                f"完整路径运行中：第 {cursor + 1}/{count} 步")
-        elif state in (PlanExecutionState.COMPLETED,
-                       PlanExecutionState.CANCELED,
-                       PlanExecutionState.FAILED):
-            self.path_panel.status.setText(
-                f"完整路径：{state.value}{'；' + reason if reason else ''}")
 
     def _switch_workspace(self) -> None:
         next_index = 1 - self.workspace.currentIndex(); self.workspace.setCurrentIndex(next_index)
@@ -529,32 +551,8 @@ class MotionWorkbenchWindow(QMainWindow):
         self.map_editor.apply_runtime_snapshot(snapshot)
         self.pose_status.setText("位姿: 有效" if snapshot.pose_valid else "位姿: 无效")
 
-    def _sync_full_plan(self) -> bool:
-        plan = self.map_editor.get_plan()
-        if not plan.steps:
-            self.path_panel.status.setText("完整方案没有可执行动作")
-            return False
-        if self.controller.plan_execution.state == PlanExecutionState.RUNNING:
-            self.path_panel.status.setText("完整路径运行中，不能重新同步")
-            return False
-        self.controller.set_plan(plan)
-        self.path_panel.status.setText(f"完整方案已同步：共 {len(plan.steps)} 个动作")
-        return True
-
-    def _start_full_plan(self) -> None:
-        if not self._sync_full_plan():
-            return
-        reason = self.controller.map_execution_block_reason()
-        if reason is not None:
-            self.path_panel.status.setText(reason)
-            return
-        if self.controller.start_full_plan():
-            self.path_panel.status.setText("完整路径启动中")
-
     def _set_upload_status(self, snapshot: PathUploadSnapshot) -> None:
         self.upload_status.setText(f"路径: {snapshot.state.value}")
-        if self.controller.plan_execution.state == PlanExecutionState.RUNNING:
-            self.path_panel.status.setText(snapshot.message or snapshot.state.value)
 
     def _set_coordinate_sync_status(self, state: CoordinateSyncState) -> None:
         mapping = {
