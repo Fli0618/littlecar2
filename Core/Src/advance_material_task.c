@@ -5,6 +5,10 @@
 #include "advance_arm.h"
 #include "advance_visual.h"
 
+#define ADVANCE_MATERIAL_POSITION_LEFT ((uint8_t)1U)
+#define ADVANCE_MATERIAL_POSITION_CENTER ((uint8_t)2U)
+#define ADVANCE_MATERIAL_POSITION_RIGHT ((uint8_t)3U)
+
 static bool AdvanceMaterialTask_ParseDigit(char value,
                                             uint8_t minimum,
                                             uint8_t maximum,
@@ -52,15 +56,15 @@ static bool AdvanceMaterialTask_RotateOutward(uint8_t position)
 {
   switch (position)
   {
-  case 1U:
+  case ADVANCE_MATERIAL_POSITION_LEFT:
     AdvanceArm_RotateOutwardLeft();
     return true;
 
-  case 2U:
+  case ADVANCE_MATERIAL_POSITION_CENTER:
     AdvanceArm_RotateOutwardCenter();
     return true;
 
-  case 3U:
+  case ADVANCE_MATERIAL_POSITION_RIGHT:
     AdvanceArm_RotateOutwardRight();
     return true;
 
@@ -100,24 +104,8 @@ static bool AdvanceMaterialTask_ToVisualColor(uint8_t color,
   }
 }
 
-static bool AdvanceMaterialTask_PickOutsideToTray(uint8_t position,
-                                                   uint8_t tray_slot)
+static bool AdvanceMaterialTask_PlaceInTray(uint8_t tray_slot)
 {
-  AdvanceArm_LiftHighBlocking();
-  AdvanceArm_SlideToTrayBlocking();
-  AdvanceArm_GripperOpen();
-
-  if (!AdvanceMaterialTask_RotateOutward(position))
-  {
-    return false;
-  }
-
-  AdvanceArm_SlideToPickupBlocking();
-  AdvanceArm_LiftToPickupBlocking();
-  AdvanceArm_GripperClose();
-  AdvanceArm_LiftHighBlocking();
-  AdvanceArm_SlideToTrayBlocking();
-
   if (!AdvanceMaterialTask_SelectTraySlot(tray_slot))
   {
     return false;
@@ -130,9 +118,43 @@ static bool AdvanceMaterialTask_PickOutsideToTray(uint8_t position,
   return true;
 }
 
-static bool AdvanceMaterialTask_PlaceTrayToOutside(uint8_t tray_slot,
-                                                   uint8_t position,
-                                                   bool stacking)
+static bool AdvanceMaterialTask_PickTurntableToTray(uint8_t tray_slot)
+{
+  AdvanceArm_LiftHighBlocking();
+  AdvanceArm_SlideToTrayBlocking();
+  AdvanceArm_GripperOpen();
+  AdvanceArm_RotateOutwardCenter();
+  AdvanceArm_SlideToPickupBlocking();
+  AdvanceArm_LiftToPickupBlocking();
+  AdvanceArm_GripperClose();
+  AdvanceArm_LiftHighBlocking();
+  AdvanceArm_SlideToTrayBlocking();
+  return AdvanceMaterialTask_PlaceInTray(tray_slot);
+}
+
+static bool AdvanceMaterialTask_PickPositionToTray(uint8_t position,
+                                                    uint8_t tray_slot)
+{
+  AdvanceArm_LiftHighBlocking();
+  AdvanceArm_SlideToTrayBlocking();
+  AdvanceArm_GripperOpen();
+
+  if (!AdvanceMaterialTask_RotateOutward(position))
+  {
+    return false;
+  }
+
+  AdvanceArm_SlideToPickupBlocking();
+  AdvanceArm_LiftLowBlocking();
+  AdvanceArm_GripperClose();
+  AdvanceArm_LiftHighBlocking();
+  AdvanceArm_SlideToTrayBlocking();
+  return AdvanceMaterialTask_PlaceInTray(tray_slot);
+}
+
+static bool AdvanceMaterialTask_PlaceTrayToPosition(uint8_t tray_slot,
+                                                     uint8_t position,
+                                                     bool stacking)
 {
   AdvanceArm_LiftHighBlocking();
   AdvanceArm_SlideToTrayBlocking();
@@ -159,7 +181,7 @@ static bool AdvanceMaterialTask_PlaceTrayToOutside(uint8_t tray_slot,
   }
   else
   {
-    AdvanceArm_LiftToPickupBlocking();
+    AdvanceArm_LiftLowBlocking();
   }
 
   AdvanceArm_GripperOpen();
@@ -188,7 +210,7 @@ static bool AdvanceMaterialTask_Collect(
       return false;
     }
 
-    if (!AdvanceMaterialTask_PickOutsideToTray(2U, index + 1U))
+    if (!AdvanceMaterialTask_PickTurntableToTray(index + 1U))
     {
       return false;
     }
@@ -204,9 +226,9 @@ static bool AdvanceMaterialTask_Process(
 
   for (index = 0U; index < ADVANCE_MATERIAL_TASK_ITEM_COUNT; ++index)
   {
-    if (!AdvanceMaterialTask_PlaceTrayToOutside(index + 1U,
-                                                positions[index],
-                                                false))
+    if (!AdvanceMaterialTask_PlaceTrayToPosition(index + 1U,
+                                                 positions[index],
+                                                 false))
     {
       return false;
     }
@@ -214,8 +236,8 @@ static bool AdvanceMaterialTask_Process(
 
   for (index = 0U; index < ADVANCE_MATERIAL_TASK_ITEM_COUNT; ++index)
   {
-    if (!AdvanceMaterialTask_PickOutsideToTray(positions[index],
-                                               index + 1U))
+    if (!AdvanceMaterialTask_PickPositionToTray(positions[index],
+                                                index + 1U))
     {
       return false;
     }
@@ -350,9 +372,9 @@ bool AdvanceMaterialTask_Store1(const AdvanceMaterialTask_t *task)
 
   for (index = 0U; index < ADVANCE_MATERIAL_TASK_ITEM_COUNT; ++index)
   {
-    if (!AdvanceMaterialTask_PlaceTrayToOutside(index + 1U,
-                                                task->position1[index],
-                                                false))
+    if (!AdvanceMaterialTask_PlaceTrayToPosition(index + 1U,
+                                                 task->position1[index],
+                                                 false))
     {
       return false;
     }
@@ -386,9 +408,9 @@ bool AdvanceMaterialTask_Stack2(const AdvanceMaterialTask_t *task)
         AdvanceMaterialTask_FindPosition1(task, task->color2[index]);
 
     if ((target_position == 0U) ||
-        !AdvanceMaterialTask_PlaceTrayToOutside(index + 1U,
-                                                target_position,
-                                                true))
+        !AdvanceMaterialTask_PlaceTrayToPosition(index + 1U,
+                                                 target_position,
+                                                 true))
     {
       return false;
     }
