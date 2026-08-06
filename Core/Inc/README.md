@@ -1,6 +1,6 @@
 # Core/Inc 目录说明
 
-本目录保存 STM32 业务模块的公共头文件。`advance_control.h` 管理底盘控制权，`advance_motion.h` 提供经典世界坐标运动控制，`advance_holonomic_position.h` 提供轻量全向位置控制，`comm_tuner.h` 定义 USART1 在线调参协议入口。
+本目录保存 STM32 业务模块的公共头文件。`advance_control.h` 管理底盘控制权，`advance_motion.h` 提供经典世界坐标运动控制，`advance_holonomic_position.h` 提供轻量全向位置控制，`comm_tuner.h` 定义 USART1 在线调参协议入口。`sensor_limit.h` 仅暴露升降轴顶部归零光电的专用读取接口。
 
 通信、传感器、世界位姿和底盘等后台周期接口由 TIM6 调度；视觉阻塞接口在内部以 20 ms 周期自调度私有控制步骤，不依赖 TIM6。通信模块不直接控制底盘；运动模块的阻塞接口只等待状态并使用 `__WFI()`，不会绕过控制权状态机。
 

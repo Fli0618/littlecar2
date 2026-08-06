@@ -128,12 +128,7 @@ static void App_RunTask(Competition_StartArea_t start_area) // 传入启停区�
 
   printf("[START] area=%u\r\n", (unsigned int)start_area);
   // 丝杆回零部分！！！
-  // if (!AdvanceArm_HomeBlocking())
-  // {
-  //   AdvanceArm_EStop();
-  //   printf("[ARM] home failed\r\n");
-  //   return;
-  // }
+  // AdvanceArm_LiftHomeBlocking();
   printf("[ARM] home success\r\n");
 
   char code[DETECT_QR_CODE_LENGTH + 1U] = {0};

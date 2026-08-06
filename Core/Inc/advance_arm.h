@@ -24,7 +24,7 @@ extern "C"
 #define ARM_LIFT_ABSOLUTE_DIRECTION ARM_LIFT_DOWN_DIRECTION /*!< 升降轴绝对坐标正方向。 */
 #define ARM_LIFT_SPEED ((uint16_t)300U) /*!< 升降轴运动速度。 */
 #define ARM_LIFT_ACC ((uint8_t)10U) /*!< 升降轴加速度。 */
-#define ARM_LIFT_POS_MAX ((uint32_t)18000U) /*!< 升降轴最大允许绝对坐标。 */
+#define ARM_LIFT_POS_MAX ((uint32_t)18000U) /*!< 升降轴软件最大安全坐标，需实机标定并预留机械余量。 */
 
 /* 前后滑台运动参数：只标定伸出方向，收回方向自动取反。 */
 #define ARM_SLIDE_EXTEND_DIRECTION ((uint8_t)0U) /*!< 滑台向外伸出方向，需实机确认。 */
@@ -58,7 +58,7 @@ extern "C"
 
 /* ==================== 固定点位标定 ==================== */
 
-/* 升降轴固定高度。 */
+/* 升降轴固定高度：顶部光电为唯一物理零点，无底部物理限位；所有值须实机标定并位于 0..ARM_LIFT_POS_MAX。 */
 #define ARM_LIFT_POS_HOME ((uint32_t)0U) /*!< 升降轴顶部零点。 */
 #define ARM_LIFT_POS_LOW ((uint32_t)0U) /*!< 通用低位。 */
 #define ARM_LIFT_POS_HIGH ((uint32_t)0U) /*!< 通用安全高位。 */
