@@ -71,8 +71,10 @@ extern "C"
 #define ARM_SLIDE_POS_TRAY ((uint32_t)0U) /*!< 滑台移动到小车自身物料盘。 */
 #define ARM_SLIDE_POS_PICKUP ((uint32_t)0U) /*!< 滑台移动到外侧原料盘。 */
 
-/* 机械臂旋转舵机固定点位。 */
-#define ARM_ROTATE_POS_PICKUP ((int32_t)0) /*!< 朝向外侧原料盘。 */
+/* 机械臂旋转舵机固定点位。外侧左、中、右点位均需独立实机标定。 */
+#define ARM_ROTATE_POS_OUTWARD_CENTER ((int32_t)0) /*!< 朝向外侧正中心点位。 */
+#define ARM_ROTATE_POS_OUTWARD_LEFT ((int32_t)0) /*!< 朝向外侧左侧点位。 */
+#define ARM_ROTATE_POS_OUTWARD_RIGHT ((int32_t)0) /*!< 朝向外侧右侧点位。 */
 #define ARM_ROTATE_POS_TRAY ((int32_t)0) /*!< 朝向小车自身物料盘。 */
 
 /* 夹爪舵机固定点位。 */
@@ -106,7 +108,9 @@ void AdvanceArm_GripperOpen(void);
 void AdvanceArm_GripperClose(void);
 
 /* 机械臂旋转固定动作。 */
-void AdvanceArm_RotateToPickup(void);
+void AdvanceArm_RotateOutwardCenter(void);
+void AdvanceArm_RotateOutwardLeft(void);
+void AdvanceArm_RotateOutwardRight(void);
 void AdvanceArm_RotateToTray(void);
 
 /* 滑台固定动作。 */
