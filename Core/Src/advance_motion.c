@@ -932,12 +932,21 @@ static void AdvanceMotion_SetPathLookaheadGoal(void)
   {
     uint16_t current_index = g_path.nearest_index;
     float current_len = AdvanceMotion_GetPathSegmentLength(current_index);
-    g_path.feedforward_vx_mm_s =
-        ((g_path.points[current_index + 1U].x_mm - g_path.points[current_index].x_mm) / current_len) *
-        g_path.reference_speed_mm_s;
-    g_path.feedforward_vy_mm_s =
-        ((g_path.points[current_index + 1U].y_mm - g_path.points[current_index].y_mm) / current_len) *
-        g_path.reference_speed_mm_s;
+    float raw_ff_vx = ((g_path.points[current_index + 1U].x_mm - g_path.points[current_index].x_mm) / current_len) *
+                      g_path.reference_speed_mm_s;
+    float raw_ff_vy = ((g_path.points[current_index + 1U].y_mm - g_path.points[current_index].y_mm) / current_len) *
+                      g_path.reference_speed_mm_s;
+
+    if (g_path.feedforward_vx_mm_s == 0.0f && g_path.feedforward_vy_mm_s == 0.0f)
+    {
+      g_path.feedforward_vx_mm_s = raw_ff_vx;
+      g_path.feedforward_vy_mm_s = raw_ff_vy;
+    }
+    else
+    {
+      g_path.feedforward_vx_mm_s = (0.2f * raw_ff_vx) + (0.8f * g_path.feedforward_vx_mm_s);
+      g_path.feedforward_vy_mm_s = (0.2f * raw_ff_vy) + (0.8f * g_path.feedforward_vy_mm_s);
+    }
   }
 
   /* 算法改进：末段前馈二次方光滑平滑衰减，消除进站冲击与过冲 */
