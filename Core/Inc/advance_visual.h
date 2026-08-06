@@ -42,6 +42,14 @@ extern "C"
 #define ADVANCE_VISUAL_ARRIVE_COUNT ((uint8_t)3U)
 #define ADVANCE_VISUAL_ACC ((uint8_t)5U)
 
+/* 阻塞式视觉控制步骤和诊断日志的独立周期，单位为 ms。 */
+#define ADVANCE_VISUAL_CONTROL_PERIOD_MS ((uint32_t)20U)
+#define ADVANCE_VISUAL_LOG_PERIOD_MS ((uint32_t)200U)
+
+#ifndef ADVANCE_VISUAL_DEBUG_LOG_ENABLE
+#define ADVANCE_VISUAL_DEBUG_LOG_ENABLE (1U)
+#endif
+
 typedef enum
 {
   RED = 0U,
@@ -86,9 +94,12 @@ typedef enum
 } AdvanceVisual_State_t;
 
 void AdvanceVisual_Init(void);
-void AdvanceVisual_Update(void);
 
-/* 顺序业务可直接调用以下阻塞接口；函数仅等待 TIM6 推进视觉控制并在终态返回。 */
+/*
+ * 顺序业务可直接调用以下阻塞接口；接口内部按固定周期读取 Jetson
+ * 结果并推进视觉伺服，不依赖 TIM6 调用视觉更新函数。UART DMA、SysTick
+ * 和底层驱动中断仍需保持运行。
+ */
 AdvanceVisual_State_t AdvanceVisual_AlignColorBlocking(ColorType_t color);
 AdvanceVisual_State_t AdvanceVisual_AlignDiskCenterBlocking(void);
 AdvanceVisual_State_t AdvanceVisual_AlignCircleBlocking(CircleType_t number);
