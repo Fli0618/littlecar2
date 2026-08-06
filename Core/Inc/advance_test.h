@@ -32,6 +32,7 @@ extern "C"
 
 // 机械臂运动
 #include "advance_arm.h"
+#include "advance_material_task.h" // 依赖arm
 
 
 /**
