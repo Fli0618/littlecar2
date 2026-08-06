@@ -16,6 +16,13 @@ static void AdvanceArm_DelayBlocking(uint32_t delay_ms)
   }
 }
 
+static void AdvanceArm_ResetLiftHomePosition(void)
+{
+  AdvanceArm_DelayBlocking(ARM_HOME_COMMAND_DELAY_MS);
+  drive_emm_Reset_CurPos_To_Zero(ARM_LIFT_MOTOR_ID);
+  AdvanceArm_DelayBlocking(ARM_HOME_COMMAND_DELAY_MS);
+}
+
 static bool AdvanceArm_IsFeedbackValid(uint8_t motor_id,
                                        DriveEmm_MotorFeedback_t *feedback)
 {
@@ -56,14 +63,8 @@ void AdvanceArm_LiftHomeBlocking(void)
 
   g_lift_homed = false;
 
-  if (SensorLimit_IsActive(SENSOR_LIMIT_LIFT_UP))
+  if (SensorLimit_IsLiftHomeActive())
   {
-    if (SensorLimit_IsActive(SENSOR_LIMIT_LIFT_DOWN))
-    {
-      drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
-      return;
-    }
-
     drive_emm_Vel_Control(ARM_LIFT_MOTOR_ID,
                           ARM_LIFT_DOWN_DIRECTION,
                           ARM_HOME_RELEASE_SPEED,
@@ -71,10 +72,9 @@ void AdvanceArm_LiftHomeBlocking(void)
                           false);
     started_tick = HAL_GetTick();
 
-    while (SensorLimit_IsActive(SENSOR_LIMIT_LIFT_UP))
+    while (SensorLimit_IsLiftHomeActive())
     {
-      if (SensorLimit_IsActive(SENSOR_LIMIT_LIFT_DOWN) ||
-          ((HAL_GetTick() - started_tick) > ARM_HOME_RELEASE_TIMEOUT_MS))
+      if ((HAL_GetTick() - started_tick) > ARM_HOME_RELEASE_TIMEOUT_MS)
       {
         drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
         return;
@@ -95,12 +95,12 @@ void AdvanceArm_LiftHomeBlocking(void)
 
   while (1)
   {
-    if (SensorLimit_IsActive(SENSOR_LIMIT_LIFT_UP))
+    if (SensorLimit_IsLiftHomeActive())
     {
       confirm_tick = HAL_GetTick();
       while ((HAL_GetTick() - confirm_tick) < ARM_HOME_CONFIRM_MS)
       {
-        if (!SensorLimit_IsActive(SENSOR_LIMIT_LIFT_UP))
+        if (!SensorLimit_IsLiftHomeActive())
         {
           break;
         }
@@ -112,7 +112,7 @@ void AdvanceArm_LiftHomeBlocking(void)
         __WFI();
       }
 
-      if (SensorLimit_IsActive(SENSOR_LIMIT_LIFT_UP))
+      if (SensorLimit_IsLiftHomeActive())
       {
         break;
       }
@@ -127,9 +127,7 @@ void AdvanceArm_LiftHomeBlocking(void)
   }
 
   drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
-  AdvanceArm_DelayBlocking(ARM_HOME_COMMAND_DELAY_MS);
-  drive_emm_Reset_CurPos_To_Zero(ARM_LIFT_MOTOR_ID);
-  AdvanceArm_DelayBlocking(ARM_HOME_COMMAND_DELAY_MS);
+  AdvanceArm_ResetLiftHomePosition();
   g_lift_homed = true;
 }
 
@@ -144,9 +142,9 @@ void AdvanceArm_SlideSetCurrentAsZero(void)
 void AdvanceArm_MoveLiftToBlocking(uint32_t position_pulse)
 {
   DriveEmm_MotorFeedback_t feedback;
-  SensorLimitId_t movement_limit;
   uint32_t started_tick;
   int32_t error;
+  bool moving_toward_home;
 
   if (!g_lift_homed || (position_pulse > ARM_LIFT_POS_MAX))
   {
@@ -160,6 +158,16 @@ void AdvanceArm_MoveLiftToBlocking(uint32_t position_pulse)
     return;
   }
 
+  moving_toward_home = ((int32_t)position_pulse < feedback.position);
+  if ((position_pulse <= ARM_POSITION_TOLERANCE_PULSE) &&
+      SensorLimit_IsLiftHomeActive())
+  {
+    drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
+    AdvanceArm_ResetLiftHomePosition();
+    g_lift_homed = true;
+    return;
+  }
+
   error = feedback.position - (int32_t)position_pulse;
   if (error < 0)
   {
@@ -170,12 +178,10 @@ void AdvanceArm_MoveLiftToBlocking(uint32_t position_pulse)
     return;
   }
 
-  movement_limit = ((int32_t)position_pulse > feedback.position)
-                       ? SENSOR_LIMIT_LIFT_DOWN
-                       : SENSOR_LIMIT_LIFT_UP;
-  if (SensorLimit_IsActive(movement_limit))
+  if (moving_toward_home && SensorLimit_IsLiftHomeActive())
   {
     drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
+    g_lift_homed = false;
     return;
   }
 
@@ -190,9 +196,18 @@ void AdvanceArm_MoveLiftToBlocking(uint32_t position_pulse)
 
   while (1)
   {
-    if (SensorLimit_IsActive(movement_limit))
+    if (moving_toward_home && SensorLimit_IsLiftHomeActive())
     {
       drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
+      if (position_pulse <= ARM_POSITION_TOLERANCE_PULSE)
+      {
+        AdvanceArm_ResetLiftHomePosition();
+        g_lift_homed = true;
+      }
+      else
+      {
+        g_lift_homed = false;
+      }
       return;
     }
 
