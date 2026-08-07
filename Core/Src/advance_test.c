@@ -927,3 +927,18 @@ void Test_jetson(Competition_StartArea_t start_area)
     printf("[TEST][JETSON] QR detection skipped due to start failure\r\n");
   }
 }
+
+
+void Test_material_task(void)
+{
+  AdvanceMaterialTask_t task;
+  char code[] = "123+123+123+123";
+  AdvanceMaterialTask_ParseCode(code, &task);
+  // AdvanceMaterialTask_Collect1(&task);
+  // AdvanceMaterialTask_Process1(&task);
+  // AdvanceMaterialTask_Store1(&task);
+  // AdvanceMaterialTask_Collect2(&task);
+  // AdvanceMaterialTask_Process2(&task);
+  // AdvanceMaterialTask_Stack2(&task);
+}
+
