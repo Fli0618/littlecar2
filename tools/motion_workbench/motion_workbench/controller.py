@@ -68,8 +68,10 @@ class MotionWorkbenchController(QObject):
         self._plan_state = PlanExecutionState.IDLE
         self._plan_continuous = False
         self._plan_waiting = False
+        self._plan_command_accepted = False
         self._plan_active_step_name = ""
         self._plan_reason = ""
+        self._plan_point_controller = "classic"
         self._next_path_id = 1
         self._upload = PathUploadSnapshot(PathUploadState.IDLE, None)
         self._coordinate_sync_state = CoordinateSyncState.MAP_UNCALIBRATED
@@ -106,6 +108,15 @@ class MotionWorkbenchController(QObject):
     @property
     def plan_execution(self) -> PlanExecution:
         return self._plan_snapshot()
+
+    def set_plan_point_controller(self, controller: str) -> None:
+        """Select the controller used by Waypoint and RotateInPlace plan steps."""
+        if controller not in ("classic", "holonomic"):
+            raise ValueError("unsupported plan point controller")
+        if self._plan_state == PlanExecutionState.RUNNING:
+            self.status_changed.emit("运动中不能切换单点动作控制器")
+            return
+        self._plan_point_controller = controller
 
     @property
     def upload(self) -> PathUploadSnapshot:
@@ -193,6 +204,7 @@ class MotionWorkbenchController(QObject):
         self._plan_state = PlanExecutionState.IDLE
         self._plan_continuous = False
         self._plan_waiting = False
+        self._plan_command_accepted = False
         self._plan_active_step_name = ""
         self._plan_reason = ""
         self.plan_changed.emit(plan)
@@ -286,7 +298,8 @@ class MotionWorkbenchController(QObject):
         if self._active_controller != "classic":
             return
         self._last_error = tuple(item.error)
-        if self._plan_state == PlanExecutionState.RUNNING and self._plan_waiting and item.state not in (0, 1):
+        if (self._plan_state == PlanExecutionState.RUNNING and self._plan_waiting and
+                self._plan_command_accepted and item.state not in (0, 1)):
             self._handle_plan_terminal(item.state)
         if self.execution is not None and self._last_state == SinglePointState.RUNNING and item.state not in (0, 1):
             states = {2: (SinglePointState.ARRIVED, "到达"), 3: (SinglePointState.TIMEOUT, "超时"),
@@ -309,6 +322,10 @@ class MotionWorkbenchController(QObject):
             self._new_trace_points.append(self.actual)
             if len(self._trace) > 2000:
                 del self._trace[:len(self._trace) - 2000]
+        if (self._plan_state == PlanExecutionState.RUNNING and self._plan_waiting and
+                self._plan_command_accepted and item.state not in (0, 1, 2)):
+            classic_state = {3: 2, 4: 3, 5: 4, 6: 5, 7: 6}.get(item.state, 6)
+            self._handle_plan_terminal(classic_state)
         if self.execution is not None and self._last_state == SinglePointState.RUNNING:
             states = {3: (SinglePointState.ARRIVED, "到达"), 4: (SinglePointState.TIMEOUT, "超时"),
                       5: (SinglePointState.NO_POSE, "位姿无效"), 6: (SinglePointState.NO_ORIGIN, "原点无效"),
@@ -323,7 +340,10 @@ class MotionWorkbenchController(QObject):
         self._last_path = item
 
     def _update_coordinate_sync(self, item: Telemetry, valid: bool) -> None:
-        if self._coordinate_sync_state != CoordinateSyncState.WAITING_ZERO_TELEMETRY:
+        if self._coordinate_sync_state not in (
+                CoordinateSyncState.BOARD_ORIGIN_UNKNOWN,
+                CoordinateSyncState.WAITING_ZERO_TELEMETRY,
+                CoordinateSyncState.MISMATCH):
             return
         if not valid:
             return
@@ -331,7 +351,8 @@ class MotionWorkbenchController(QObject):
         yaw_error = ((yaw_deg + 180.0) % 360.0) - 180.0
         if abs(x_mm) <= 30.0 and abs(y_mm) <= 30.0 and abs(yaw_error) <= 3.0:
             self._set_coordinate_sync_state(CoordinateSyncState.SYNCED)
-        elif (self._coordinate_sync_started_at is not None and
+        elif (self._coordinate_sync_state == CoordinateSyncState.WAITING_ZERO_TELEMETRY and
+              self._coordinate_sync_started_at is not None and
               time.monotonic() - self._coordinate_sync_started_at >= 1.5):
             self._set_coordinate_sync_state(CoordinateSyncState.MISMATCH)
 
@@ -382,6 +403,11 @@ class MotionWorkbenchController(QObject):
 
     def _on_motion_changed(self, active: bool) -> None:
         if self._plan_state == PlanExecutionState.RUNNING:
+            if active and self._plan_waiting:
+                # A chained command is complete only after the board accepted that
+                # command.  This prevents the preceding step's latched ARRIVED
+                # telemetry from completing the new step before it starts.
+                self._plan_command_accepted = True
             # Workflow advancement is deliberately driven by terminal telemetry,
             # not by completion of an asynchronous serial request.
             return
@@ -474,19 +500,19 @@ class MotionWorkbenchController(QObject):
     def _send_current_plan_step(self) -> None:
         if self._plan is None:
             return
-        self._active_controller = "classic"
         try:
             step = materialize_steps(self._plan)[self._plan_cursor]
             self._plan_waiting = True
+            self._plan_command_accepted = False
             self._plan_active_step_name = getattr(step, "name", "") or type(step).__name__
             self._emit_plan_execution()
             if isinstance(step, Waypoint):
-                self.session.start_motion(MotionGoal(
+                self._start_plan_point_goal(MotionGoal(
                     step.x_mm, step.y_mm, step.yaw_deg, step.vmax_mm_s, step.wmax_deg_s,
                     round(step.timeout_s * 1000), step.use_yaw, True,
                 ))
             elif isinstance(step, RotateInPlace):
-                self.session.start_motion(MotionGoal(
+                self._start_plan_point_goal(MotionGoal(
                     self._plan_pose.x_mm, self._plan_pose.y_mm, step.yaw_deg, 0.0, step.wmax_deg_s,
                     round(step.timeout_s * 1000), True, False,
                 ))
@@ -508,6 +534,13 @@ class MotionWorkbenchController(QObject):
             self._plan_waiting = False
             self._finish_plan(PlanExecutionState.FAILED, str(error))
 
+    def _start_plan_point_goal(self, goal: MotionGoal) -> None:
+        self._active_controller = self._plan_point_controller
+        if self._plan_point_controller == "holonomic":
+            self.session.start_holonomic_motion(goal)
+        else:
+            self.session.start_motion(goal)
+
     def selected_path_points(self) -> list[PathPosePoint]:
         """Return the selected path after the shared materializer resolves its start pose."""
         if self._plan is None or not 0 <= self._selected_step_index < len(self._plan.steps):
@@ -526,6 +559,7 @@ class MotionWorkbenchController(QObject):
 
     def _handle_plan_terminal(self, telemetry_state: int) -> None:
         self._plan_waiting = False
+        self._plan_command_accepted = False
         if telemetry_state != 2:
             self._finish_plan(PlanExecutionState.FAILED, self._terminal_reason(telemetry_state))
             return
@@ -564,6 +598,7 @@ class MotionWorkbenchController(QObject):
             return
         self._plan_state = state
         self._plan_active_step_name = ""
+        self._plan_command_accepted = False
         self._plan_reason = reason
         self._emit_plan_execution(reason)
         self.plan_finished.emit(self._plan_snapshot())

@@ -21,4 +21,4 @@ conda run -n low_numpy pip install -e tools/motion_workbench
 conda run -n low_numpy motion-workbench
 ```
 
-地图编辑与完整方案执行需要先完成起点标定、`ResetOrigin` 和路径提交。工作台 STOP 不能替代机械急停；实车调试必须有人监护。
+地图执行需要先完成起点标定和坐标同步。若板端有效遥测已经位于零点容差内，工作台会直接恢复同步；否则仍需执行 `ResetOrigin`。工作台 STOP 不能替代机械急停；实车调试必须有人监护。

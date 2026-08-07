@@ -436,6 +436,22 @@ class MapEditorWidgetTests(unittest.TestCase):
         finally:
             widget.close()
 
+    def test_start_preset_position_and_heading_can_be_edited_numerically(self):
+        widget = MapEditorWidget()
+        try:
+            widget.begin_start("启停区 1")
+            widget.start_x_input.setValue(2235.0)
+            widget.start_y_input.setValue(165.0)
+            widget.start_heading_input.setValue(90.0)
+            widget.apply_start_frame_button.click()
+
+            self.assertEqual(widget.plan.start_paper_x_mm, 2235.0)
+            self.assertEqual(widget.plan.start_paper_y_mm, 165.0)
+            self.assertEqual(widget.plan.start_heading_deg, 90.0)
+            self.assertEqual(widget.calibration_stage, "heading")
+        finally:
+            widget.close()
+
     def test_platform_soft_cost_overlay_is_split_at_outer_corner_boundary(self):
         widget = MapEditorWidget()
         try:
@@ -476,8 +492,8 @@ class MapEditorWidgetTests(unittest.TestCase):
         try:
             config = widget.current_costmap_settings()
             self.assertEqual(config.boundary_safety_margin_mm, 20)
-            self.assertEqual(config.platform_inflation_mm, 20)
-            self.assertEqual(config.platform_outer_inflation_mm, 240)
+            self.assertEqual(config.platform_inflation_mm, 30)
+            self.assertEqual(config.platform_outer_inflation_mm, 260)
             self.assertEqual(config.platform_outer_cost_weight, 3.8)
             self.assertEqual(config.boundary_zone_half_width_mm, 200)
             self.assertEqual(config.boundary_zone_depth_mm, 85)

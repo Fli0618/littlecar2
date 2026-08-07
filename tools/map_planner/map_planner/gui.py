@@ -283,6 +283,7 @@ class MapEditorWidget(QWidget):
     single_step_requested = Signal(int)
     continuous_requested = Signal(int)
     execution_stop_requested = Signal()
+    execution_controller_changed = Signal(str)
     start_frame_changed = Signal(object)
     calibration_state_changed = Signal(bool)
 
@@ -399,6 +400,8 @@ class MapEditorWidget(QWidget):
             if self._execution_enabled == enabled:
                 return
             self._execution_enabled = enabled
+            if not enabled:
+                self._execution_status = ""
             self.execution_enabled_switch.blockSignals(True)
             self.execution_enabled_switch.setChecked(enabled)
             self.execution_enabled_switch.blockSignals(False)
@@ -407,6 +410,7 @@ class MapEditorWidget(QWidget):
 
     def set_hardware_motion_active(self, active: bool) -> None:
             self._hardware_motion_active = bool(active)
+            self.execution_controller_combo.setEnabled(not self._hardware_motion_active)
 
     def apply_runtime_snapshot(self, snapshot: RuntimeUiSnapshot) -> None:
             """Apply the controller's 40 ms snapshot without rebuilding the scene."""
@@ -485,7 +489,8 @@ class MapEditorWidget(QWidget):
             if not hasattr(self, "execution_status_label"):
                 return
             if not self._execution_enabled:
-                self.execution_status_label.setText("实机执行未启用")
+                self.execution_status_label.setText(
+                    getattr(self, "_execution_status", "") or "实机执行未启用")
                 return
             detail = getattr(self, "_execution_status", "等待工作台命令")
             if self._execution_error is not None:
@@ -716,10 +721,10 @@ class MapEditorWidget(QWidget):
                                            self.side_zone_depth,
                                            self.boundary_zone_inflation))
             auto_box.addWidget(boundary_zone_group)
-            platform = cost_group("四个黄色平台（组内侧）", 20.0, 20.0, 3.0)
+            platform = cost_group("四个黄色平台（组内侧）", 20.0, 30.0, 3.0)
             platform_outer_group = QGroupBox("四个黄色平台（组外侧）")
             platform_outer_form = QFormLayout(platform_outer_group)
-            self.platform_outer_inflation = spin(240.0, 0.0, 500.0, 10.0)
+            self.platform_outer_inflation = spin(260.0, 0.0, 500.0, 10.0)
             self.platform_outer_weight = spin(3.8, 0.0, 20.0, 0.1)
             platform_outer_form.addRow("软膨胀距离 (mm)", self.platform_outer_inflation)
             platform_outer_form.addRow("软代价权重", self.platform_outer_weight)
@@ -794,6 +799,16 @@ class MapEditorWidget(QWidget):
                 self.activate_list_row)
             box.addWidget(self.runtime_waypoint_list)
             box.addWidget(QLabel("实机执行"))
+            controller_row = QHBoxLayout()
+            controller_row.addWidget(QLabel("单点动作控制器"))
+            self.execution_controller_combo = QComboBox()
+            self.execution_controller_combo.addItem("经典位置 PID", "classic")
+            self.execution_controller_combo.addItem("全向位置控制", "holonomic")
+            self.execution_controller_combo.currentIndexChanged.connect(
+                lambda _index: self.execution_controller_changed.emit(
+                    str(self.execution_controller_combo.currentData())))
+            controller_row.addWidget(self.execution_controller_combo)
+            box.addLayout(controller_row)
             execution_row = QHBoxLayout()
             self.execution_enabled_switch = QCheckBox("实机运动")
             self.execution_enabled_switch.toggled.connect(self.set_execution_enabled)
@@ -837,11 +852,22 @@ class MapEditorWidget(QWidget):
             self.current_tool_label.setStyleSheet(
                 "padding:7px 12px;background:#103b46;color:#80cbc4;font-weight:700;")
             map_box.addWidget(self.current_tool_label)
-            self.calibration_bar=QWidget(); guide=QHBoxLayout(self.calibration_bar); guide.setContentsMargins(12,8,12,8)
+            self.calibration_bar=QWidget(); calibration_layout=QVBoxLayout(self.calibration_bar); calibration_layout.setContentsMargins(12,8,12,8)
+            guide=QHBoxLayout(); calibration_layout.addLayout(guide)
             self.calibration_label=QLabel("1. 选择起点   2. 右击蓝色箭头设置朝向") ; guide.addWidget(self.calibration_label); guide.addStretch()
             for label in ("启停区 1", "启停区 2", "自定义"):
                 button=QPushButton(label); button.clicked.connect(lambda checked=False,value=label:self.begin_start(value)); guide.addWidget(button)
             self.confirm_start_button=QPushButton("确认朝向"); self.confirm_start_button.clicked.connect(self.confirm_start_heading); guide.addWidget(self.confirm_start_button)
+            start_edit_row=QHBoxLayout(); calibration_layout.addLayout(start_edit_row)
+            self.start_x_input=spin(self.plan.start_paper_x_mm, 0.0, FIELD_SIZE_MM, 10.0)
+            self.start_y_input=spin(self.plan.start_paper_y_mm, 0.0, FIELD_SIZE_MM, 10.0)
+            self.start_heading_input=spin(self.plan.start_heading_deg, -180.0, 180.0, 5.0)
+            for label, field in (("起点 X", self.start_x_input), ("Y", self.start_y_input),
+                                 ("航向°", self.start_heading_input)):
+                start_edit_row.addWidget(QLabel(label)); start_edit_row.addWidget(field)
+            self.apply_start_frame_button=QPushButton("应用起点")
+            self.apply_start_frame_button.clicked.connect(self._apply_start_frame_inputs)
+            start_edit_row.addWidget(self.apply_start_frame_button)
             map_box.addWidget(self.calibration_bar); map_box.addWidget(self.view)
             root.addWidget(scroll); root.addWidget(map_panel)
             root.setStretchFactor(0, 0); root.setStretchFactor(1, 1)
@@ -915,6 +941,16 @@ class MapEditorWidget(QWidget):
             if kind == "自定义":
                 self.calibration_stage="position"; self.mode="calibrate"; self.view.mode="calibrate"; self._start_preview_paper=None; self.calibration_label.setText("在地图上点击自定义起点位置"); self.update_calibration_ui(); self.redraw(); return
             self.calibration_stage="heading"; self.mode="calibrate"; self.view.mode="calibrate"; self.update_calibration_ui(); self.redraw()
+
+    def _apply_start_frame_inputs(self) -> None:
+            if not self.calibration_pending:
+                return
+            self.set_start_frame(self.start_x_input.value(), self.start_y_input.value(),
+                                 self.start_heading_input.value())
+            self.calibration_stage = "heading"
+            self.mode = "calibrate"; self.view.mode = "calibrate"
+            self.update_calibration_ui(); self.redraw()
+            self.status.setText("起点位置和朝向已更新，请确认朝向。")
 
     def on_map_click(self, x, y, shift=False):
             if math.isnan(x):
@@ -1009,6 +1045,10 @@ class MapEditorWidget(QWidget):
                 self.plan.start_heading_deg = new.heading_deg
             if start_kind is not None:
                 self.plan.start_kind = start_kind
+            if hasattr(self, "start_x_input"):
+                self.start_x_input.setValue(new.paper_x_mm)
+                self.start_y_input.setValue(new.paper_y_mm)
+                self.start_heading_input.setValue(new.heading_deg)
             self._clear_runtime_trace()
             self._sync_continuous_entries(); self.refresh_waypoints(); self.redraw()
             self.rebuild_timeline_after_edit(); self.plan_changed.emit(copy.deepcopy(self.plan))

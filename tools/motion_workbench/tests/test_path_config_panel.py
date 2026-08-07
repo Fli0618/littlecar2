@@ -29,6 +29,7 @@ class PathControlPanelTests(unittest.TestCase):
         try:
             panel.set_config(12, config)
             self.assertIn("12", panel.config_status.text())
+            self.assertIn("读取成功", panel.config_status.text())
             self.assertTrue(all(isinstance(box, ProtectedDoubleSpinBox)
                                 for box in panel.config_inputs.values()))
             self.assertTrue(all(box.lineEdit().isReadOnly()
@@ -36,6 +37,10 @@ class PathControlPanelTests(unittest.TestCase):
             panel.apply_config.click()
             self.assertEqual(panel.current_config(), config)
             self.assertEqual(requested, [config])
+            self.assertIn("等待 STM32", panel.config_status.text())
+            panel.set_applied_config(13, config)
+            self.assertIn("应用成功", panel.config_status.text())
+            self.assertIn("13", panel.config_status.text())
         finally:
             panel.close()
 

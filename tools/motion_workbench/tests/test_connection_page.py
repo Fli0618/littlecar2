@@ -4,15 +4,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from map_planner.models import Plan, Waypoint
 from motion_workbench.app import MotionConfigExportDialog, MotionWorkbenchWindow
-from motion_workbench.models import CoordinateSyncState
 from pid_tuner.models import (GotoStrategySnapshot, HolonomicConfig, HolonomicConfigState,
                                PathConfigSnapshot, PathConfigState, PidConfig, PidConfigState,
                                Telemetry)
@@ -29,20 +26,27 @@ class ConnectionPageTests(unittest.TestCase):
         self.assertIsNotNone(window.connection_panel)
         window.close()
 
-    def test_left_path_buttons_drive_the_complete_plan_workflow(self) -> None:
+    def test_path_tab_only_edits_parameters_and_realtime_page_executes(self) -> None:
         window = MotionWorkbenchWindow()
         try:
-            plan = Plan(steps=[Waypoint(10, 20, 0), Waypoint(30, 40, 0)])
-            window.map_editor.set_plan(plan, calibrated=True)
-            window.controller.session.connected = True
-            window.controller._set_coordinate_sync_state(CoordinateSyncState.SYNCED)
+            self.assertFalse(hasattr(window.path_panel, "upload"))
+            self.assertFalse(hasattr(window.path_panel, "start"))
+            self.assertFalse(hasattr(window.path_panel, "abort"))
+            self.assertIsNotNone(window.map_editor.execution_step_button)
+            self.assertIsNotNone(window.map_editor.execution_run_button)
 
-            window.path_panel.upload.click()
-            self.assertIn("共 2 个动作", window.path_panel.status.text())
-            with patch.object(window.controller, "start_full_plan",
-                              return_value=True) as start_full_plan:
-                window.path_panel.start.click()
-                start_full_plan.assert_called_once_with()
+            index = window.map_editor.execution_controller_combo.findData("holonomic")
+            window.map_editor.execution_controller_combo.setCurrentIndex(index)
+            self.assertEqual(window.controller._plan_point_controller, "holonomic")
+        finally:
+            window.close()
+
+    def test_hardware_execution_reports_missing_serial_connection(self) -> None:
+        window = MotionWorkbenchWindow()
+        try:
+            window.map_editor.execution_enabled_switch.click()
+            self.assertFalse(window.map_editor.execution_enabled)
+            self.assertIn("请先连接串口", window.map_editor.execution_status_label.text())
         finally:
             window.close()
 
