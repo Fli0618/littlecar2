@@ -16,7 +16,7 @@ extern "C"
 #define ARM_LIFT_MOTOR_ID ((uint8_t)5U) /*!< 升降轴电机 ID。 */
 #define ARM_SLIDE_MOTOR_ID ((uint8_t)6U) /*!< 前后滑台电机 ID。 */
 
-/* ==================== 运动与阻塞参数 ==================== */
+/* ==================== 运动参数 ==================== */
 
 /* 升降轴运动参数：只标定上升方向，下降方向自动取反。 */
 #define ARM_LIFT_UP_DIRECTION ((uint8_t)1U) /*!< 升降轴上升方向，需实机确认。 */
@@ -24,7 +24,6 @@ extern "C"
 #define ARM_LIFT_ABSOLUTE_DIRECTION ARM_LIFT_DOWN_DIRECTION /*!< 升降轴绝对坐标正方向。 */
 #define ARM_LIFT_SPEED ((uint16_t)300U) /*!< 升降轴运动速度。 */
 #define ARM_LIFT_ACC ((uint8_t)10U) /*!< 升降轴加速度。 */
-#define ARM_LIFT_MOVE_DELAY_MS ((uint32_t)5000U) /*!< 升降位置命令后的固定阻塞时间，需随速度、加速度和点位实机标定。 */
 #define ARM_LIFT_POS_MAX ((uint32_t)18000U) /*!< 升降轴软件最大安全坐标，需实机标定并预留机械余量。 */
 
 /* 前后滑台运动参数：只标定伸出方向，收回方向自动取反。滑台不使用光电限位。 */
@@ -33,7 +32,6 @@ extern "C"
 #define ARM_SLIDE_ABSOLUTE_DIRECTION ARM_SLIDE_EXTEND_DIRECTION /*!< 滑台绝对坐标正方向。 */
 #define ARM_SLIDE_SPEED ((uint16_t)300U) /*!< 滑台运动速度。 */
 #define ARM_SLIDE_ACC ((uint8_t)10U) /*!< 滑台加速度。 */
-#define ARM_SLIDE_MOVE_DELAY_MS ((uint32_t)5000U) /*!< 滑台位置命令后的固定阻塞时间，需随速度、加速度和点位实机标定。 */
 #define ARM_SLIDE_POS_MAX ((uint32_t)28000U) /*!< 滑台最大允许绝对坐标。 */
 
 /* 舵机运动参数。 */
@@ -43,7 +41,6 @@ extern "C"
 #define ARM_GRIPPER_ACC ((uint16_t)20U) /*!< 夹爪舵机加速度。 */
 #define ARM_MATERIAL_SPEED ((uint16_t)500U) /*!< 物料盘舵机速度。 */
 #define ARM_MATERIAL_ACC ((uint16_t)20U) /*!< 物料盘舵机加速度。 */
-#define ARM_SERVO_MOVE_DELAY_MS ((uint32_t)1000U) /*!< 舵机动作后的固定阻塞时间。 */
 
 /* 升降轴归零参数：仅归零过程读取顶部光电。 */
 #define ARM_HOME_SPEED ((uint16_t)80U) /*!< 升降轴寻找零点的速度。 */
@@ -51,8 +48,6 @@ extern "C"
 #define ARM_HOME_ACC ((uint8_t)10U) /*!< 升降轴归零加速度。 */
 #define ARM_HOME_TIMEOUT_MS ((uint32_t)10000U) /*!< 升降轴寻找零点的总超时。 */
 #define ARM_HOME_RELEASE_TIMEOUT_MS ((uint32_t)3000U) /*!< 升降轴释放限位超时。 */
-#define ARM_HOME_COMMAND_DELAY_MS ((uint32_t)100U) /*!< 停止、清零命令间隔。 */
-#define ARM_HOME_POLL_DELAY_MS ((uint32_t)1U) /*!< 归零过程中轮询顶部光电的阻塞间隔。 */
 
 /* ==================== 固定点位标定 ==================== */
 
