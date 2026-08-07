@@ -51,6 +51,7 @@ class PathConfigSnapshot:
     initial_lookahead_mm: float
     final_capture_distance_mm: float
     final_capture_speed_mm_s: float
+    hardware_acc: float
 
     def to_dict(self) -> dict[str, float]:
         return asdict(self)

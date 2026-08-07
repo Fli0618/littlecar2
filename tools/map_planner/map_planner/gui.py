@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import math
-import sys
+import sys  
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -594,6 +594,7 @@ class MapEditorWidget(QWidget):
             for label in (self.cursor_position_label, self.current_position_label, self.selected_pose_label):
                 label.setWordWrap(True); box.addWidget(label)
             self.navigation_strategy = QComboBox()
+            self.navigation_strategy.addItem("直道优先自转（推荐）", "early_straight")
             self.navigation_strategy.addItem("稳定自动（优先保持航向，必要时末端原地转向）", "auto")
             self.navigation_strategy.addItem("保持当前车身航向", "fixed")
             self.navigation_strategy.addItem("车头跟随路径切线", "tangent")
@@ -742,10 +743,14 @@ class MapEditorWidget(QWidget):
             self.auto_goal_x = spin(0.0, 0.0, FIELD_SIZE_MM, 5.0)
             self.auto_goal_y = spin(0.0, 0.0, FIELD_SIZE_MM, 5.0)
             self.auto_goal_yaw = spin(0.0, -180.0, 180.0, 5.0)
-            self.auto_yaw_mode = QComboBox(); self.auto_yaw_mode.addItem("保持当前车身航向", "fixed"); self.auto_yaw_mode.addItem("起终点航向插值", "interpolate"); self.auto_yaw_mode.addItem("车头跟随轨迹切线", "tangent")
+            self.yaw_start_buffer = spin(150.0, 0.0, 1000.0, 10.0)
+            self.yaw_corner_buffer = spin(100.0, 0.0, 1000.0, 10.0)
+            self.yaw_smooth_window = spin(50.0, 0.0, 500.0, 10.0)
             self.show_inflated_zones = QCheckBox("显示障碍膨胀区和边缘代价带"); self.show_inflated_zones.setChecked(True)
             auto_form.addRow("目标 X (mm)", self.auto_goal_x); auto_form.addRow("目标 Y (mm)", self.auto_goal_y); auto_form.addRow("目标 Yaw (deg)", self.auto_goal_yaw)
-            auto_form.addRow("五次并线半径 (mm)", self.auto_corner_radius); auto_form.addRow("采样间距 (mm)", self.auto_sample_spacing); auto_form.addRow("末端直线对接长度 (mm)", self.auto_terminal_straight); auto_form.addRow(self.show_inflated_zones)
+            auto_form.addRow("五次并线半径 (mm)", self.auto_corner_radius); auto_form.addRow("采样间距 (mm)", self.auto_sample_spacing); auto_form.addRow("末端直线对接长度 (mm)", self.auto_terminal_straight)
+            auto_form.addRow("自转:起步缓冲(mm)", self.yaw_start_buffer); auto_form.addRow("自转:弯道缓冲(mm)", self.yaw_corner_buffer); auto_form.addRow("自转:平滑窗口(mm)", self.yaw_smooth_window)
+            auto_form.addRow(self.show_inflated_zones)
             self.generate_segment_button = QPushButton("生成/更新本小段路径")
             self.generate_segment_button.setStyleSheet(
                 "QPushButton{background:#f9a825;color:#1b1b1b;padding:10px;"
@@ -763,7 +768,7 @@ class MapEditorWidget(QWidget):
             local_note.setWordWrap(True); local_box.addWidget(local_note); cost_box.addWidget(local_group)
             for control in self._costmap_controls:
                 control.valueChanged.connect(self._on_costmap_changed)
-            self.auto_corner_radius.valueChanged.connect(self._mark_selected_segment_dirty); self.auto_sample_spacing.valueChanged.connect(self._mark_selected_segment_dirty); self.auto_terminal_straight.valueChanged.connect(self._mark_selected_segment_dirty); self.auto_goal_x.valueChanged.connect(self._on_goal_control_changed); self.auto_goal_y.valueChanged.connect(self._on_goal_control_changed); self.auto_goal_yaw.valueChanged.connect(self._on_goal_control_changed); self.navigation_strategy.currentIndexChanged.connect(self._mark_selected_segment_dirty); self.show_inflated_zones.toggled.connect(self.redraw)
+            self.auto_corner_radius.valueChanged.connect(self._mark_selected_segment_dirty); self.auto_sample_spacing.valueChanged.connect(self._mark_selected_segment_dirty); self.auto_terminal_straight.valueChanged.connect(self._mark_selected_segment_dirty); self.yaw_start_buffer.valueChanged.connect(self._mark_selected_segment_dirty); self.yaw_corner_buffer.valueChanged.connect(self._mark_selected_segment_dirty); self.yaw_smooth_window.valueChanged.connect(self._mark_selected_segment_dirty); self.auto_goal_x.valueChanged.connect(self._on_goal_control_changed); self.auto_goal_y.valueChanged.connect(self._on_goal_control_changed); self.auto_goal_yaw.valueChanged.connect(self._on_goal_control_changed); self.navigation_strategy.currentIndexChanged.connect(self._mark_selected_segment_dirty); self.show_inflated_zones.toggled.connect(self.redraw)
             self.bezier_panel = QWidget(); bezier_box = QVBoxLayout(self.bezier_panel); bezier_box.setContentsMargins(0, 0, 0, 0)
             bezier_box.addWidget(QLabel("曲线航向")); bezier_form = QFormLayout()
             self.bezier_yaw_mode = QComboBox(); self.bezier_yaw_mode.addItem("起终点航向插值", "interpolate"); self.bezier_yaw_mode.addItem("切线跟随", "tangent")
@@ -1191,6 +1196,9 @@ class MapEditorWidget(QWidget):
                 sample_spacing_mm=self.auto_sample_spacing.value(),
                 terminal_straight_mm=self.auto_terminal_straight.value(),
                 yaw_mode="fixed",
+                yaw_start_buffer_mm=self.yaw_start_buffer.value(),
+                yaw_corner_buffer_mm=self.yaw_corner_buffer.value(),
+                yaw_smooth_window_mm=self.yaw_smooth_window.value(),
                 include_fixed_platforms=not self.allow_yellow_zone.isChecked(),
             )
 
@@ -1365,6 +1373,9 @@ class MapEditorWidget(QWidget):
                     sample_spacing_mm=self.auto_sample_spacing.value(),
                     terminal_straight_mm=self.auto_terminal_straight.value(),
                     yaw_mode=settings.yaw_mode,
+                    yaw_start_buffer_mm=self.yaw_start_buffer.value(),
+                    yaw_corner_buffer_mm=self.yaw_corner_buffer.value(),
+                    yaw_smooth_window_mm=self.yaw_smooth_window.value(),
                     goal_yaw_deg=target_yaw,
                     strategy=str(self.navigation_strategy.currentData()),
                 ))
@@ -1431,6 +1442,9 @@ class MapEditorWidget(QWidget):
                             sample_spacing_mm=step.auto_settings.sample_spacing_mm,
                             terminal_straight_mm=step.auto_settings.terminal_straight_mm,
                             yaw_mode=step.auto_settings.yaw_mode,
+                            yaw_start_buffer_mm=getattr(step.auto_settings, "yaw_start_buffer_mm", 150.0),
+                            yaw_corner_buffer_mm=getattr(step.auto_settings, "yaw_corner_buffer_mm", 100.0),
+                            yaw_smooth_window_mm=getattr(step.auto_settings, "yaw_smooth_window_mm", 50.0),
                         )
                         goal_yaw = step.auto_settings.goal_yaw_deg
                     result = plan_auto_path(
@@ -2137,15 +2151,14 @@ class MapEditorWidget(QWidget):
                 (self.auto_corner_radius, settings.corner_radius_mm),
                 (self.auto_sample_spacing, settings.sample_spacing_mm),
                 (self.auto_terminal_straight, settings.terminal_straight_mm),
+                (self.yaw_start_buffer, getattr(settings, "yaw_start_buffer_mm", 150.0)),
+                (self.yaw_corner_buffer, getattr(settings, "yaw_corner_buffer_mm", 100.0)),
+                (self.yaw_smooth_window, getattr(settings, "yaw_smooth_window_mm", 50.0)),
                 (self.auto_goal_yaw, settings.goal_yaw_deg),
             )
             for control, value in controls:
                 control.blockSignals(True); control.setValue(value); control.blockSignals(False)
-            yaw_index = self.auto_yaw_mode.findData(settings.yaw_mode)
-            strategy_index = self.navigation_strategy.findData(settings.strategy)
-            self.auto_yaw_mode.blockSignals(True)
-            self.auto_yaw_mode.setCurrentIndex(yaw_index if yaw_index >= 0 else 0)
-            self.auto_yaw_mode.blockSignals(False)
+            strategy_index = self.navigation_strategy.findData(settings.strategy if hasattr(settings, "strategy") and settings.strategy else settings.yaw_mode)
             self.navigation_strategy.blockSignals(True)
             self.navigation_strategy.setCurrentIndex(
                 strategy_index if strategy_index >= 0 else 0)
@@ -2983,10 +2996,12 @@ class MapEditorWidget(QWidget):
 
             strategy = str(self.navigation_strategy.currentData())
             labels = {
-                "auto": "稳定自动", "fixed": "保持航向", "tangent": "切线航向",
+                "early_straight": "直道自转", "auto": "稳定自动", "fixed": "保持航向", "tangent": "切线航向",
                 "interpolate": "连续转向", "terminal": "末端转向",
             }
-            if strategy in ("auto", "terminal"):
+            if strategy == "early_straight":
+                yaw_mode, terminal_rotation = "early_straight", True
+            elif strategy in ("auto", "terminal"):
                 yaw_mode, terminal_rotation = "fixed", True
             elif strategy == "fixed":
                 yaw_mode, terminal_rotation = "fixed", False

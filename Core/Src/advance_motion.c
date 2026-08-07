@@ -131,7 +131,8 @@ static const AdvanceMotion_PathControlConfig_t g_path_config_default = {
     .lookahead_rate_mm_s = ADVANCE_MOTION_PATH_LOOKAHEAD_RATE_MM_S,
     .initial_lookahead_mm = ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM,
     .final_capture_distance_mm = ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM,
-    .final_capture_speed_mm_s = ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S};
+    .final_capture_speed_mm_s = ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S,
+    .hardware_acc = ADVANCE_MOTION_PATH_HARDWARE_ACC};
 
 /* 返回浮点数的绝对值。 */
 static float AdvanceMotion_AbsFloat(float value)
@@ -1748,6 +1749,7 @@ void AdvanceMotion_Update(void)
       vmax_mm_s = (g_path.active != 0U)
                       ? g_path_config_active.final_capture_speed_mm_s
                       : AdvanceMotion_GetGoalVmax(&g_motion.goal);
+                      
       if ((g_motion_control.large_yaw_align_enabled != 0U) && (yaw_required != 0U))
       {
         vmax_mm_s *= AdvanceMotion_GetLargeYawAlignLinearScale(g_motion.yaw_error_deg);
@@ -1800,8 +1802,8 @@ void AdvanceMotion_Update(void)
   }
 
   {
-    float max_dv = 2000.0f * dt_s;
-    float max_dw = 1000.0f * dt_s;
+    float max_dv = 10000.0f * dt_s;
+    float max_dw = 5000.0f * dt_s;
     vx_world_mm_s = AdvanceWorld_LimitFloat(vx_world_mm_s,
         g_motion_control.command_vx_world_mm_s - max_dv,
         g_motion_control.command_vx_world_mm_s + max_dv);
@@ -1813,11 +1815,18 @@ void AdvanceMotion_Update(void)
         g_motion_control.command_wz_ccw_deg_s + max_dw);
   }
 
+  /* 🌟 双模智能加速度分配：
+   * 路径循迹阶段 (Path & final_stage == 0)：传配置的硬件 acc（默认2U）给硬件，平滑化滤波。
+   * 单点 Goto 及路径终点捕获阶段：传 30U 开启电机硬件加减速，消除到点停止时的微小余震！ */
+  uint8_t effective_acc = ((g_path.active != 0U) && (path_final_stage == 0U))
+                              ? (uint8_t)g_path_config_active.hardware_acc
+                              : ((g_motion_control.acc != 0U) ? g_motion_control.acc : 30U);
+
   if (((position_required != 0U) &&
        (AdvanceMotion_ApplyWorldVelocityEx(vx_world_mm_s, vy_world_mm_s, wz_ccw_deg_s,
-                                            g_motion_control.acc, &g_motion.pose) == ADVANCE_MOTION_STATUS_OK)) ||
+                                            effective_acc, &g_motion.pose) == ADVANCE_MOTION_STATUS_OK)) ||
       ((position_required == 0U) &&
-       (Chassis_SetBodyVelocityEx(0.0f, 0.0f, wz_ccw_deg_s, g_motion_control.acc) != 0U)))
+       (Chassis_SetBodyVelocityEx(0.0f, 0.0f, wz_ccw_deg_s, effective_acc) != 0U)))
   {
     g_motion_control.command_vx_world_mm_s = vx_world_mm_s;
     g_motion_control.command_vy_world_mm_s = vy_world_mm_s;

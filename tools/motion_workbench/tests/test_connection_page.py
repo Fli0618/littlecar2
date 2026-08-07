@@ -72,7 +72,7 @@ class ConnectionPageTests(unittest.TestCase):
             window.controller.session.connected = True
             window._cache_pid_state(PidConfigState(12, PidConfig(1, 2, 3, 4, 5, 6)))
             self.assertFalse(window.export_motion_config.isEnabled())
-            path = PathConfigState(8, PathConfigSnapshot(*[float(value) for value in range(1, 21)]))
+            path = PathConfigState(8, PathConfigSnapshot(*[float(value) for value in range(1, 22)]))
             window._cache_path_state(path)
             self.assertFalse(window.export_motion_config.isEnabled())
             window._cache_goto_strategy(GotoStrategySnapshot(True))
