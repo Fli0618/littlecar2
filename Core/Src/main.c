@@ -349,7 +349,11 @@ int main(void)
   }
 #else
 
+  // 丝杆回零，要保证光电正常工作
+  AdvanceArm_LiftLowBlocking();
+  
   // 测试
+
 
   Competition_StartArea_t start_area;
 

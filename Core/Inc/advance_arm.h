@@ -42,10 +42,10 @@ extern "C"
 #define ARM_MATERIAL_ACC ((uint16_t)20U) /*!< 物料盘舵机加速度。 */
 
 /* 升降轴归零参数：仅归零过程读取顶部光电。 */
-#define ARM_HOME_SPEED ((uint16_t)80U) /*!< 升降轴寻找零点的速度。 */
-#define ARM_HOME_RELEASE_SPEED ((uint16_t)40U) /*!< 升降轴释放顶部限位的速度。 */
-#define ARM_HOME_ACC ((uint8_t)10U) /*!< 升降轴归零加速度。 */
-#define ARM_HOME_TIMEOUT_MS ((uint32_t)10000U) /*!< 升降轴寻找零点的总超时。 */
+#define ARM_HOME_SPEED ((uint16_t)1500) /*!< 升降轴寻找零点的速度。 */
+#define ARM_HOME_RELEASE_SPEED ((uint16_t)1000) /*!< 升降轴释放顶部限位的速度。 */
+#define ARM_HOME_ACC ((uint8_t)0) /*!< 升降轴归零加速度。 */
+#define ARM_HOME_TIMEOUT_MS ((uint32_t)7000U) /*!< 升降轴寻找零点的总超时。 */
 #define ARM_HOME_RELEASE_TIMEOUT_MS ((uint32_t)3000U) /*!< 升降轴释放限位超时。 */
 
 /* ==================== 固定点位标定 ==================== */
@@ -54,9 +54,9 @@ extern "C"
 #define ARM_LIFT_POS_HOME ((uint32_t)0U) /*!< 升降轴顶部零点。 */
 #define ARM_LIFT_POS_LOW ((uint32_t)3200*16) /*!< 通用低位。 */
 #define ARM_LIFT_POS_HIGH ((uint32_t)0U) /*!< 通用安全高位。 */
-#define ARM_LIFT_POS_PICKUP ((uint32_t)0U) /*!< 外侧原料盘拿取高度。 */
-#define ARM_LIFT_POS_TRAY ((uint32_t)0U) /*!< 小车自身物料盘高度。 */
-#define ARM_LIFT_POS_STACK ((uint32_t)0U) /*!< 码垛高度。 */
+#define ARM_LIFT_POS_PICKUP ((uint32_t)3200*7) /*!< 外侧原料盘拿取高度。 */
+#define ARM_LIFT_POS_TRAY ((uint32_t)3200*7) /*!< 小车自身物料盘高度。 */
+#define ARM_LIFT_POS_STACK ((uint32_t)3200*11) /*!< 码垛高度。 */
 
 /* 前后滑台固定点位：由人工建立软件零点，不使用光电限位。 */
 #define ARM_SLIDE_POS_HOME ((uint32_t)0U) /*!< 滑台人工建立的软件零点。 */
