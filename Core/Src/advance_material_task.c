@@ -31,150 +31,155 @@ static bool AdvanceMaterialTask_ParseDigit(char value,
   return true;
 }
 
-static bool AdvanceMaterialTask_SelectTraySlot(uint8_t slot)
+static void AdvanceMaterialTask_SelectTraySlot(uint8_t slot)
 {
   switch (slot)
   {
   case 1U:
     AdvanceArm_TraySlot1();
-    return true;
+    break;
 
   case 2U:
     AdvanceArm_TraySlot2();
-    return true;
+    break;
 
   case 3U:
     AdvanceArm_TraySlot3();
-    return true;
+    break;
 
   default:
-    return false;
+    break;
   }
 }
 
-static bool AdvanceMaterialTask_RotateOutward(uint8_t position)
+static void AdvanceMaterialTask_RotateOutward(uint8_t position)
 {
   switch (position)
   {
   case ADVANCE_MATERIAL_POSITION_LEFT:
     AdvanceArm_RotateOutwardLeft();
-    return true;
+    break;
 
   case ADVANCE_MATERIAL_POSITION_CENTER:
     AdvanceArm_RotateOutwardCenter();
-    return true;
+    break;
 
   case ADVANCE_MATERIAL_POSITION_RIGHT:
     AdvanceArm_RotateOutwardRight();
-    return true;
+    break;
 
   default:
-    return false;
+    break;
   }
 }
 
-static bool AdvanceMaterialTask_ToVisualColor(uint8_t color,
-                                               ColorType_t *visual_color)
+static ColorType_t AdvanceMaterialTask_ToVisualColor(uint8_t color)
 {
-  if (visual_color == NULL)
+  return (ColorType_t)(color - 1U);
+}
+
+static void AdvanceMaterialTask_WaitColorAtPickupBlocking(ColorType_t color)
+{
+  Detect_TargetList_t targets = {0};
+  uint8_t index;
+
+  while (1)
   {
-    return false;
-  }
+    if ((detect_get_targets(&targets) != 0U) &&
+        (detect_is_fresh(ADVANCE_VISUAL_STALE_MS) != 0U))
+    {
+      for (index = 0U; index < targets.count; ++index)
+      {
+        const Detect_Target_t *target = &targets.targets[index];
+        int32_t error_x;
+        int32_t error_y;
 
-  switch (color)
-  {
-  case 1U:
-    *visual_color = RED;
-    return true;
+        if ((target->type != (uint8_t)color) ||
+            (target->measured == 0U) ||
+            (target->support_count < ADVANCE_VISUAL_ARRIVE_COUNT))
+        {
+          continue;
+        }
 
-  case 2U:
-    *visual_color = YELLOW;
-    return true;
+        error_x = (int32_t)target->x - (int32_t)ADVANCE_VISUAL_COLOR_REF_X;
+        error_y = (int32_t)target->y - (int32_t)ADVANCE_VISUAL_COLOR_REF_Y;
+        if (error_x < 0)
+        {
+          error_x = -error_x;
+        }
+        if (error_y < 0)
+        {
+          error_y = -error_y;
+        }
 
-  case 3U:
-    *visual_color = BLUE;
-    return true;
+        if ((error_x <= (int32_t)ADVANCE_VISUAL_TOLERANCE_X) &&
+            (error_y <= (int32_t)ADVANCE_VISUAL_TOLERANCE_Y))
+        {
+          return;
+        }
+      }
+    }
 
-  case 4U:
-    *visual_color = GREEN;
-    return true;
-
-  default:
-    return false;
+    __WFI();
   }
 }
 
-static bool AdvanceMaterialTask_PlaceInTray(uint8_t tray_slot)
+static void AdvanceMaterialTask_PlaceInTray(uint8_t tray_slot)
 {
-  if (!AdvanceMaterialTask_SelectTraySlot(tray_slot))
-  {
-    return false;
-  }
-
+  AdvanceMaterialTask_SelectTraySlot(tray_slot);
   AdvanceArm_RotateToTray();
   AdvanceArm_LiftToTrayBlocking();
   AdvanceArm_GripperOpen();
   AdvanceArm_LiftHighBlocking();
-  return true;
 }
 
-static bool AdvanceMaterialTask_PickTurntableToTray(uint8_t tray_slot)
+static void AdvanceMaterialTask_PrepareTurntablePickup(void)
 {
   AdvanceArm_LiftHighBlocking();
   AdvanceArm_SlideToTrayBlocking();
   AdvanceArm_GripperOpen();
   AdvanceArm_RotateOutwardCenter();
   AdvanceArm_SlideToPickupBlocking();
+}
+
+static void AdvanceMaterialTask_PickTurntableToTray(uint8_t tray_slot)
+{
   AdvanceArm_LiftToPickupBlocking();
   AdvanceArm_GripperClose();
   AdvanceArm_LiftHighBlocking();
   AdvanceArm_SlideToTrayBlocking();
-  return AdvanceMaterialTask_PlaceInTray(tray_slot);
+  AdvanceMaterialTask_PlaceInTray(tray_slot);
 }
 
-static bool AdvanceMaterialTask_PickPositionToTray(uint8_t position,
-                                                    uint8_t tray_slot)
+static void AdvanceMaterialTask_PickPositionToTray(uint8_t position,
+                                                   uint8_t tray_slot)
 {
   AdvanceArm_LiftHighBlocking();
   AdvanceArm_SlideToTrayBlocking();
   AdvanceArm_GripperOpen();
-
-  if (!AdvanceMaterialTask_RotateOutward(position))
-  {
-    return false;
-  }
-
+  AdvanceMaterialTask_RotateOutward(position);
   AdvanceArm_SlideToPickupBlocking();
   AdvanceArm_LiftLowBlocking();
   AdvanceArm_GripperClose();
   AdvanceArm_LiftHighBlocking();
   AdvanceArm_SlideToTrayBlocking();
-  return AdvanceMaterialTask_PlaceInTray(tray_slot);
+  AdvanceMaterialTask_PlaceInTray(tray_slot);
 }
 
-static bool AdvanceMaterialTask_PlaceTrayToPosition(uint8_t tray_slot,
-                                                     uint8_t position,
-                                                     bool stacking)
+static void AdvanceMaterialTask_PlaceTrayToPosition(uint8_t tray_slot,
+                                                    uint8_t position,
+                                                    bool stacking)
 {
   AdvanceArm_LiftHighBlocking();
   AdvanceArm_SlideToTrayBlocking();
-
-  if (!AdvanceMaterialTask_SelectTraySlot(tray_slot))
-  {
-    return false;
-  }
-
+  AdvanceMaterialTask_SelectTraySlot(tray_slot);
   AdvanceArm_RotateToTray();
   AdvanceArm_LiftToTrayBlocking();
   AdvanceArm_GripperClose();
   AdvanceArm_LiftHighBlocking();
-
-  if (!AdvanceMaterialTask_RotateOutward(position))
-  {
-    return false;
-  }
-
+  AdvanceMaterialTask_RotateOutward(position);
   AdvanceArm_SlideToPickupBlocking();
+
   if (stacking)
   {
     AdvanceArm_LiftToStackBlocking();
@@ -187,63 +192,53 @@ static bool AdvanceMaterialTask_PlaceTrayToPosition(uint8_t tray_slot,
   AdvanceArm_GripperOpen();
   AdvanceArm_LiftHighBlocking();
   AdvanceArm_SlideToTrayBlocking();
-  return true;
 }
 
-static bool AdvanceMaterialTask_Collect(
+static void AdvanceMaterialTask_Collect(
     const uint8_t colors[ADVANCE_MATERIAL_TASK_ITEM_COUNT])
 {
   uint8_t index;
 
+  /* 底盘只对准一次原料转盘中心，后续取料过程中保持不动。 */
+  (void)AdvanceVisual_AlignDiskCenterBlocking();
+  HAL_Delay(10U);
+
+  /* 机械臂进入固定取料姿态，之后等待目标颜色转到该位置。 */
+  AdvanceMaterialTask_PrepareTurntablePickup();
+  (void)detect_color_start();
+
   for (index = 0U; index < ADVANCE_MATERIAL_TASK_ITEM_COUNT; ++index)
   {
-    ColorType_t visual_color;
+    AdvanceMaterialTask_WaitColorAtPickupBlocking(
+        AdvanceMaterialTask_ToVisualColor(colors[index]));
+    AdvanceMaterialTask_PickTurntableToTray(index + 1U);
 
-    if (!AdvanceMaterialTask_ToVisualColor(colors[index], &visual_color))
+    if ((index + 1U) < ADVANCE_MATERIAL_TASK_ITEM_COUNT)
     {
-      return false;
-    }
-
-    if (AdvanceVisual_AlignColorBlocking(visual_color) !=
-        ADVANCE_VISUAL_STATE_ARRIVED)
-    {
-      return false;
-    }
-
-    if (!AdvanceMaterialTask_PickTurntableToTray(index + 1U))
-    {
-      return false;
+      AdvanceMaterialTask_PrepareTurntablePickup();
     }
   }
 
-  return true;
+  (void)detect_stop();
 }
 
-static bool AdvanceMaterialTask_Process(
+static void AdvanceMaterialTask_Process(
     const uint8_t positions[ADVANCE_MATERIAL_TASK_ITEM_COUNT])
 {
   uint8_t index;
 
   for (index = 0U; index < ADVANCE_MATERIAL_TASK_ITEM_COUNT; ++index)
   {
-    if (!AdvanceMaterialTask_PlaceTrayToPosition(index + 1U,
-                                                 positions[index],
-                                                 false))
-    {
-      return false;
-    }
+    AdvanceMaterialTask_PlaceTrayToPosition(index + 1U,
+                                            positions[index],
+                                            false);
   }
 
   for (index = 0U; index < ADVANCE_MATERIAL_TASK_ITEM_COUNT; ++index)
   {
-    if (!AdvanceMaterialTask_PickPositionToTray(positions[index],
-                                                index + 1U))
-    {
-      return false;
-    }
+    AdvanceMaterialTask_PickPositionToTray(positions[index],
+                                           index + 1U);
   }
-
-  return true;
 }
 
 static uint8_t AdvanceMaterialTask_FindPosition1(
@@ -351,70 +346,49 @@ bool AdvanceMaterialTask_ParseCode(
   return true;
 }
 
-bool AdvanceMaterialTask_Collect1(const AdvanceMaterialTask_t *task)
+void AdvanceMaterialTask_Collect1(const AdvanceMaterialTask_t *task)
 {
-  return (task != NULL) && AdvanceMaterialTask_Collect(task->color1);
+  AdvanceMaterialTask_Collect(task->color1);
 }
 
-bool AdvanceMaterialTask_Process1(const AdvanceMaterialTask_t *task)
+void AdvanceMaterialTask_Process1(const AdvanceMaterialTask_t *task)
 {
-  return (task != NULL) && AdvanceMaterialTask_Process(task->position1);
+  AdvanceMaterialTask_Process(task->position1);
 }
 
-bool AdvanceMaterialTask_Store1(const AdvanceMaterialTask_t *task)
+void AdvanceMaterialTask_Store1(const AdvanceMaterialTask_t *task)
 {
   uint8_t index;
-
-  if (task == NULL)
-  {
-    return false;
-  }
 
   for (index = 0U; index < ADVANCE_MATERIAL_TASK_ITEM_COUNT; ++index)
   {
-    if (!AdvanceMaterialTask_PlaceTrayToPosition(index + 1U,
-                                                 task->position1[index],
-                                                 false))
-    {
-      return false;
-    }
+    AdvanceMaterialTask_PlaceTrayToPosition(index + 1U,
+                                            task->position1[index],
+                                            false);
   }
-
-  return true;
 }
 
-bool AdvanceMaterialTask_Collect2(const AdvanceMaterialTask_t *task)
+void AdvanceMaterialTask_Collect2(const AdvanceMaterialTask_t *task)
 {
-  return (task != NULL) && AdvanceMaterialTask_Collect(task->color2);
+  AdvanceMaterialTask_Collect(task->color2);
 }
 
-bool AdvanceMaterialTask_Process2(const AdvanceMaterialTask_t *task)
+void AdvanceMaterialTask_Process2(const AdvanceMaterialTask_t *task)
 {
-  return (task != NULL) && AdvanceMaterialTask_Process(task->position2);
+  AdvanceMaterialTask_Process(task->position2);
 }
 
-bool AdvanceMaterialTask_Stack2(const AdvanceMaterialTask_t *task)
+void AdvanceMaterialTask_Stack2(const AdvanceMaterialTask_t *task)
 {
   uint8_t index;
-
-  if (task == NULL)
-  {
-    return false;
-  }
 
   for (index = 0U; index < ADVANCE_MATERIAL_TASK_ITEM_COUNT; ++index)
   {
     uint8_t target_position =
         AdvanceMaterialTask_FindPosition1(task, task->color2[index]);
 
-    if ((target_position == 0U) ||
-        !AdvanceMaterialTask_PlaceTrayToPosition(index + 1U,
-                                                 target_position,
-                                                 true))
-    {
-      return false;
-    }
+    AdvanceMaterialTask_PlaceTrayToPosition(index + 1U,
+                                            target_position,
+                                            true);
   }
-
-  return true;
 }
