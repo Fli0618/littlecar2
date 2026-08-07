@@ -12,7 +12,7 @@ extern "C"
 
 /** @brief 限位传感器的有效电平，可按实际接线在编译期覆盖。 */
 #ifndef SENSOR_LIMIT_ACTIVE_LEVEL
-#define SENSOR_LIMIT_ACTIVE_LEVEL GPIO_PIN_SET
+#define SENSOR_LIMIT_ACTIVE_LEVEL GPIO_PIN_RESET
 #endif
 
 /**
