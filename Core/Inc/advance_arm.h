@@ -6,7 +6,6 @@ extern "C"
 {
 #endif
 
-#include <stdbool.h>
 #include <stdint.h>
 
 /* 设备 ID。 */
@@ -91,8 +90,7 @@ void AdvanceArm_SlideSetCurrentAsZero(void);
 void AdvanceArm_Stop(void);
 void AdvanceArm_EStop(void);
 
-/* 基础动作接口：位置命令下发后仅使用 HAL_Delay 固定等待，不读取电机反馈。 */
-void AdvanceArm_Grab(bool closed);
+/* 步进轴基础动作：位置命令下发后仅使用 HAL_Delay 固定等待，不读取电机反馈。 */
 void AdvanceArm_MoveLiftToBlocking(uint32_t position_pulse);
 void AdvanceArm_MoveSlideToBlocking(uint32_t position_pulse);
 
