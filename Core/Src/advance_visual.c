@@ -493,6 +493,8 @@ void AdvanceVisual_Init(void)
   g_last_target_tick = 0U;
   g_visual_debug_snapshot = (AdvanceVisual_DebugSnapshot_t){0};
 
+  Chassis_Enable(true);
+
 #ifdef ADVANCE_VISUAL_TEST
   g_visual_transform_test_passed = AdvanceVisual_RunTransformSelfTest();
   g_visual_target_test_passed = AdvanceVisual_RunTargetSelectionSelfTest();

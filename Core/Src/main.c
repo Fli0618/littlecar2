@@ -135,79 +135,34 @@ static void App_RunTask(Competition_StartArea_t start_area) // 传入启停区�
   Detect_TargetList_t targets = {0};
   uint8_t i;
 
+  // 去二维码的路径不同，读完二维码就路径统一了
+  // 最终回位也需要这样的处理
+  switch(start_area)
+  {
+    case COMPETITION_START_AREA_1: break;
+    case COMPETITION_START_AREA_2: break;
+  }
+
   /* 1. 二维码识别 */
   (void)detect_qr_read_blocking(code);
   printf("[QR] %s\r\n", code);
+  HAL_Delay(100U);
 
+  // 视觉定位部分
   /*
-   * detect_qr_read_blocking() 退出前已经发送 STOP。
-   * 稍等 USART6 DMA 发送完成，再启动下一项任务。
-   */
-  HAL_Delay(10U);
+  AdvanceVisual_State_t state;
+  Chassis_Enable(true);
+  HAL_Delay(1500U);
+  state = AdvanceVisual_AlignCircleBlocking(NUMBER_3);
+  HAL_Delay(1500U);
+  state = AdvanceVisual_AlignCircleBlocking(NUMBER_1);
+  HAL_Delay(1500U);
+  state = AdvanceVisual_AlignCircleBlocking(NUMBER_2);
+  // state = AdvanceVisual_AlignColorBlocking(RED);
+  printf("[VISUAL] state=%u\r\n", (unsigned int)state);
+  */
 
-  /* 2. 颜色识别 */
-  (void)detect_color_start();
-
-  while (1)
-  {
-    if (detect_get_targets(&targets) != 0U)
-    {
-      printf("[COLOR] count=%u\r\n",
-             (unsigned int)targets.count);
-
-      for (i = 0U; i < targets.count; ++i)
-      {
-        printf("type=%u x=%d y=%d conf=%u\r\n",
-               (unsigned int)targets.targets[i].type,
-               (int)targets.targets[i].x,
-               (int)targets.targets[i].y,
-               (unsigned int)targets.targets[i].confidence);
-      }
-
-      /* 检测到至少一个目标后进入下一阶段 */
-      if (targets.count > 0U)
-      {
-        break;
-      }
-    }
-
-    __WFI();
-  }
-
-  (void)detect_stop();
-  HAL_Delay(10U);
-
-  /* 清空上一个阶段的本地变量 */
-  targets = (Detect_TargetList_t){0};
-
-  /* 3. 数字圆环识别 */
-  (void)detect_circle_start();
-
-  while (1)
-  {
-    if (detect_get_targets(&targets) != 0U)
-    {
-      printf("[CIRCLE] count=%u\r\n",
-             (unsigned int)targets.count);
-
-      for (i = 0U; i < targets.count; ++i)
-      {
-        printf("type=%u x=%d y=%d conf=%u\r\n",
-               (unsigned int)targets.targets[i].type,
-               (int)targets.targets[i].x,
-               (int)targets.targets[i].y,
-               (unsigned int)targets.targets[i].confidence);
-      }
-
-      if (targets.count > 0U)
-      {
-        break;
-      }
-    }
-    __WFI();
-  }
-  (void)detect_stop();
-  printf("[TEST] finished\r\n");
+  printf("Contest finished\r\n");
 }
 
 static void App_TimerUpdate(void)
@@ -395,25 +350,7 @@ int main(void)
 #else
 
   // 测试
-  // 电机基础
-  // Test_Chassis_Sign();
-  // Test_Chassis_SetBodyVelocityEx();
-  // Test_Chassis_MoveMecanumEx();
-  // Test_MMCL();
-
-  // wit ops
-  // while(1)
-  // {
-  //   AdvanceTest_PrintImuOpsData();
-  //   HAL_Delay(200);
-  // }
-
-  // Test_Servo1();
-
-  // motion 依赖世界坐标数据
-  // Test_Motion_SetWorldVelocityEx();
-  // Test_Motion_GotoPoseBlocking();
-  // Test_Motion_GotoPoseYawAndCancel();
+  
 
   Competition_StartArea_t start_area;
 
@@ -423,19 +360,7 @@ int main(void)
     __WFI();
   }
   // 主流程
-  // Test_jetson(start_area);
   // App_RunTask(start_area);
-
-  AdvanceVisual_State_t state;
-  Chassis_Enable(true);
-  HAL_Delay(1500U);
-  state = AdvanceVisual_AlignCircleBlocking(NUMBER_3);
-  HAL_Delay(1500U);
-  state = AdvanceVisual_AlignCircleBlocking(NUMBER_1);
-  HAL_Delay(1500U);
-  state = AdvanceVisual_AlignCircleBlocking(NUMBER_2);
-  // state = AdvanceVisual_AlignColorBlocking(RED);
-  printf("[VISUAL] state=%u\r\n", (unsigned int)state);
 
   while (1)
   {
