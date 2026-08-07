@@ -9,7 +9,7 @@ static void AdvanceArm_MoveServoBlocking(uint8_t servo_id,
                                          uint16_t speed)
 {
   (void)BusServo_SetPositionEx(servo_id, acceleration, position, speed);
-  HAL_Delay(ARM_SERVO_MOVE_DELAY_MS);
+  HAL_Delay(1000U);
 }
 
 void AdvanceArm_Init(void)
@@ -32,11 +32,11 @@ void AdvanceArm_LiftHomeBlocking(void)
         drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
         return;
       }
-      HAL_Delay(ARM_HOME_POLL_DELAY_MS);
+      HAL_Delay(1U);
     }
 
     drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
-    HAL_Delay(ARM_HOME_COMMAND_DELAY_MS);
+    HAL_Delay(100U);
   }
 
   drive_emm_Vel_Control(ARM_LIFT_MOTOR_ID, ARM_LIFT_UP_DIRECTION, ARM_HOME_SPEED, ARM_HOME_ACC, false);
@@ -49,21 +49,21 @@ void AdvanceArm_LiftHomeBlocking(void)
       drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
       return;
     }
-    HAL_Delay(ARM_HOME_POLL_DELAY_MS);
+    HAL_Delay(1U);
   }
 
   drive_emm_Stop_Now(ARM_LIFT_MOTOR_ID, false);
-  HAL_Delay(ARM_HOME_COMMAND_DELAY_MS);
+  HAL_Delay(100U);
   drive_emm_Reset_CurPos_To_Zero(ARM_LIFT_MOTOR_ID);
-  HAL_Delay(ARM_HOME_COMMAND_DELAY_MS);
+  HAL_Delay(100U);
 }
 
 void AdvanceArm_SlideSetCurrentAsZero(void)
 {
   drive_emm_Stop_Now(ARM_SLIDE_MOTOR_ID, false);
-  HAL_Delay(ARM_HOME_COMMAND_DELAY_MS);
+  HAL_Delay(100U);
   drive_emm_Reset_CurPos_To_Zero(ARM_SLIDE_MOTOR_ID);
-  HAL_Delay(ARM_HOME_COMMAND_DELAY_MS);
+  HAL_Delay(100U);
 }
 
 void AdvanceArm_MoveLiftToBlocking(uint32_t position_pulse)
@@ -74,7 +74,7 @@ void AdvanceArm_MoveLiftToBlocking(uint32_t position_pulse)
   }
 
   drive_emm_Pos_Control(ARM_LIFT_MOTOR_ID, ARM_LIFT_ABSOLUTE_DIRECTION, ARM_LIFT_SPEED, ARM_LIFT_ACC, position_pulse, true, false);
-  HAL_Delay(ARM_LIFT_MOVE_DELAY_MS);
+  HAL_Delay(5000U);
 }
 
 void AdvanceArm_MoveSlideToBlocking(uint32_t position_pulse)
@@ -85,7 +85,7 @@ void AdvanceArm_MoveSlideToBlocking(uint32_t position_pulse)
   }
 
   drive_emm_Pos_Control(ARM_SLIDE_MOTOR_ID, ARM_SLIDE_ABSOLUTE_DIRECTION, ARM_SLIDE_SPEED, ARM_SLIDE_ACC, position_pulse, true, false);
-  HAL_Delay(ARM_SLIDE_MOVE_DELAY_MS);
+  HAL_Delay(5000U);
 }
 
 void AdvanceArm_Grab(bool closed)
