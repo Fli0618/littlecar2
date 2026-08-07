@@ -34,12 +34,12 @@ extern "C"
 #define ARM_SLIDE_POS_MAX ((uint32_t)28000U) /*!< 滑台最大允许绝对坐标。 */
 
 /* 舵机运动参数。 */
-#define ARM_ROTATE_SPEED ((uint16_t)500U) /*!< 机械臂旋转舵机速度。 */
-#define ARM_ROTATE_ACC ((uint16_t)20U) /*!< 机械臂旋转舵机加速度。 */
+#define ARM_ROTATE_SPEED ((uint16_t)1600) /*!< 机械臂旋转舵机速度。 */
+#define ARM_ROTATE_ACC ((uint16_t)350) /*!< 机械臂旋转舵机加速度。 */
 #define ARM_GRIPPER_SPEED ((uint16_t)500U) /*!< 夹爪舵机速度。 */
 #define ARM_GRIPPER_ACC ((uint16_t)20U) /*!< 夹爪舵机加速度。 */
-#define ARM_MATERIAL_SPEED ((uint16_t)500U) /*!< 物料盘舵机速度。 */
-#define ARM_MATERIAL_ACC ((uint16_t)20U) /*!< 物料盘舵机加速度。 */
+#define ARM_MATERIAL_SPEED ((uint16_t)6000) /*!< 物料盘舵机速度。 */
+#define ARM_MATERIAL_ACC ((uint16_t)0) /*!< 物料盘舵机加速度。 */
 
 /* 升降轴归零参数：仅归零过程读取顶部光电。 */
 #define ARM_HOME_SPEED ((uint16_t)1500) /*!< 升降轴寻找零点的速度。 */
@@ -63,11 +63,12 @@ extern "C"
 #define ARM_SLIDE_POS_TRAY ((uint32_t)0U) /*!< 滑台移动到小车自身物料盘。 */
 #define ARM_SLIDE_POS_PICKUP ((uint32_t)0U) /*!< 滑台移动到外侧原料盘。 */
 
+// 角度避免负数！！ 需要重新调整
 /* 机械臂旋转舵机固定点位。外侧左、中、右点位均需独立实机标定。 */
 #define ARM_ROTATE_POS_OUTWARD_CENTER ((int32_t)0) /*!< 朝向外侧正中心点位。 */
 #define ARM_ROTATE_POS_OUTWARD_LEFT ((int32_t)-400) /*!< 朝向外侧左侧点位。 */
 #define ARM_ROTATE_POS_OUTWARD_RIGHT ((int32_t)350) /*!< 朝向外侧右侧点位。 */
-#define ARM_ROTATE_POS_TRAY ((int32_t)-1650) /*!< 朝向小车自身物料盘。 */
+#define ARM_ROTATE_POS_TRAY ((int32_t)-1680) /*!< 朝向小车自身物料盘。 */
 
 /* 夹爪舵机固定点位。 */
 #define ARM_GRIPPER_OPEN_POS ((int32_t)800) /*!< 夹爪张开位置。 */

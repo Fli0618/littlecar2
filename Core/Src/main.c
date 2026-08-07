@@ -350,10 +350,13 @@ int main(void)
 #else
 
   // 丝杆回零，要保证光电正常工作
-  AdvanceArm_LiftLowBlocking();
+  AdvanceArm_LiftHomeBlocking();
   
   // 测试
-
+  // AdvanceArm_LiftLowBlocking();
+  // AdvanceArm_RotateOutwardLeft();
+  // AdvanceArm_RotateOutwardRight();
+  // AdvanceArm_RotateToTray();
 
   Competition_StartArea_t start_area;
 
