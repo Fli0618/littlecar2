@@ -136,7 +136,7 @@ class MotionWorkbenchController(QObject):
             tuple(self._new_trace_points),
             self._trace_reset,
             self._pose_valid,
-            self.session.motion_active,
+            self.session.motion_active or self._plan_state == PlanExecutionState.RUNNING,
         )
         self._new_trace_points.clear()
         self._trace_reset = False

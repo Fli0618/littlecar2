@@ -103,6 +103,12 @@ class MapView(QGraphicsView):
     def wheelEvent(self, event):  # type: ignore[no-untyped-def]
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15; self.scale(factor, factor); self.view_changed.emit()
 
+    def resizeEvent(self, event):  # type: ignore[no-untyped-def]
+        super().resizeEvent(event)
+        parent = self.parentWidget()
+        if parent and hasattr(parent, "_position_mode_overlay"):
+            parent._position_mode_overlay()
+
     def mousePressEvent(self, event):  # type: ignore[no-untyped-def]
         if event.button() == Qt.MouseButton.MiddleButton or (event.button() == Qt.MouseButton.LeftButton and self._space_pressed):
             self.hovered.emit(float("nan"), float("nan"), False)
@@ -449,6 +455,27 @@ class MapEditorWidget(QWidget):
             self._execution_trace.extend(new_trace_points)
             self._append_runtime_trace_points(new_trace_points)
             self._refresh_runtime_overlay()
+            
+            # 动态更新右上角实时控制模式指示器
+            if snapshot.motion_active:
+                pt = getattr(snapshot, "path_telemetry", None)
+                ht = getattr(snapshot, "holonomic_telemetry", None)
+                if pt is not None and getattr(pt, "state", 0) != 0:
+                    settings = getattr(self, 'settings', None)
+                    init_cap = float(getattr(settings, 'initial_capture_distance_mm', 20.0)) if settings is not None else 20.0
+                    final_cap = float(getattr(settings, 'final_capture_distance_mm', 100.0)) if settings is not None else 100.0
+                    if getattr(pt, 'final_stage', 0) != 0 or getattr(pt, 'remaining_mm', 999.0) <= final_cap:
+                        self.update_mode_overlay("⚡ 当前模式：末端全向到位 (Final GOTO)", "#ab47bc")
+                    elif getattr(pt, 'progress_mm', 999.0) <= init_cap and init_cap > 0:
+                        self.update_mode_overlay("🚀 当前模式：初始全向捕获 (Initial GOTO)", "#ff9800")
+                    else:
+                        self.update_mode_overlay("🛣️ 当前模式：路径巡航跟踪 (Path Cruising)", "#00897b")
+                elif ht is not None and getattr(ht, "state", 0) != 0:
+                    self.update_mode_overlay("🎯 当前模式：全向 GOTO 点到位", "#1976d2")
+                else:
+                    self.update_mode_overlay("🚗 当前模式：实车控制中...", "#00acc1")
+            else:
+                self.update_mode_overlay("📍 模式：图纸编辑与就绪", "#546e7a")
 
     def set_execution_status(self, status: str) -> None:
             """更新工作台提供的运行状态文本，不触发运动或串口操作。"""
@@ -874,12 +901,58 @@ class MapEditorWidget(QWidget):
             self.apply_start_frame_button.clicked.connect(self._apply_start_frame_inputs)
             start_edit_row.addWidget(self.apply_start_frame_button)
             map_box.addWidget(self.calibration_bar); map_box.addWidget(self.view)
+            
+            # 创建右上角模式悬浮显示 Label
+            self.mode_overlay_label = QLabel(self.view)
+            self.mode_overlay_label.setText("📍 模式：图纸编辑与就绪")
+            self.mode_overlay_label.setStyleSheet("""
+                QLabel {
+                    background-color: rgba(18, 24, 38, 220);
+                    color: #ffffff;
+                    border: 2px solid #546e7a;
+                    border-radius: 8px;
+                    padding: 6px 14px;
+                    font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+            """)
+            self.mode_overlay_label.adjustSize()
+            self.mode_overlay_label.show()
+            self.mode_overlay_label.raise_()
+            self.view.view_changed.connect(self._position_mode_overlay)
+
             root.addWidget(scroll); root.addWidget(map_panel)
             root.setStretchFactor(0, 0); root.setStretchFactor(1, 1)
             root.setSizes([520,900])
             layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.addWidget(root)
             self.update_calibration_ui()
             self._refresh_execution_controls()
+
+    def _position_mode_overlay(self) -> None:
+            if hasattr(self, "mode_overlay_label") and hasattr(self, "view"):
+                w = self.mode_overlay_label.width()
+                view_w = self.view.width()
+                self.mode_overlay_label.move(max(10, view_w - w - 20), 20)
+                self.mode_overlay_label.raise_()
+
+    def update_mode_overlay(self, mode_text: str, color_hex: str = "#00acc1") -> None:
+            if hasattr(self, "mode_overlay_label"):
+                self.mode_overlay_label.setText(mode_text)
+                self.mode_overlay_label.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: rgba(18, 24, 38, 230);
+                        color: #ffffff;
+                        border: 2px solid {color_hex};
+                        border-radius: 8px;
+                        padding: 6px 14px;
+                        font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif;
+                        font-size: 13px;
+                        font-weight: bold;
+                    }}
+                """)
+                self.mode_overlay_label.adjustSize()
+                self._position_mode_overlay()
 
     def _on_editor_tab_changed(self, _index: int) -> None:
             if self.editor_tabs.currentWidget() is not self.navigation_page:
@@ -2442,37 +2515,61 @@ class MapEditorWidget(QWidget):
                     if index == self.active_index:
                         self._draw_bezier_controls(previous, step, points, False)
                     previous = Pose(points[-1].x_mm, points[-1].y_mm, points[-1].yaw_deg); continue
-                marker_stride = max(1, math.ceil(len(step.points) / 32))
-                for point_index, point in enumerate(step.points):
-                    paper = self.paper_of(point); current = QPointF(paper.x_mm, paper.y_mm)
-                    if point_index:
-                        prior = self.paper_of(step.points[point_index - 1]); self.scene.addLine(prior.x_mm, prior.y_mm, current.x(), current.y(), QPen(color, 6))
-                    if point_index % marker_stride and point_index != len(step.points) - 1:
-                        continue
-                    radius = 13 if point_index == len(step.points) - 1 else 10
-                    marker = self.scene.addEllipse(current.x() - radius, current.y() - radius, radius * 2, radius * 2, QPen(color, 3), QColor("#e0f2f1")); marker.setData(0, "continuous_endpoint" if point_index == len(step.points) - 1 else "continuous_waypoint"); marker.setZValue(12)
-                    self._draw_direction_arrow(current.x(), current.y(), point.yaw_deg, color, "continuous_direction")
-                    if (point_index == len(step.points) - 1 and
-                            step.name.startswith("自动规划")):
-                        delta_x = current.x() - START_PRESETS["启停区 1"][0]
-                        delta_y = current.y() - START_PRESETS["启停区 1"][1]
-                        label = self.scene.addText(
-                            f"航点 {index + 1}  Δ启1 X={delta_x:+.0f}  Y={delta_y:+.0f} mm",
-                            QFont("Microsoft YaHei", 14))
-                        label.setDefaultTextColor(QColor("#00695c"))
-                        label.setPos(current.x() + 18, current.y() - 34)
-                        label.setData(0, "auto_goal_label"); label.setZValue(18)
-                        label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-                        terminal = (self.plan.steps[index + 1]
-                                    if index + 1 < len(self.plan.steps) and
-                                    isinstance(self.plan.steps[index + 1], RotateInPlace) and
-                                    self.plan.steps[index + 1].name == "导航目标朝向" else None)
-                        final_yaw = terminal.yaw_deg if terminal is not None else point.yaw_deg
-                        self._draw_direction_arrow(
-                            current.x(), current.y(), final_yaw,
-                            QColor("#ad00b5"), "navigation_goal_pose")
-                if step.points:
-                    last = step.points[-1]; previous = Pose(last.x_mm, last.y_mm, last.yaw_deg)
+                if isinstance(step, ContinuousPathSegment):
+                    marker_stride = max(1, math.ceil(len(step.points) / 32))
+                    
+                    # 计算路径累积距离，为不同阶段点赋上不同颜色
+                    cum_dists = [0.0]
+                    for p1, p2 in zip(step.points, step.points[1:]):
+                        cum_dists.append(cum_dists[-1] + math.hypot(p2.x_mm - p1.x_mm, p2.y_mm - p1.y_mm))
+                    total_len = cum_dists[-1] if cum_dists else 0.0
+                    settings = getattr(self, 'settings', None)
+                    init_cap = float(getattr(settings, 'initial_capture_distance_mm', 20.0)) if settings is not None else 20.0
+                    final_cap = float(getattr(settings, 'final_capture_distance_mm', 100.0)) if settings is not None else 100.0
+
+                    vis_init_cap = max(120.0, init_cap) if init_cap > 0 else 0.0
+                    vis_final_cap = max(150.0, final_cap) if final_cap > 0 else 0.0
+
+                    for point_index, point in enumerate(step.points):
+                        paper = self.paper_of(point); current = QPointF(paper.x_mm, paper.y_mm)
+                        dist = cum_dists[point_index]
+                        
+                        if dist <= vis_init_cap and vis_init_cap > 0:
+                            seg_color = QColor("#ff9800")  # 橙色：初始全向捕获
+                        elif dist >= (total_len - vis_final_cap) and vis_final_cap > 0 and total_len > vis_init_cap:
+                            seg_color = QColor("#ab47bc")  # 紫色：末端全向到位
+                        else:
+                            seg_color = color  # 绿色/默认色：路径巡航
+
+                        if point_index:
+                            prior = self.paper_of(step.points[point_index - 1])
+                            self.scene.addLine(prior.x_mm, prior.y_mm, current.x(), current.y(), QPen(seg_color, 6))
+                        if point_index % marker_stride and point_index != len(step.points) - 1:
+                            continue
+                        radius = 13 if point_index == len(step.points) - 1 else 10
+                        marker = self.scene.addEllipse(current.x() - radius, current.y() - radius, radius * 2, radius * 2, QPen(seg_color, 3), QColor("#e0f2f1")); marker.setData(0, "continuous_endpoint" if point_index == len(step.points) - 1 else "continuous_waypoint"); marker.setZValue(12)
+                        self._draw_direction_arrow(current.x(), current.y(), point.yaw_deg, seg_color, "continuous_direction")
+                        if (point_index == len(step.points) - 1 and
+                                step.name.startswith("自动规划")):
+                            delta_x = current.x() - START_PRESETS["启停区 1"][0]
+                            delta_y = current.y() - START_PRESETS["启停区 1"][1]
+                            label = self.scene.addText(
+                                f"航点 {index + 1}  Δ启1 X={delta_x:+.0f}  Y={delta_y:+.0f} mm",
+                                QFont("Microsoft YaHei", 14))
+                            label.setDefaultTextColor(QColor("#00695c"))
+                            label.setPos(current.x() + 18, current.y() - 34)
+                            label.setData(0, "auto_goal_label"); label.setZValue(18)
+                            label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                            terminal = (self.plan.steps[index + 1]
+                                        if index + 1 < len(self.plan.steps) and
+                                        isinstance(self.plan.steps[index + 1], RotateInPlace) and
+                                        self.plan.steps[index + 1].name == "导航目标朝向" else None)
+                            final_yaw = terminal.yaw_deg if terminal is not None else point.yaw_deg
+                            self._draw_direction_arrow(
+                                current.x(), current.y(), final_yaw,
+                                QColor("#ad00b5"), "navigation_goal_pose")
+                    if step.points:
+                        last = step.points[-1]; previous = Pose(last.x_mm, last.y_mm, last.yaw_deg)
 
     def _draw_bezier_controls(self, start, step, points, draft):
             start_p = self.paper_of(start); end_p = self.paper_of(Pose(step.end_x_mm, step.end_y_mm, step.end_yaw_deg))
