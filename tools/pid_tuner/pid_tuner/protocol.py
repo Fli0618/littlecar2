@@ -81,6 +81,7 @@ PATH_CONFIG_FIELDS = (
     "lookahead_min_mm", "lookahead_base_mm", "lookahead_speed_gain_s",
     "lookahead_curve_gain_mm", "lookahead_max_mm", "lookahead_rate_mm_s",
     "initial_lookahead_mm", "final_capture_distance_mm", "final_capture_speed_mm_s",
+    "hardware_acc",
 )
 PATH_MAX_POINTS = 256
 PATH_CHUNK_MAX_POINTS = 7
@@ -138,7 +139,7 @@ def encode_path_config(config: PathControlConfig) -> bytes:
         ("kp_cross_track", 20.0), ("kd_cross_track_velocity", 20.0),
         ("kp_yaw", 20.0), ("kd_yaw_rate", 20.0),
         ("lookahead_speed_gain_s", 2.0), ("lookahead_curve_gain_mm", 1000.0),
-        ("curvature_ff_time_s", 2.0),
+        ("curvature_ff_time_s", 2.0), ("hardware_acc", 255.0),
     )
     positive = (
         ("cruise_speed_mm_s", 1500.0), ("max_yaw_rate_deg_s", 180.0),
@@ -158,7 +159,7 @@ def encode_path_config(config: PathControlConfig) -> bytes:
             mapping["initial_lookahead_mm"] >= mapping["lookahead_min_mm"] and
             mapping["initial_lookahead_mm"] <= mapping["lookahead_max_mm"]):
         raise ProtocolError("path lookahead must satisfy min <= base <= max")
-    return struct.pack("<20f", *values)
+    return struct.pack("<21f", *values)
 
 
 def encode_goal(goal: "MotionGoal") -> bytes:
@@ -297,9 +298,9 @@ def decode_pid(frame: Frame) -> PidConfigState:
 
 def decode_path_config(frame: Frame) -> PathConfigState:
     """Decode a revision followed by the complete path-control group."""
-    if frame.version != VERSION or frame.command != CMD_PATH_CONFIG or len(frame.payload) != 84:
+    if frame.version != VERSION or frame.command != CMD_PATH_CONFIG or len(frame.payload) != 88:
         raise ProtocolError("invalid path config frame")
-    revision, *values = struct.unpack("<I20f", frame.payload)
+    revision, *values = struct.unpack("<I21f", frame.payload)
     return PathConfigState(revision, PathConfigSnapshot(*values))
 
 

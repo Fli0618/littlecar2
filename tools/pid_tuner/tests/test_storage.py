@@ -38,7 +38,7 @@ class StorageTests(unittest.TestCase):
 
     def test_export_motion_config_header_is_complete_and_deterministic(self) -> None:
         pid = PidConfigState(12, PidConfig(1.0, -0.0, 3.25, 4.0, 5.0, 6.0))
-        path = PathConfigState(8, PathConfigSnapshot(*[float(value) for value in range(10, 30)]))
+        path = PathConfigState(8, PathConfigSnapshot(*[float(value) for value in range(10, 31)]))
         holonomic = HolonomicConfigState(9, HolonomicConfig(600, 800, 150, 0.8, 0.3, 0.8, 0.3,
                                                             2.0, 0.3, 1.0, 1.0, 1.0))
         exported = export_motion_config_header(pid, path, GotoStrategySnapshot(True), holonomic)
@@ -62,7 +62,7 @@ class StorageTests(unittest.TestCase):
 
     def test_export_motion_config_header_writes_false_strategy_and_rejects_nonfinite_values(self) -> None:
         pid = PidConfigState(1, PidConfig(*(float(value) for value in range(1, 7))))
-        path_values = [float(value) for value in range(1, 21)]
+        path_values = [float(value) for value in range(1, 22)]
         path = PathConfigState(2, PathConfigSnapshot(*path_values))
         holonomic = HolonomicConfigState(3, HolonomicConfig(600, 800, 150, 0.8, 0.3, 0.8, 0.3,
                                                             2.0, 0.3, 1.0, 1.0, 1.0))

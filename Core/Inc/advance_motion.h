@@ -159,6 +159,7 @@ extern "C"
     /* 末段捕获。 */
     float final_capture_distance_mm;
     float final_capture_speed_mm_s;
+    float hardware_acc;
   } AdvanceMotion_PathControlConfig_t;
 
   typedef struct

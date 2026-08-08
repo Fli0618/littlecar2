@@ -60,9 +60,12 @@ class AutoSegmentSettings:
     corner_radius_mm: float = 120.0
     sample_spacing_mm: float = 20.0
     terminal_straight_mm: float = 300.0
-    yaw_mode: str = "fixed"
+    yaw_mode: str = "early_straight"
     goal_yaw_deg: float = 0.0
     strategy: str = "auto"
+    yaw_start_buffer_mm: float = 150.0
+    yaw_corner_buffer_mm: float = 100.0
+    yaw_smooth_window_mm: float = 50.0
 
 
 @dataclass

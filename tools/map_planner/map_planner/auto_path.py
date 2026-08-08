@@ -48,7 +48,10 @@ class AutoPathSettings:
     corner_radius_mm: float = 120.0
     sample_spacing_mm: float = 20.0
     terminal_straight_mm: float = 300.0
-    yaw_mode: str = "fixed"
+    yaw_mode: str = "early_straight"
+    yaw_start_buffer_mm: float = 150.0
+    yaw_corner_buffer_mm: float = 100.0
+    yaw_smooth_window_mm: float = 50.0
     include_fixed_platforms: bool = True
     max_points: int = 256
 
@@ -109,8 +112,8 @@ class AutoPathSettings:
             raise AutoPathError("采样间距必须在 10~50 mm")
         if not 0.0 <= self.terminal_straight_mm <= 1000.0:
             raise AutoPathError("末端直线长度必须在 0~1000 mm")
-        if self.yaw_mode not in ("fixed", "interpolate", "tangent"):
-            raise AutoPathError("航向模式必须是 fixed、interpolate 或 tangent")
+        if self.yaw_mode not in ("fixed", "interpolate", "tangent", "early_straight"):
+            raise AutoPathError("航向模式必须是 early_straight, fixed、interpolate 或 tangent")
         if not 2 <= self.max_points <= 256:
             raise AutoPathError("轨迹点上限必须在 2~256")
 
@@ -658,9 +661,62 @@ def _world_path(samples: list[tuple[float, float]], start_frame: Pose,
     for first, second in zip(samples, samples[1:]):
         cumulative.append(cumulative[-1] + math.dist(first, second))
     total = cumulative[-1]
+    
+    yaw_array = []
+    if settings.yaw_mode == "early_straight":
+        headings = []
+        for i in range(len(samples) - 1):
+            dx = samples[i + 1][0] - samples[i][0]
+            dy = samples[i + 1][1] - samples[i][1]
+            headings.append(math.atan2(dy, dx))
+        
+        is_corner = [False] * len(samples)
+        for i in range(1, len(samples) - 1):
+            d_heading = abs(wrap_deg(math.degrees(headings[i] - headings[i-1])))
+            if d_heading > 1.0:
+                is_corner[i] = True
+                
+        unsafe = [False] * len(samples)
+        for i in range(len(samples)):
+            if cumulative[i] < settings.yaw_start_buffer_mm or total - cumulative[i] < settings.yaw_corner_buffer_mm:
+                unsafe[i] = True
+            elif is_corner[i]:
+                for j in range(len(samples)):
+                    if abs(cumulative[j] - cumulative[i]) < settings.yaw_corner_buffer_mm:
+                        unsafe[j] = True
+                        
+        weights = [1.0 if not unsafe[i] else 0.0 for i in range(len(samples) - 1)]
+        smoothed_weights = []
+        for i in range(len(weights)):
+            w_sum = 0.0
+            l_sum = 0.0
+            for j in range(len(weights)):
+                if abs(cumulative[j] - cumulative[i]) < settings.yaw_smooth_window_mm:
+                    segment_len = cumulative[j+1] - cumulative[j]
+                    w_sum += weights[j] * segment_len
+                    l_sum += segment_len
+            smoothed_weights.append(w_sum / l_sum if l_sum > 0 else 0.0)
+            
+        total_weight = sum(w * (cumulative[i+1] - cumulative[i]) for i, w in enumerate(smoothed_weights))
+        
+        yaw_array.append(start_yaw_deg)
+        if total_weight < 1.0:
+            for i in range(1, len(samples)):
+                ratio = cumulative[i] / total if total > 0.0 else 1.0
+                yaw_array.append(wrap_deg(start_yaw_deg + wrap_deg(goal_yaw_deg - start_yaw_deg) * ratio))
+        else:
+            current_w = 0.0
+            yaw_diff = wrap_deg(goal_yaw_deg - start_yaw_deg)
+            for i in range(len(smoothed_weights)):
+                current_w += smoothed_weights[i] * (cumulative[i+1] - cumulative[i])
+                ratio = current_w / total_weight
+                yaw_array.append(wrap_deg(start_yaw_deg + yaw_diff * ratio))
+
     result = []
     for index, point in enumerate(samples):
-        if settings.yaw_mode == "fixed":
+        if settings.yaw_mode == "early_straight":
+            yaw = yaw_array[index]
+        elif settings.yaw_mode == "fixed":
             yaw = start_yaw_deg
         elif settings.yaw_mode == "interpolate":
             ratio = cumulative[index] / total if total > 0.0 else 1.0

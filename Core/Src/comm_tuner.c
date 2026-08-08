@@ -85,8 +85,8 @@
 #define COMM_TUNER_PATH_CHUNK_MAX_POINTS ((uint8_t)7U)
 #define COMM_TUNER_PATH_STATUS_PAYLOAD_SIZE ((uint16_t)17U)
 #define COMM_TUNER_PATH_TELEMETRY_PAYLOAD_SIZE ((uint16_t)94U)
-#define COMM_TUNER_SET_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)80U)
-#define COMM_TUNER_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)84U)
+#define COMM_TUNER_SET_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)84U)
+#define COMM_TUNER_PATH_CONFIG_PAYLOAD_SIZE ((uint16_t)88U)
 #define COMM_TUNER_SET_HOLONOMIC_CONFIG_PAYLOAD_SIZE ((uint16_t)48U)
 #define COMM_TUNER_HOLONOMIC_CONFIG_PAYLOAD_SIZE ((uint16_t)52U)
 #define COMM_TUNER_HOLONOMIC_TELEMETRY_PAYLOAD_SIZE ((uint16_t)96U)
@@ -399,7 +399,7 @@ static void CommTuner_SendPathConfig(uint8_t request_command, uint8_t request_se
   AdvanceMotion_PathControlConfig_t config;
   uint32_t revision;
   uint8_t payload[COMM_TUNER_PATH_CONFIG_PAYLOAD_SIZE];
-  float values[20U];
+  float values[21U];
   uint8_t index;
 
   if (AdvanceMotion_GetPathControlConfig(&config, &revision) != ADVANCE_MOTION_STATUS_OK)
@@ -429,7 +429,8 @@ static void CommTuner_SendPathConfig(uint8_t request_command, uint8_t request_se
   values[17] = config.initial_lookahead_mm;
   values[18] = config.final_capture_distance_mm;
   values[19] = config.final_capture_speed_mm_s;
-  for (index = 0U; index < 20U; ++index)
+  values[20] = config.hardware_acc;
+  for (index = 0U; index < 21U; ++index)
   {
     CommTuner_WriteFloat(&payload[4U + ((uint16_t)index * 4U)], values[index]);
   }
@@ -1162,7 +1163,7 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
     AdvanceMotion_PathControlConfig_t config;
     AdvanceMotion_Status_t status;
     uint32_t revision;
-    float values[20U];
+    float values[21U];
     uint8_t index;
 
     if (payload_length != COMM_TUNER_SET_PATH_CONFIG_PAYLOAD_SIZE)
@@ -1170,7 +1171,7 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
       CommTuner_SendError(command, sequence, COMM_TUNER_ERROR_BAD_LENGTH, 1U);
       return;
     }
-    for (index = 0U; index < 20U; ++index)
+    for (index = 0U; index < 21U; ++index)
     {
       values[index] = CommTuner_ReadFloat(&payload[(uint16_t)index * 4U]);
     }
@@ -1194,6 +1195,7 @@ static void CommTuner_HandleFrame(const uint8_t *frame, uint16_t frame_length)
     config.initial_lookahead_mm = values[17];
     config.final_capture_distance_mm = values[18];
     config.final_capture_speed_mm_s = values[19];
+    config.hardware_acc = values[20];
     status = AdvanceMotion_RequestPathControlConfig(&config, &revision);
     if (status != ADVANCE_MOTION_STATUS_OK)
     {

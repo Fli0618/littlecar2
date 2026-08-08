@@ -47,6 +47,7 @@ PATH_C_MACROS = (
     ("ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM", "initial_lookahead_mm"),
     ("ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM", "final_capture_distance_mm"),
     ("ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S", "final_capture_speed_mm_s"),
+    ("ADVANCE_MOTION_PATH_HARDWARE_ACC", "hardware_acc"),
 )
 
 HOLONOMIC_C_MACROS = (

@@ -52,7 +52,7 @@
  * 设为 1 时进入 USART1 在线调参模式，并自动禁用 printf；
  * 设为 0 时关闭在线调参，恢复 USART1 printf 输出并运行比赛主流程。
  */
-#define ONLINE_DEBUG_MODE (0U)
+#define ONLINE_DEBUG_MODE (1U)
 
 /* TIM6 提供 1 ms 调度节拍，所有业务周期统一在这里配置。 */
 #define APP_WORLD_PERIOD_MS ((uint32_t)10U)

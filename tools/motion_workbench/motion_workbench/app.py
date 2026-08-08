@@ -59,6 +59,7 @@ class PathControlPanel(QWidget):
                 ("accel_mm_s2", "加速度 mm/s²", 450.0, 1.0, 5000.0, 10.0),
                 ("decel_mm_s2", "减速度 mm/s²", 650.0, 1.0, 5000.0, 10.0),
                 ("max_lateral_accel_mm_s2", "横向加速度 mm/s²", 240.0, 1.0, 5000.0, 10.0),
+                ("hardware_acc", "硬件 ACC档位", 2.0, 0.0, 255.0, 1.0),
             )),
             ("曲率前馈", (
                 ("curvature_preview_mm", "曲率预览 mm", 450.0, 1.0, 2000.0, 5.0),

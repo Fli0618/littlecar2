@@ -19,7 +19,7 @@ class SerialClientTests(unittest.TestCase):
     PATH_CONFIG = PathControlConfig(
         0.98, 0.62, 1.42, 0.427, 820.0, 100.0, 800.0, 1000.0,
         600.0, 300.0, 0.05, 60.0, 60.0, 0.15, 120.0, 180.0,
-        400.0, 80.0, 60.0, 150.0,
+        400.0, 80.0, 60.0, 150.0, 2.0,
     )
     def test_get_pid_and_close(self) -> None:
         def on_write(raw, _attempt):
@@ -131,7 +131,7 @@ class SerialClientTests(unittest.TestCase):
             request = StreamDecoder().feed(raw)[0]
             captured.append(request)
             if request.command == CMD_GET_PATH_CONFIG:
-                payload = struct.pack("<I20f", 4, *self.PATH_CONFIG.to_dict().values())
+                payload = struct.pack("<I21f", 4, *self.PATH_CONFIG.to_dict().values())
                 return [encode_frame(CMD_PATH_CONFIG, request.sequence, payload)]
             revision = 5 if request.command == CMD_SET_PATH_CONFIG else 6
             return [encode_frame(CMD_ACK, request.sequence,

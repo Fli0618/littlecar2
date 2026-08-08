@@ -17,7 +17,7 @@ from pid_tuner.models import PathControlConfig
 PATH_CONFIG = PathControlConfig(
     0.98, 0.62, 1.42, 0.427, 820.0, 100.0, 800.0, 1000.0,
     600.0, 300.0, 0.05, 60.0, 60.0, 0.15, 120.0, 180.0,
-    400.0, 80.0, 60.0, 150.0,
+    400.0, 80.0, 60.0, 150.0, 2.0,
 )
 
 
@@ -74,7 +74,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_path_config_round_trip_and_validation(self) -> None:
         encoded = encode_path_config(PATH_CONFIG)
-        self.assertEqual(len(encoded), 80)
+        self.assertEqual(len(encoded), 84)
         state = decode_path_config(Frame(CMD_PATH_CONFIG, 3, struct.pack("<I", 7) + encoded))
         self.assertEqual(state.revision, 7)
         for actual, expected in zip(state.config.to_dict().values(), PATH_CONFIG.to_dict().values()):

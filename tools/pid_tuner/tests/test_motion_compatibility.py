@@ -50,6 +50,7 @@ class MotionCompatibilityTests(unittest.TestCase):
             "lookahead_min_mm", "lookahead_base_mm", "lookahead_speed_gain_s",
             "lookahead_curve_gain_mm", "lookahead_max_mm", "lookahead_rate_mm_s",
             "initial_lookahead_mm", "final_capture_distance_mm", "final_capture_speed_mm_s",
+            "hardware_acc",
         ):
             self.assertRegex(source, rf"\.{field} =")
 
@@ -91,9 +92,10 @@ class MotionCompatibilityTests(unittest.TestCase):
             "lookahead_min_mm", "lookahead_base_mm", "lookahead_speed_gain_s",
             "lookahead_curve_gain_mm", "lookahead_max_mm", "lookahead_rate_mm_s",
             "initial_lookahead_mm", "final_capture_distance_mm", "final_capture_speed_mm_s",
+            "hardware_acc",
         ))
-        self.assertEqual(len(protocol.encode_path_config(self._path_config())), 80)
-        self.assertEqual(len(protocol.encode_path_config(self._path_config())) + 4, 84)
+        self.assertEqual(len(protocol.encode_path_config(self._path_config())), 84)
+        self.assertEqual(len(protocol.encode_path_config(self._path_config())) + 4, 88)
         self.assertRegex(source, r"#define COMM_TUNER_PROTOCOL_VERSION \(\(uint8_t\)3U\)")
         commands = {
             "CMD_GET_PID": 0x01, "CMD_SET_PID": 0x02, "CMD_RESTORE_PID": 0x03,
@@ -135,7 +137,7 @@ class MotionCompatibilityTests(unittest.TestCase):
     def _path_config():
         from pid_tuner.models import PathControlConfig
 
-        return PathControlConfig(*([1.0] * 20))
+        return PathControlConfig(*([1.0] * 21))
 
 
 if __name__ == "__main__":

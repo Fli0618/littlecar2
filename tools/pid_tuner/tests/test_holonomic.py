@@ -187,7 +187,7 @@ class HolonomicSessionTests(unittest.TestCase):
     def _connected_result(holonomic):
         return (object(),
                 PidConfigState(1, PidConfig(1, 2, 3, 4, 5, 6)),
-                PathConfigState(2, PathConfigSnapshot(*[float(value) for value in range(1, 21)])),
+                PathConfigState(2, PathConfigSnapshot(*[float(value) for value in range(1, 22)])),
                 GotoStrategySnapshot(True),
                 holonomic)
 
@@ -334,7 +334,7 @@ class HolonomicExportTests(unittest.TestCase):
     def test_export_motion_config_header_contains_holonomic_defaults(self) -> None:
         text = export_motion_config_header(
             PidConfigState(1, PidConfig(1, 2, 3, 4, 5, 6)),
-            PathConfigState(2, PathConfigSnapshot(*([1.0] * 20))),
+            PathConfigState(2, PathConfigSnapshot(*([1.0] * 21))),
             GotoStrategySnapshot(False),
             HolonomicConfigState(4, HOLONOMIC),
         )
