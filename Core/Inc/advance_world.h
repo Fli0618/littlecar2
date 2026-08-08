@@ -28,7 +28,7 @@ extern "C"
 #define ADVANCE_WORLD_OPS_XY_SWAPPED ((uint8_t)0U) /*!< OPS X/Y 轴交换开关。 */
 #define ADVANCE_WORLD_OPS_YAW_OFFSET_DEG (0.0f) /*!< OPS 航向角安装偏移，单位为度。 */
 #define ADVANCE_WORLD_WIT_YAW_OFFSET_DEG (0.0f) /*!< WIT 航向角安装偏移，单位为度。 */
-#define ADVANCE_WORLD_OPS_OFFSET_X_MM (0.0f) /*!< OPS 相对车体中心 X 偏移，单位为 mm。 */
+#define ADVANCE_WORLD_OPS_OFFSET_X_MM (0.9f) /*!< OPS 相对车体中心 X 偏移，单位为 mm。 */
 #define ADVANCE_WORLD_OPS_OFFSET_Y_MM (0.0f) /*!< OPS 相对车体中心 Y 偏移，单位为 mm。 */
 
 typedef enum

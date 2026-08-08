@@ -65,7 +65,7 @@ class TelemetryPlots(QWidget):
         for plot in self.plots:
             plot.setXLink(self.position_x)
             plot.showGrid(x=True, y=True, alpha=0.25)
-            plot.addLegend()
+            plot.addLegend(colCount=4)
             plot.setLabel("bottom", "时间", units="s")
 
         self.curves = {
@@ -114,7 +114,7 @@ class TelemetryPlots(QWidget):
                      self.holo_wz, self.holo_profile):
             plot.setXLink(self.holo_position)
             plot.showGrid(x=True, y=True, alpha=0.25)
-            plot.addLegend()
+            plot.addLegend(colCount=4)
             plot.setLabel("bottom", "时间", units="s")
         self.holo_curves = {
             "ref_x": self.holo_position.plot(pen=pg.mkPen("#f6c85f", width=2), name="参考 X"),
@@ -150,7 +150,7 @@ class TelemetryPlots(QWidget):
         for plot in (self.path_progress, self.path_speed, self.path_cross, self.path_wz):
             plot.setXLink(self.path_progress)
             plot.showGrid(x=True, y=True, alpha=0.25)
-            plot.addLegend()
+            plot.addLegend(colCount=4)
             plot.setLabel("bottom", "时间", units="s")
         self.path_curves = {
             "progress": self.path_progress.plot(pen=pg.mkPen("#4ecdc4", width=2), name="进度"),

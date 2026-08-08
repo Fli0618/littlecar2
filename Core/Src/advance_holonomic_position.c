@@ -243,6 +243,14 @@ static void AdvanceHolonomic_Profile1D_Update(AdvanceHolonomic_Profile1D_t *prof
                    (profile->peak_velocity * t) -
                    (0.5f * profile->deceleration * t * t);
     velocity_abs = profile->peak_velocity - (profile->deceleration * t);
+    
+    /* 提前截断低速拖尾：如果速度已经降到极低（< 30 mm/s 或 deg/s），直接强制结束轮廓 */
+    if (velocity_abs < 30.0f) {
+        profile->position = profile->goal_position;
+        profile->velocity = 0.0f;
+        profile->finished = 1U;
+        return;
+    }
   }
 
   /* 末端浮点误差保护：速度非负、位置不越界 */
@@ -515,19 +523,36 @@ static void AdvanceHolonomic_ComputeBodyCommand(
     AdvanceWorld_WorldToBodyVelocity(reference->vx_world_mm_s, reference->vy_world_mm_s,
                                      actual_pose->yaw_deg,
                                      &ref_right_mm_s, &ref_forward_mm_s);
-
+    if (fabsf(error_forward_mm) < 3.0f) {
+        error_forward_mm = 0.0f;
+    }
     forward_position_correction = g_holonomic_config_active.kp_forward * error_forward_mm;
     forward_velocity_correction =
         g_holonomic_config_active.kv_forward * (ref_forward_mm_s - actual_velocity->forward_mm_s);
+        
+    /* 如果进入死区且没有参考速度，强行屏蔽速度环的传感器噪声放大 */
+    if (error_forward_mm == 0.0f && fabsf(ref_forward_mm_s) < 0.01f) {
+        forward_velocity_correction = 0.0f;
+    }
+
     forward_correction = AdvanceWorld_LimitFloat(
         forward_position_correction + forward_velocity_correction,
         -ADVANCE_HOLONOMIC_MAX_FORWARD_CORRECTION_MM_S,
         ADVANCE_HOLONOMIC_MAX_FORWARD_CORRECTION_MM_S);
     command_forward_mm_s = ref_forward_mm_s + forward_correction;
 
+    if (fabsf(error_right_mm) < 3.0f) {
+        error_right_mm = 0.0f;
+    }
     lateral_position_correction = g_holonomic_config_active.kp_lateral * error_right_mm;
     lateral_velocity_correction =
         g_holonomic_config_active.kv_lateral * (ref_right_mm_s - actual_velocity->right_mm_s);
+        
+    /* 如果进入死区且没有参考速度，强行屏蔽速度环的传感器噪声放大 */
+    if (error_right_mm == 0.0f && fabsf(ref_right_mm_s) < 0.01f) {
+        lateral_velocity_correction = 0.0f;
+    }
+
     lateral_correction = AdvanceWorld_LimitFloat(
         lateral_position_correction + lateral_velocity_correction,
         -ADVANCE_HOLONOMIC_MAX_LATERAL_CORRECTION_MM_S,
@@ -566,9 +591,17 @@ static void AdvanceHolonomic_ComputeBodyCommand(
   if (g_holonomic.yaw_required != 0U)
   {
     error_yaw_deg = AdvanceWorld_WrapAngleDeg(reference->yaw_deg - actual_pose->yaw_deg);
+    if (fabsf(error_yaw_deg) < 1.0f) {
+        error_yaw_deg = 0.0f;
+    }
     yaw_position_correction = g_holonomic_config_active.kp_yaw * error_yaw_deg;
     yaw_velocity_correction =
         g_holonomic_config_active.kv_yaw * (reference->wz_deg_s - actual_velocity->wz_deg_s);
+        
+    /* 如果进入死区且没有参考速度，强行屏蔽速度环的传感器噪声放大 */
+    if (error_yaw_deg == 0.0f && fabsf(reference->wz_deg_s) < 0.01f) {
+        yaw_velocity_correction = 0.0f;
+    }
     yaw_correction = AdvanceWorld_LimitFloat(
         yaw_position_correction + yaw_velocity_correction,
         -ADVANCE_HOLONOMIC_MAX_YAW_CORRECTION_DEG_S,

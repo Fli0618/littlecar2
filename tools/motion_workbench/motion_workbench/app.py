@@ -74,7 +74,8 @@ class PathControlPanel(QWidget):
                 ("lookahead_rate_mm_s", "前视变化率 mm/s", 400.0, 1.0, 2000.0, 10.0),
                 ("initial_lookahead_mm", "初始前视 mm", 90.0, 1.0, 1000.0, 5.0),
             )),
-            ("末段捕获", (
+            ("两端捕获", (
+                ("initial_capture_distance_mm", "初始起步捕获 mm", 20.0, 0.0, 2000.0, 5.0),
                 ("final_capture_distance_mm", "捕获距离 mm", 80.0, 0.0, 2000.0, 5.0),
                 ("final_capture_speed_mm_s", "捕获速度 mm/s", 50.0, 0.0, 1500.0, 5.0),
             )),
@@ -481,7 +482,7 @@ class MotionWorkbenchWindow(QMainWindow):
             self.point_panel.vmax.value(), self.point_panel.wmax.value(),
             self.point_panel.timeout.value(), use_yaw, True)
         self.controller.select_candidate(target)
-        self.controller.start_goal(goal)
+        self.controller.start_goal(goal, controller="holonomic")
 
     def _request_heading_mode(self, mode: str) -> None:
         """联动单点 GOTO、板端航向源和图表角色标记。"""

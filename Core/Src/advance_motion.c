@@ -130,6 +130,7 @@ static const AdvanceMotion_PathControlConfig_t g_path_config_default = {
     .lookahead_max_mm = ADVANCE_MOTION_PATH_LOOKAHEAD_MAX_MM,
     .lookahead_rate_mm_s = ADVANCE_MOTION_PATH_LOOKAHEAD_RATE_MM_S,
     .initial_lookahead_mm = ADVANCE_MOTION_PATH_INITIAL_LOOKAHEAD_MM,
+    .initial_capture_distance_mm = ADVANCE_MOTION_PATH_INITIAL_CAPTURE_DISTANCE_MM,
     .final_capture_distance_mm = ADVANCE_MOTION_PATH_FINAL_CAPTURE_DISTANCE_MM,
     .final_capture_speed_mm_s = ADVANCE_MOTION_PATH_FINAL_CAPTURE_SPEED_MM_S,
     .hardware_acc = ADVANCE_MOTION_PATH_HARDWARE_ACC};
@@ -390,6 +391,7 @@ static uint8_t AdvanceMotion_IsPathControlConfigValid(
       (isfinite(config->lookahead_max_mm) == 0) ||
       (isfinite(config->lookahead_rate_mm_s) == 0) ||
       (isfinite(config->initial_lookahead_mm) == 0) ||
+      (isfinite(config->initial_capture_distance_mm) == 0) ||
       (isfinite(config->final_capture_distance_mm) == 0) ||
       (isfinite(config->final_capture_speed_mm_s) == 0))
   {
@@ -416,6 +418,8 @@ static uint8_t AdvanceMotion_IsPathControlConfigValid(
           (config->lookahead_rate_mm_s > 0.0f) && (config->lookahead_rate_mm_s <= 2000.0f) &&
           (config->initial_lookahead_mm >= config->lookahead_min_mm) &&
           (config->initial_lookahead_mm <= config->lookahead_max_mm) &&
+          (config->initial_capture_distance_mm >= 0.0f) &&
+          (config->initial_capture_distance_mm <= 2000.0f) &&
           (config->final_capture_distance_mm >= 0.0f) &&
           (config->final_capture_distance_mm <= 2000.0f) &&
           (config->final_capture_speed_mm_s >= 0.0f) &&
@@ -1490,6 +1494,7 @@ void AdvanceMotion_Update(void)
   uint8_t position_required;
   uint8_t position_control_enabled;
   uint8_t yaw_required;
+  uint8_t path_initial_stage = 0U;
   uint8_t path_final_stage = 0U;
   uint8_t linear_saturated;
   uint8_t yaw_saturated = 0U;
@@ -1565,6 +1570,9 @@ void AdvanceMotion_Update(void)
     {
       g_path.off_path_start_tick = 0U;
     }
+    
+    float passed_mm = g_path.total_length_mm - g_path.remaining_mm;
+    path_initial_stage = (passed_mm < g_path_config_active.initial_capture_distance_mm) ? 1U : 0U;
     path_final_stage = g_path.final_stage;
     if (path_final_stage == 0U)
     {
@@ -1687,7 +1695,7 @@ void AdvanceMotion_Update(void)
   linear_saturated = 0U;
   if (position_control_enabled != 0U)
   {
-    if ((g_path.active != 0U) && (path_final_stage == 0U))
+    if ((g_path.active != 0U) && (path_final_stage == 0U) && (path_initial_stage == 0U))
     {
       const AdvanceMotion_PathPoint_t *a = &g_path.points[g_path.nearest_index];
       const AdvanceMotion_PathPoint_t *b = &g_path.points[g_path.nearest_index + 1U];
@@ -1764,7 +1772,7 @@ void AdvanceMotion_Update(void)
   if (yaw_required != 0U)
   {
     wmax_deg_s = AdvanceMotion_GetGoalWmax(&g_motion.goal);
-    if ((g_path.active != 0U) && (path_final_stage == 0U))
+    if ((g_path.active != 0U) && (path_final_stage == 0U) && (path_initial_stage == 0U))
     {
       raw_wz_ccw_deg_s = g_path.feedforward_wz_deg_s +
                          (g_path_config_active.kp_yaw * g_motion.yaw_error_deg) -
@@ -1786,10 +1794,10 @@ void AdvanceMotion_Update(void)
 
   AdvanceMotion_UpdatePidIntegral(vx_world_mm_s, vy_world_mm_s, wz_ccw_deg_s, dt_s,
                                     linear_saturated, yaw_saturated,
-                                    ((g_path.active == 0U) || (path_final_stage != 0U))
+                                    ((g_path.active == 0U) || (path_final_stage != 0U) || (path_initial_stage != 0U))
                                         ? position_control_enabled
                                         : 0U,
-                                    ((g_path.active == 0U) || (path_final_stage != 0U))
+                                    ((g_path.active == 0U) || (path_final_stage != 0U) || (path_initial_stage != 0U))
                                         ? yaw_required
                                         : 0U);
   command_magnitude = sqrtf((vx_world_mm_s * vx_world_mm_s) +

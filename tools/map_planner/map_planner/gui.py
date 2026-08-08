@@ -739,7 +739,7 @@ class MapEditorWidget(QWidget):
             # Compatibility name used by older UI tests and integrations.
             self.auto_safety_margin = self.platform_safety
             self.trajectory_group = QGroupBox("轨迹生成"); auto_form = QFormLayout(self.trajectory_group)
-            self.auto_corner_radius = spin(120.0, 0.0, 400.0, 10.0); self.auto_sample_spacing = spin(20.0, 10.0, 50.0, 5.0); self.auto_terminal_straight = spin(300.0, 0.0, 1000.0, 25.0)
+            self.auto_corner_radius = spin(120.0, 0.0, 400.0, 10.0); self.auto_sample_spacing = spin(20.0, 10.0, 150.0, 5.0); self.auto_terminal_straight = spin(300.0, 0.0, 1000.0, 25.0)
             self.auto_goal_x = spin(0.0, 0.0, FIELD_SIZE_MM, 5.0)
             self.auto_goal_y = spin(0.0, 0.0, FIELD_SIZE_MM, 5.0)
             self.auto_goal_yaw = spin(0.0, -180.0, 180.0, 5.0)

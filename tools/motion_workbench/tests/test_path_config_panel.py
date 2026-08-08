@@ -22,7 +22,7 @@ class PathControlPanelTests(unittest.TestCase):
         config = PathControlConfig(
             1.0, 0.5, 1.5, 0.4, 700.0, 90.0, 600.0, 800.0,
             500.0, 300.0, 0.05, 50.0, 70.0, 0.12, 100.0, 160.0,
-            400.0, 80.0, 60.0, 150.0, 2.0,
+            400.0, 350.0, 80.0, 60.0, 150.0, 2.0,
         )
         requested: list[PathControlConfig] = []
         panel.apply_config_requested.connect(requested.append)

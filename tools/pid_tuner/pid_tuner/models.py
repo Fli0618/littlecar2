@@ -49,6 +49,7 @@ class PathConfigSnapshot:
     lookahead_max_mm: float
     lookahead_rate_mm_s: float
     initial_lookahead_mm: float
+    initial_capture_distance_mm: float
     final_capture_distance_mm: float
     final_capture_speed_mm_s: float
     hardware_acc: float

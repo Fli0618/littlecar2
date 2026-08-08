@@ -108,8 +108,8 @@ class AutoPathSettings:
                 raise AutoPathError(f"{label}软代价权重必须在 0~20")
         if not 0.0 <= self.corner_radius_mm <= 400.0:
             raise AutoPathError("圆角半径必须在 0~400 mm")
-        if not 10.0 <= self.sample_spacing_mm <= 50.0:
-            raise AutoPathError("采样间距必须在 10~50 mm")
+        if not 10.0 <= self.sample_spacing_mm <= 150.0:
+            raise AutoPathError("采样间距必须在 10~150 mm")
         if not 0.0 <= self.terminal_straight_mm <= 1000.0:
             raise AutoPathError("末端直线长度必须在 0~1000 mm")
         if self.yaw_mode not in ("fixed", "interpolate", "tangent", "early_straight"):
@@ -629,6 +629,7 @@ def _smooth_and_sample(route: list[tuple[float, float]], settings: AutoPathSetti
                        bounds: tuple[float, float, float, float]) -> list[tuple[float, float]]:
     result = [route[0]]
     corners = list(zip(route, route[1:], route[2:]))
+    straight_spacing_mm = max(150.0, settings.sample_spacing_mm * 4.0)
     for corner_index, (previous, corner, following) in enumerate(corners):
         incoming = math.dist(previous, corner)
         outgoing = math.dist(corner, following)
@@ -644,11 +645,11 @@ def _smooth_and_sample(route: list[tuple[float, float]], settings: AutoPathSetti
                 break
             cut *= 0.5
         if curve is None:
-            _append_line(result, corner, settings.sample_spacing_mm)
+            _append_line(result, corner, straight_spacing_mm)
         else:
-            _append_line(result, curve[0], settings.sample_spacing_mm)
+            _append_line(result, curve[0], straight_spacing_mm)
             result.extend(curve[1:])
-    _append_line(result, route[-1], settings.sample_spacing_mm)
+    _append_line(result, route[-1], straight_spacing_mm)
     if not _curve_is_free(result, rects, bounds):
         raise AutoPathError("平滑轨迹复验失败")
     return result
